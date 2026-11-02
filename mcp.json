@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "krita": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--locked", "--no-dev", "--project", "${PLUGIN_ROOT}", "python", "-m", "smartui_mcp"],
+      "cwd": "${PLUGIN_ROOT}",
+      "env": {
+        "PYTHONPATH": "${PLUGIN_ROOT}"
+      }
+    }
+  }
+}

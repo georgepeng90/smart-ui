@@ -1,0 +1,31 @@
+# 插件源码纳入 Git：plugin.json、mcp.json、.agents/plugins/、skills/、uv.lock。
+# 不按 .json、.md、.png 或 .kra 扩展名忽略，以保留配置、文档和正式资产。
+
+# Python 本地环境、字节码和安装元数据
+/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 自动测试缓存
+/.pytest_cache/
+
+# 可由脚本重新生成的构建包、演示和验收产物
+/build/
+/dist/
+/artifacts/
+
+# 本机研究资料和 Agent 工作缓存
+/.research/
+/.serena/
+
+# 本地环境配置与运行日志；示例配置允许纳入版本管理
+.env
+.env.*
+!.env.example
+*.log
+
+# 操作系统生成的目录元数据
+.DS_Store
+Thumbs.db
+Desktop.ini
