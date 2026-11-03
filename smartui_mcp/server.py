@@ -7,12 +7,22 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
-from pydantic import StrictFloat, StrictInt
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr
 
 from .client import BridgeClient
 from .projects import ProjectStore, ProjectError
 from .references import register_reference, inspect_reference
 from .pipeline import draw_component, plan_component
+
+
+class VisualCheckItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    component_id: StrictStr
+    run_id: StrictStr
+    label: StrictStr
+    region: list[StrictInt] | None = None
+    scale: StrictFloat = 1.0
 
 
 def _project_summary(context):
@@ -28,6 +38,13 @@ def _project_summary(context):
                            "latest_run": {k: v for k, v in latest.items() if k in ("run_id", "status", "style_version", "program_id", "program_version", "program_sha256", "document", "preview", "verification", "layer_ids")} if latest else None}
     comparisons = {key: {field: value[field] for field in ("id", "component_id", "run", "is_current", "created_at")}
                    for key, value in data.get("comparisons", {}).items()}
+    visual_checks = {
+        key: {field: value[field] for field in ("id", "is_current", "created_at")} | {
+            "items": [{"component_id": item["component_id"], "run_id": item["run"]["run_id"],
+                       "label": item["label"], "is_current": item["is_current"]} for item in value["items"]],
+        }
+        for key, value in data.get("visual_checks", {}).items()
+    }
     feedback = {key: {field: value[field] for field in ("id", "comparison_id", "component_id", "observation",
                                                        "suggested_change", "target_nodes", "rule_ids", "source", "status",
                                                        "reviewed_comparison_id", "applies_to_current_run")}
@@ -36,7 +53,7 @@ def _project_summary(context):
     return {"project_root": context["project_root"], "revision": context["revision"],
             "project_id": data["project_id"], "name": data["name"], "style": data["style"],
             "references": data["references"], "programs": data["programs"], "components": components,
-            "comparisons": comparisons, "feedback": feedback}
+            "comparisons": comparisons, "visual_checks": visual_checks, "feedback": feedback}
 
 
 def _document_path(document: str) -> str:
@@ -46,13 +63,24 @@ def _document_path(document: str) -> str:
     return str(path)
 
 
-def _comparison_image(result):
-    artifact = result["comparison"]["images"]["comparison"]
+def _verified_png(artifact, label):
     path = Path(artifact["path"])
     payload = path.read_bytes()
     if hashlib.sha256(payload).hexdigest() != artifact["sha256"]:
-        raise ProjectError(f"返回的对照图片 SHA-256 不符：{path}")
+        raise ProjectError(f"返回的{label} SHA-256 不符：{path}")
     return Image(data=payload, format="png")
+
+
+def _comparison_image(result):
+    return _verified_png(result["comparison"]["images"]["comparison"], "对照图片")
+
+
+def _visual_check_content(result):
+    images = result["visual_check"]["images"]
+    content = [json.dumps(result, ensure_ascii=False), _verified_png(images["overview"], "视觉检查总览图")]
+    if "grayscale" in images:
+        content.append(_verified_png(images["grayscale"], "视觉检查灰度图"))
+    return content
 
 
 def create_server(client: BridgeClient | None = None) -> FastMCP:
@@ -240,6 +268,31 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
         """
         result = await asyncio.to_thread(projects.get_comparison, project_root, comparison_id)
         return [json.dumps(result, ensure_ascii=False), await asyncio.to_thread(_comparison_image, result)]
+
+    @server.tool(structured_output=False)
+    async def project_create_visual_check(project_root: str, expected_revision: str, items: list[VisualCheckItem],
+                                          background: StrictStr, columns: StrictInt = 3,
+                                          grayscale: StrictBool = True) -> list[Any]:
+        """保存 1 到 16 项指定成功运行的视觉检查视图，返回彩色总览和可选灰度总览，无需启动 Krita。
+
+        每项用 component_id 和 run_id 指定来源，label 对应图中序号。region 为完整预览图上的
+        [x,y,width,height]，省略时使用全图。scale 按原尺寸等比缩放，默认为 1。
+        background 使用 #RRGGBB 纯色，columns 指定最多 16 列。先缩放和合成背景，再转灰度。
+        返回原尺寸 RGBA 裁切文件、显示位置和运行版本。不自动打分或登记用户确认。
+        """
+        result = await asyncio.to_thread(projects.create_visual_check, project_root, expected_revision,
+                                         [item.model_dump() for item in items], background=background,
+                                         columns=columns, grayscale=grayscale)
+        return await asyncio.to_thread(_visual_check_content, result)
+
+    @server.tool(structured_output=False)
+    async def project_get_visual_check(project_root: str, check_id: str) -> list[Any]:
+        """读取已保存的视觉检查图和各项来源，校验文件摘要并返回总览图片。
+
+        is_current 表示引用的运行与当前项目记录匹配。历史检查仍使用保存时的快照。
+        """
+        result = await asyncio.to_thread(projects.get_visual_check, project_root, check_id)
+        return await asyncio.to_thread(_visual_check_content, result)
 
     @server.tool()
     async def project_record_feedback(project_root: str, expected_revision: str, comparison_id: str,

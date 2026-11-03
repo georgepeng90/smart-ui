@@ -54,7 +54,7 @@ class ProjectStore:
                 "references": {}, "programs": {},
                 "style": {"version": 0, "description": "", "rules": [], "parameters": {},
                           "reference_ids": [], "user_confirmation": None},
-                "components": {}, "comparisons": {}, "feedback": {},
+                "components": {}, "comparisons": {}, "feedback": {}, "visual_checks": {},
             }
             return self._write(root, state)
 
@@ -238,29 +238,10 @@ class ProjectStore:
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            component = state["components"].get(component_id)
-            if component is None:
-                raise ProjectError(f"组件不存在：{component_id}")
-            run = next((item for item in component["runs"] if item["run_id"] == run_id), None)
-            if run is None or run["status"] not in ("drawn", "verified"):
-                raise ProjectError(f"run_id 必须对应此组件已保存的成功产物：{component_id}/{run_id}")
+            component, run, plan, snapshot = self._review_run(state, component_id, run_id)
             if reference_id not in state["references"]:
                 raise ProjectError(f"未登记参考：{reference_id}")
-            try:
-                plan = json.loads(self._run_artifact(run, "plan_path"))
-                snapshot = json.loads(self._run_artifact(run, "style_snapshot_path"))
-            except (ValueError, UnicodeError) as error:
-                raise ProjectError(f"运行计划或风格快照不是有效 JSON：{run_id}；{error}") from error
-            if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("style"), dict)
-                    or snapshot.get("component_id") != component_id
-                    or snapshot["style"].get("version") != run["style_version"]
-                    or spec_sha256(snapshot.get("spec")) != run["spec_sha256"]):
-                raise ProjectError(f"运行风格快照与记录的风格版本或组件规格不一致：{run_id}")
-            nodes = plan.get("nodes") if isinstance(plan, dict) else None
-            rules = snapshot["style"].get("rules")
-            if (not isinstance(nodes, list) or any(not isinstance(node, dict) or not isinstance(node.get("key"), str) for node in nodes)
-                    or not isinstance(rules, list) or any(not isinstance(rule, dict) for rule in rules)):
-                raise ProjectError(f"运行快照缺少有效的节点或风格规则：{run_id}")
+            nodes, rules = plan["nodes"], snapshot["style"]["rules"]
             comparison_id = uuid4().hex
             record = build_comparison(str(root), comparison_id, state["references"][reference_id], run,
                                       reference_region=reference_region,
@@ -280,6 +261,91 @@ class ProjectStore:
             except ProjectError as error:
                 raise ProjectError(f"对照图片已保留，但项目记录写入失败：{record['images']['comparison']['path']}；{error}") from error
             return self._comparison_result(updated, comparison_id)
+
+    def create_visual_check(self, project_root: str, expected_revision: str, items: list[dict],
+                            background: str, columns: int = 3, grayscale: bool = True) -> dict:
+        """用明确的成功运行版本保存多产物检查图，不改变视觉确认状态。"""
+        from .visual_checks import MAX_ITEMS, build_visual_check
+
+        root = self._root(project_root)
+        if not isinstance(items, list) or not 1 <= len(items) <= MAX_ITEMS:
+            raise ProjectError(f"items 必须包含 1 到 {MAX_ITEMS} 项")
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            resolved, specs = [], []
+            for index, item in enumerate(items):
+                required = {"component_id", "run_id", "label"}
+                if (not isinstance(item, dict) or not required <= item.keys()
+                        or item.keys() - (required | {"region", "scale"})):
+                    raise ProjectError(f"items[{index}] 必须包含 component_id、run_id、label；仅可附加 region、scale")
+                _identifier(item["component_id"], f"items[{index}].component_id")
+                _identifier(item["run_id"], f"items[{index}].run_id")
+                _text(item["label"], f"items[{index}].label")
+                _, run, _, snapshot = self._review_run(state, item["component_id"], item["run_id"])
+                resolved.append({"component_id": item["component_id"], "run": run, "label": item["label"],
+                                 "region": item.get("region"), "scale": item.get("scale", 1.0)})
+                specs.append(snapshot["spec"])
+            check_id = uuid4().hex
+            record = build_visual_check(str(root), check_id, resolved, background=background,
+                                        columns=columns, grayscale=grayscale)
+            for entry, spec in zip(record["items"], specs, strict=True):
+                entry["spec"] = spec
+            record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
+            state.setdefault("visual_checks", {})[check_id] = record
+            try:
+                updated = self._write(root, state)
+            except ProjectError as error:
+                raise ProjectError(f"视觉检查图片已保留，但项目记录写入失败：{record['images']['overview']['path']}；{error}") from error
+            return self._visual_check_result(updated, check_id)
+
+    def get_visual_check(self, project_root: str, check_id: str) -> dict:
+        _identifier(check_id, "check_id")
+        context = self.context(project_root)
+        result = self._visual_check_result(context, check_id)
+        # 历史检查读取保存的快照，不要求原始预览图仍然存在。
+        for item in result["visual_check"]["images"].values():
+            path = Path(item["path"])
+            if not path.is_absolute():
+                raise ProjectError(f"视觉检查图片必须是绝对路径：{path}")
+            try:
+                payload = path.read_bytes()
+            except OSError as error:
+                raise ProjectError(f"无法读取视觉检查图片：{path}；{error}") from error
+            if _sha(payload) != item["sha256"]:
+                raise ProjectError(f"视觉检查图片 SHA-256 不符：{path}")
+        return result
+
+    @staticmethod
+    def _visual_check_result(context, check_id):
+        record = context["data"].get("visual_checks", {}).get(check_id)
+        if record is None:
+            raise ProjectError(f"视觉检查记录不存在：{check_id}")
+        return {"project_root": context["project_root"], "revision": context["revision"], "visual_check": record}
+
+    def _review_run(self, state, component_id, run_id):
+        component = state["components"].get(component_id)
+        if component is None:
+            raise ProjectError(f"组件不存在：{component_id}")
+        run = next((item for item in component["runs"] if item["run_id"] == run_id), None)
+        if run is None or run["status"] not in ("drawn", "verified"):
+            raise ProjectError(f"run_id 必须对应此组件已保存的成功产物：{component_id}/{run_id}")
+        try:
+            plan = json.loads(self._run_artifact(run, "plan_path"))
+            snapshot = json.loads(self._run_artifact(run, "style_snapshot_path"))
+        except (ValueError, UnicodeError) as error:
+            raise ProjectError(f"运行计划或风格快照不是有效 JSON：{run_id}；{error}") from error
+        if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("style"), dict)
+                or snapshot.get("component_id") != component_id
+                or snapshot["style"].get("version") != run["style_version"]
+                or spec_sha256(snapshot.get("spec")) != run["spec_sha256"]):
+            raise ProjectError(f"运行风格快照与记录的风格版本或组件规格不一致：{run_id}")
+        nodes = plan.get("nodes") if isinstance(plan, dict) else None
+        rules = snapshot["style"].get("rules")
+        if (not isinstance(nodes, list) or any(not isinstance(node, dict) or not isinstance(node.get("key"), str) for node in nodes)
+                or not isinstance(rules, list) or any(not isinstance(rule, dict) for rule in rules)):
+            raise ProjectError(f"运行快照缺少有效的节点或风格规则：{run_id}")
+        return component, run, plan, snapshot
 
     def get_comparison(self, project_root: str, comparison_id: str) -> dict:
         _identifier(comparison_id, "comparison_id")
@@ -390,7 +456,7 @@ class ProjectStore:
             for field in ("project_id", "name", "references", "style", "components", "programs"):
                 if field not in state:
                     raise ProjectError(f"项目缺少 {field}：{path}")
-            for field in ("comparisons", "feedback"):
+            for field in ("comparisons", "feedback", "visual_checks"):
                 if field in state and not isinstance(state[field], dict):
                     raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
             hashes = state.get("document_hashes")
@@ -517,6 +583,13 @@ class ProjectStore:
             latest = component["latest_run"]
             comparison["is_current"] = bool(latest and not component["needs_review"]
                                              and latest["run_id"] == comparison["run"]["run_id"])
+        for check in data.get("visual_checks", {}).values():
+            for item in check["items"]:
+                component = data["components"][item["component_id"]]
+                latest = component["latest_run"]
+                item["is_current"] = bool(latest and not component["needs_review"]
+                                          and latest["run_id"] == item["run"]["run_id"])
+            check["is_current"] = all(item["is_current"] for item in check["items"])
         for feedback in data.get("feedback", {}).values():
             reviewed = feedback["history"][-1]["comparison_id"] if feedback["history"] else feedback["comparison_id"]
             feedback["reviewed_comparison_id"] = reviewed
@@ -654,6 +727,25 @@ class ProjectStore:
                     component_lines.append("")
         if not context["components"]:
             component_lines.extend(["尚未定义组件。", ""])
+        if context.get("visual_checks"):
+            component_lines.extend(["## 多产物视觉检查", "",
+                "检查图保留明确运行版本、裁切和显示参数。是否对应当前记录不表示视觉质量或用户确认。", ""])
+            for check in context["visual_checks"].values():
+                display = check["display"]
+                component_lines.extend([f"### 检查 {check['id']}", "",
+                    f"背景：{display['background']}；列数：{display['columns']}；未做 ICC 色彩转换。", "",
+                    self._link("查看彩色总览", check["images"]["overview"]["path"]), ""])
+                if display["grayscale"]:
+                    component_lines.extend([self._link("查看背景合成后的灰度图", check["images"]["grayscale"]["path"]), ""])
+                component_lines.extend(["| 序号 | 说明 | 组件 | 运行 | 风格 / 程序版本 | 原图区域 | 显示倍率 | 对应当前记录 |",
+                    "| --- | --- | --- | --- | --- | --- | --- | --- |"])
+                for index, item in enumerate(check["items"], 1):
+                    run = item["run"]
+                    component_lines.append("| " + " | ".join(self._cell(value) for value in (
+                        index, item["label"], item["component_id"], run["run_id"],
+                        f"{run['style_version']} / {run['program_id']} v{run['program_version']}",
+                        item["region_source_xywh"], item["scale"], "是" if item["is_current"] else "否")) + " |")
+                component_lines.append("")
         component_lines.extend(["完整规格、产物摘要和检查数据保存在 project.json；本文档由工具生成。", ""])
         return {"style.md": "\n".join(style_lines).encode("utf-8"),
                 "components.md": "\n".join(component_lines).encode("utf-8")}

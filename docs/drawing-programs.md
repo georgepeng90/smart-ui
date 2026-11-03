@@ -48,6 +48,29 @@ def build(parameters, spec, component_id):
 
 项目程序应根据对应参考和编辑需求定义节点、参数与绘制步骤。示例程序只演示通用接口，不限定组件的图层结构或视觉样式。
 
+## 配色与状态变体示例
+
+[通用操作背景示例](../examples/drawing-programs/semantic_palette.py) 用一套画法生成两套配色和三种状态。主题表提供轮廓、操作底色、禁用底色和选中标记的颜色。状态表引用这些用途，选中态添加圆点，禁用态改用对应底色。各变体共用轮廓、底面和标记位置的几何规则。使用合成参数演示接口，项目可以根据需求定义不同的状态名和配色。
+
+先用 `krita_list_brushes` 确认准确的预设名。在源码或插件根目录运行下面的 Python 代码，将输出的对象作为 `project_update_style.parameters` 保存。
+
+```python
+import json
+from runpy import run_path
+
+example = run_path("examples/drawing-programs/semantic_palette.py")
+parameters = example["example_parameters"]("填入已核对的 Krita 笔刷名称")
+print(json.dumps(parameters, ensure_ascii=False))
+```
+
+用 `project_save_program` 将示例的完整源码保存为 `semantic-palette`。定义组件时可使用以下规格。
+
+```json
+{"program_id":"semantic-palette", "theme":"lagoon", "state":"available", "width":180, "height":52}
+```
+
+其他变体可以切换到 `ember` 主题，或选用 `selected`、`disabled` 状态。为各样片指定组件 ID，逐一预检和绘制，然后把实际的成功运行加入[多产物视觉检查](project-tools.md#多产物视觉检查)。确认引用该颜色用途的样片得到预期配色，共用几何及不相关状态保持一致。示例只依赖传入的项目参数和规格，缺少笔刷、主题、状态或颜色引用时会报告具体配置项。
+
 ## 计划结构
 
 计划顶层只包含 `width`、`height`、`nodes`、`paint`：

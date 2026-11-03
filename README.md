@@ -2,7 +2,7 @@
 
 完整目标、阶段安排和验收标准见[通用游戏 UI 制作工具链总体规划](docs/toolchain-roadmap.md)。本页说明当前已实现能力和使用方法；总体规划中的后续能力不代表已经实现。
 
-SmartUI Krita v0.4.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可保存参考与实际绘制结果的对照，并根据对照记录和复查偏差。
+SmartUI Krita v0.5.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可保存参考与实际绘制结果的对照，记录和复查偏差，也可把多份实际产物放在统一背景上检查配色、状态及尺寸变体。
 
 绘制程序属于项目，由模型根据参考与当前需求编写。通用工具只执行和验证绘制计划，图层数量、名称、几何、材质和绘制步骤由项目程序决定。参考工具提供裁切和取色，模型负责查看图片、归纳依据和校准参数；技术检查通过后仍需查看预览并验收视觉效果。
 
@@ -55,7 +55,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 `${PLUGIN_ROOT}` 由插件宿主展开。配置同时将工作目录和 `PYTHONPATH` 指向插件根目录。首次启动时 `uv` 根据 `uv.lock` 创建环境并安装运行依赖；`--locked` 检查锁文件一致性，`--no-dev` 排除开发依赖。手工排查时，在插件根目录执行 `uv run --locked --no-dev --project . python -m smartui_mcp`；服务通过标准输入输出传输 MCP 消息，不是交互式终端命令。
 
-工具共 19 个，包括五个底层 Krita 工具和十四个项目工具。
+工具共 21 个，包括五个底层 Krita 工具和十六个项目工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -76,6 +76,8 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 | `project_draw_component` | 执行计划、保存、重开检查并记录结果；可指定更新节点 |
 | `project_compare_component` | 将已保存的绘制预览和参考区域生成可追溯的对照 |
 | `project_get_comparison` | 读取对照拼图、证据和相关反馈 |
+| `project_create_visual_check` | 按指定裁切、等比倍率和纯色背景并排展示多个成功运行的产物，可同时生成灰度图 |
+| `project_get_visual_check` | 校验并读取已保存的视觉检查图与对应运行记录 |
 | `project_record_feedback` | 根据对照记录观察到的偏差及修改建议 |
 | `project_update_feedback` | 根据对照追加复查记录，更新反馈状态 |
 
@@ -96,6 +98,8 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 源文件位于 `assets/<component_id>.kra`。每次运行的程序快照、计划、风格快照、操作和检查结果位于 `.smartui/runs/<run_id>/`。源码版本更新后，依赖组件需要重新检查；历史记录保留实际使用的程序与风格版本。
 
 需要检查复现偏差时，用 `project_compare_component` 对照参考和指定运行的实际预览，查看拼图后再记录偏差。修改并绘制后，用新运行与原参考区域重新对照，逐条复查反馈。对照的裁切快照和拼图保存在 `.smartui/comparisons/<comparison_id>/`。操作细节见[对照与偏差反馈](docs/project-tools.md#对照与偏差反馈)。
+
+需要比较配色、状态、尺寸或修改前后的效果时，用 `project_create_visual_check` 指定各个产物的成功运行 ID、标签、显示倍率和共同的纯色背景。用彩色总览和可选灰度图检查应共用的轮廓、留白以及各状态的辨识度。操作细节见[多产物视觉检查](docs/project-tools.md#多产物视觉检查)，共用参数的写法见[配色与状态变体示例](docs/drawing-programs.md#配色与状态变体示例)。
 
 ## 当前绘制接口边界
 
@@ -135,7 +139,7 @@ skills/krita-drawing/           Krita 制作、检查与修改工作流
 skills/reference-style/         参考分析与风格文档维护
 smartui_mcp/                    MCP 服务、项目存储与程序执行
 krita_plugin/                  Krita 内部扩展
-examples/drawing-programs/      源码项目示例，不进入安装包
+examples/drawing-programs/      绘制程序示例，安装包包含通用配色与状态示例
 scripts/build_plugin.py        精简插件包构建器
 docs/bridge-contract.md        底层操作约定
 docs/project-tools.md          项目工具与状态约定

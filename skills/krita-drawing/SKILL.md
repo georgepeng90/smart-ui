@@ -13,9 +13,13 @@ description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编�
 
 用 `project_update_style` 保存共用规则与项目参数，`project_save_program` 保存完整 Python 源码，`project_define_component` 用必需的 `spec.program_id` 引用它。其余参数和规格字段由项目程序决定。不要强加按钮、七层、高光覆盖项或某个固定笔刷。
 
+制作换色和状态变体时，用共用参数定义颜色用途和状态差异，用组件规格选择主题、状态和尺寸。共用几何留在同一画法里，按当前需求逐项检查应制作的状态。程序应明确报出缺少的主题、状态或颜色用途引用。需要了解参数如何传给绘制程序时，可查看[颜色用途与状态示例](../../examples/drawing-programs/semantic_palette.py)，该示例使用合成数据演示接口。
+
 保存只检查语法。用 `project_plan_component` 执行并检查返回计划，再用 `krita_status` 确认连接、`krita_list_brushes` 核对精确预设。缺少预设直接说明，不静默换成近似笔刷。程序是可信本机代码，独立进程和 60 秒超时不构成安全沙箱；程序应计算计划，不直接修改项目或 Krita 现场。
 
 调用 `project_draw_component` 完成绘制、保存、导出、重开检查与记录。图层、分组和蒙版由程序计划决定。查看实际 PNG。需要验证参考复现时，用 `project_compare_component` 选择可比区域及显示倍率，查看对照拼图后再记录可观察的偏差与建议。
+
+检查多份产物时，调用 `project_create_visual_check`，每项指定成功运行的 `component_id`、`run_id` 和 `label`。可用原图像素 `region` 裁切，按目标显示尺寸计算等比 `scale`，原尺寸用 1。提供 `#RRGGBB` 纯色背景，可同时查看独立灰度图。用图上序号与标签核对实际样片，需要恢复旧检查图时用 `project_get_visual_check`。检查图辅助比较组件，最终的页面视觉层次还要在目标场景中复查。
 
 `project.json` 是唯一结构化数据源，受管 Markdown 由工具生成。不要手改文档、文档摘要、程序文件或运行记录绕过校验。缺失或摘要不符时报告具体文件并保留差异。
 

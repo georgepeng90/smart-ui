@@ -1,6 +1,6 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.4.0 提供十四个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照和偏差反馈。具体画法属于项目程序。
+SmartUI Krita v0.5.0 提供十六个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈和多产物视觉检查。具体画法属于项目程序。
 
 ## 工具参数与调用顺序
 
@@ -20,6 +20,8 @@ SmartUI Krita v0.4.0 提供十四个项目工具，与五个底层 `krita_*` 工
 | `project_draw_component` | `project_root: str, expected_revision: str, component_id: str, layers: list[str] \| null = null` | 执行、保存、重开检查并记录；省略 layers 完整绘制 |
 | `project_compare_component` | `project_root: str, expected_revision: str, component_id: str, run_id: str, reference_id: str, reference_region: list[int] \| null = null, reference_coordinate_size: list[int] \| null = null, artifact_region: list[int] \| null = null, reference_scale: float = 1.0, artifact_scale: float = 1.0` | 保存参考与运行预览的对照，返回 JSON 和拼图 |
 | `project_get_comparison` | `project_root: str, comparison_id: str` | 校验并读取对照快照、拼图与反馈详情 |
+| `project_create_visual_check` | `project_root: str, expected_revision: str, items: list[dict], background: str, columns: int = 3, grayscale: bool = true` | 保存多份运行预览的彩色总览与可选灰度图 |
+| `project_get_visual_check` | `project_root: str, check_id: str` | 校验并读取已保存的视觉检查图与来源记录 |
 | `project_record_feedback` | `project_root: str, expected_revision: str, comparison_id: str, observation: str, suggested_change: str, target_nodes: list[str] \| null = null, rule_ids: list[str] \| null = null, source: str = "model"` | 记录带稳定 ID 的偏差反馈 |
 | `project_update_feedback` | `project_root: str, expected_revision: str, feedback_id: str, status: str, comment: str, comparison_id: str, source: str = "model"` | 更新反馈状态并追加复查历史 |
 
@@ -83,6 +85,7 @@ SmartUI Krita v0.4.0 提供十四个项目工具，与五个底层 `krita_*` 工
 | `programs` | 按 ID 保存程序元数据：id、name、description、version、sha256、source_path、history |
 | `components` | 名称、spec、目标风格版本、最近成功记录和全部尝试 |
 | `comparisons` | 可选，记录对照的参考、运行、裁切与显示参数及快照摘要 |
+| `visual_checks` | 可选，记录检查图使用的成功运行、裁切与显示参数，以及保存图片的摘要 |
 | `feedback` | 可选，记录对照反馈、当前状态与复查历史 |
 | `document_hashes` | 自动生成 style.md 和 components.md 的摘要 |
 
@@ -117,3 +120,22 @@ SmartUI Krita v0.4.0 提供十四个项目工具，与五个底层 `krita_*` 工
 - 对照的 `is_current` 表示对照是否对应当前项目版本与最新运行。它根据项目记录计算，磁盘文件校验在相关操作中执行。
 - 反馈的 `reviewed_comparison_id` 标识当前反馈状态所依据的对照，`applies_to_current_run` 表示它是否适用于当前运行。
 - 组件的 `open_feedback_count` 统计仍为 `open` 的反馈。
+
+## 多产物视觉检查
+
+用 `project_create_visual_check` 并排查看已实际绘制的样片。适用场景包括检查同一组件的配色和状态、多个尺寸的变体，以及两次绘制之间的差异。工具读取指定运行保存的 PNG，不连接 Krita。
+
+| 参数 | 约束 |
+| --- | --- |
+| `items` | 按检查顺序提供 1 至 16 项。每项都要有 `component_id`、对应的成功 `run_id` 和非空 `label`。可以指定同一组件的不同运行，也可以指定不同组件。 |
+| `items[].region` | 可选的整数数组 `[x, y, width, height]`，以对应运行的原始预览像素为坐标，省略时使用整张预览。 |
+| `items[].scale` | 可选的有限正数，默认 1，最大 8192。按目标显示尺寸指定等比倍率，输出尺寸四舍五入到整数像素。 |
+| `background` | 必填，使用 `#RRGGBB` 指定所有样片共用的纯色背景。 |
+| `columns` | 列数，取 1 至 16，默认 3，实际列数最多等于样片数。 |
+| `grayscale` | 是否另存灰度图，默认开启。 |
+
+创建和读取通过 MCP 返回 JSON 元数据、彩色总览和已请求的灰度图。图上序号对应元数据中的样片顺序和标签，标签可用中文。每项记录包含运行 ID、实际风格和程序版本、组件规格、规格和源码摘要、原图坐标、缩放倍率、显示尺寸及图片摘要。源图、单项裁切、缩放图和总览均限制为每边最多 8192 像素、每张最多 3200 万像素。
+
+工具用 SHA-256 校验来源预览并保存原像素尺寸的 RGBA 裁切快照，采用 Lanczos 等比缩放后合成到纯色背景。灰度图由合成后的彩色总览通过 Pillow 转换为 L 模式，使用 RGB 加权亮度。处理过程不做 ICC 转换。灰度可帮助判断明暗层次，视觉检查由人或模型完成，工具不计算审美分或认证对比度。
+
+快照与检查图保存在 `.smartui/visual-checks/<check_id>/`。用 `project_context` 查看摘要，用 `project_get_visual_check` 按 ID 校验并恢复历史检查。历史图像和来源保持固定。每项的 `is_current` 表示该运行仍是组件当前成功运行且无需复查，整组在所有项目都满足时才为 true。检查图没有页面布局或任意背景图输入。需要记录偏差时，按对应组件和运行建立参考对照，再用现有反馈工具关联节点或规则。

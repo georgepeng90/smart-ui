@@ -7,11 +7,13 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 
+from smartui_mcp.projects import ProjectStore
 from smartui_mcp.server import create_server
 from test_client import responding_bridge
 
@@ -22,7 +24,8 @@ TOOL_NAMES = {
     "project_create", "project_context", "project_add_reference", "project_inspect_reference",
     "project_update_style", "project_define_component", "project_draw_component",
     "project_save_program", "project_get_program", "project_plan_component",
-    "project_compare_component", "project_get_comparison", "project_record_feedback", "project_update_feedback",
+    "project_compare_component", "project_get_comparison", "project_create_visual_check", "project_get_visual_check",
+    "project_record_feedback", "project_update_feedback",
 }
 
 CUSTOM_PROGRAM = '''def build(parameters, spec, component_id):
@@ -55,6 +58,70 @@ class FakeClient:
 
 
 class MCPToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_visual_check_tools_require_strict_options(self):
+        server = create_server(FakeClient(Path("unused.png")))
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        create = tools["project_create_visual_check"]
+        self.assertIsNone(create.outputSchema)
+        self.assertIsNone(tools["project_get_visual_check"].outputSchema)
+        self.assertEqual(set(create.inputSchema["required"]), {"project_root", "expected_revision", "items", "background"})
+        item_schema = create.inputSchema["$defs"]["VisualCheckItem"]
+        self.assertEqual(set(item_schema["required"]), {"component_id", "run_id", "label"})
+        self.assertFalse(item_schema["additionalProperties"])
+        item = {"component_id": "button", "run_id": "run-1", "label": "主按钮"}
+        arguments = {"project_root": "unused", "expected_revision": "rev", "items": [item], "background": "#FFFFFF"}
+        with patch.object(ProjectStore, "create_visual_check", create=True) as save:
+            for invalid in (
+                {"items": [item | {"scale": True}]}, {"items": [item | {"scale": "1"}]},
+                {"items": [item | {"region": [0, 0, True, 1]}]}, {"items": [item | {"label": 1}]},
+                {"items": [item | {"unexpected": 1}]}, {"columns": True}, {"grayscale": "true"},
+            ):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(Exception, "validation error"):
+                    await server.call_tool("project_create_visual_check", arguments | invalid)
+            save.assert_not_called()
+
+    async def test_visual_check_tools_return_only_verified_overviews(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            fake = FakeClient(root / "unused.png")
+            server = create_server(fake)
+            images = {}
+            for key, mode in (("overview", "RGB"), ("grayscale", "L"), ("item-1", "RGBA")):
+                path = root / f"{key}.png"
+                with Image.new(mode, (1, 1)) as image:
+                    image.save(path)
+                images[key] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            item = {"component_id": "button", "run_id": "run-1", "label": "主按钮", "scale": 2}
+            record = {"id": "check-1", "images": images}
+            result = {"project_root": str(root), "revision": "updated", "visual_check": record}
+
+            with patch.object(ProjectStore, "create_visual_check", return_value=result, create=True) as save:
+                content = await server.call_tool("project_create_visual_check", {
+                    "project_root": str(root), "expected_revision": "initial", "items": [item], "background": "#FFFFFF",
+                })
+                save.assert_called_once_with(str(root), "initial", [item | {"region": None, "scale": 2.0}],
+                                             background="#FFFFFF", columns=3, grayscale=True)
+            self.assertEqual(json.loads(content[0].text), result)
+            self.assertEqual(len(content), 3)
+            for returned, key in zip(content[1:], ("overview", "grayscale"), strict=True):
+                self.assertEqual(returned.mimeType, "image/png")
+                self.assertEqual(base64.b64decode(returned.data), Path(images[key]["path"]).read_bytes())
+
+            overview_only = result | {"visual_check": record | {"images": {
+                key: images[key] for key in ("overview", "item-1")
+            }}}
+            with patch.object(ProjectStore, "get_visual_check", return_value=overview_only, create=True) as fetch:
+                arguments = {"project_root": str(root), "check_id": "check-1"}
+                content = await server.call_tool("project_get_visual_check", arguments)
+                fetch.assert_called_once_with(str(root), "check-1")
+                self.assertEqual(len(content), 2)
+                self.assertEqual(json.loads(content[0].text), overview_only)
+                self.assertEqual(base64.b64decode(content[1].data), Path(images["overview"]["path"]).read_bytes())
+                Path(images["overview"]["path"]).write_bytes(PNG)
+                with self.assertRaisesRegex(Exception, "总览图 SHA-256 不符"):
+                    await server.call_tool("project_get_visual_check", arguments)
+            self.assertEqual(fake.calls, [])
+
     async def test_tools_forward_protocol_and_return_preview_image(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
