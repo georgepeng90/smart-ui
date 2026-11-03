@@ -1,5 +1,8 @@
 # 插件源码纳入 Git：plugin.json、mcp.json、.agents/plugins/、skills/、uv.lock。
-# 不按 .json、.md、.png 或 .kra 扩展名忽略，以保留配置、文档和正式资产。
+# 不按扩展名全局忽略，以保留工具配置、文档和通用测试资源。
+
+# 具体业务项目数据属于工具使用结果，不进入通用工具仓库。
+/projects/
 
 # Python 本地环境、字节码和安装元数据
 /.venv/
@@ -20,6 +23,9 @@ __pycache__/
 /.serena/
 **/.smartui/cache/
 .smartui-project.lock
+
+# Krita 自动备份
+*.kra~
 
 # 本地环境配置与运行日志；示例配置允许纳入版本管理
 .env
