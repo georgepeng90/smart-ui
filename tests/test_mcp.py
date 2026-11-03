@@ -22,6 +22,7 @@ TOOL_NAMES = {
     "project_create", "project_context", "project_add_reference", "project_inspect_reference",
     "project_update_style", "project_define_component", "project_draw_component",
     "project_save_program", "project_get_program", "project_plan_component",
+    "project_compare_component", "project_get_comparison", "project_record_feedback", "project_update_feedback",
 }
 
 CUSTOM_PROGRAM = '''def build(parameters, spec, component_id):

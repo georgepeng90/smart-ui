@@ -1,11 +1,13 @@
 """将 Krita 文件队列方法公开为 MCP 工具。"""
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
+from pydantic import StrictFloat, StrictInt
 
 from .client import BridgeClient
 from .projects import ProjectStore, ProjectError
@@ -20,12 +22,21 @@ def _project_summary(context):
     for key, value in data["components"].items():
         latest = value["latest_run"]
         components[key] = {"name": value["name"], "spec": value["spec"], "needs_review": value["needs_review"],
+                           "open_feedback_count": value["open_feedback_count"],
                            "target_style_version": value["target_style_version"], "attempts": len(value["runs"]),
                            "last_attempt": {k: v for k, v in value["runs"][-1].items() if k in ("run_id", "status", "error")} if value["runs"] else None,
                            "latest_run": {k: v for k, v in latest.items() if k in ("run_id", "status", "style_version", "program_id", "program_version", "program_sha256", "document", "preview", "verification", "layer_ids")} if latest else None}
+    comparisons = {key: {field: value[field] for field in ("id", "component_id", "run", "is_current", "created_at")}
+                   for key, value in data.get("comparisons", {}).items()}
+    feedback = {key: {field: value[field] for field in ("id", "comparison_id", "component_id", "observation",
+                                                       "suggested_change", "target_nodes", "rule_ids", "source", "status",
+                                                       "reviewed_comparison_id", "applies_to_current_run")}
+                | {"latest_update": value["history"][-1] if value["history"] else None}
+                for key, value in data.get("feedback", {}).items()}
     return {"project_root": context["project_root"], "revision": context["revision"],
             "project_id": data["project_id"], "name": data["name"], "style": data["style"],
-            "references": data["references"], "programs": data["programs"], "components": components}
+            "references": data["references"], "programs": data["programs"], "components": components,
+            "comparisons": comparisons, "feedback": feedback}
 
 
 def _document_path(document: str) -> str:
@@ -33,6 +44,15 @@ def _document_path(document: str) -> str:
     if not path.is_absolute() or path.suffix.lower() != ".kra":
         raise ValueError(f"document 必须是绝对 .kra 路径：{document}")
     return str(path)
+
+
+def _comparison_image(result):
+    artifact = result["comparison"]["images"]["comparison"]
+    path = Path(artifact["path"])
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != artifact["sha256"]:
+        raise ProjectError(f"返回的对照图片 SHA-256 不符：{path}")
+    return Image(data=payload, format="png")
 
 
 def create_server(client: BridgeClient | None = None) -> FastMCP:
@@ -192,5 +212,58 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
         使用与绘制相同的独立 Python 进程和 60 秒限制；用于检查节点结构、参数计算及批量笔触。
         """
         return await asyncio.to_thread(plan_component, project_root, component_id, store=projects)
+
+    @server.tool(structured_output=False)
+    async def project_compare_component(project_root: str, expected_revision: str, component_id: str,
+                                        run_id: str, reference_id: str, reference_region: list[StrictInt] | None = None,
+                                        reference_coordinate_size: list[StrictInt] | None = None,
+                                        artifact_region: list[StrictInt] | None = None, reference_scale: StrictFloat = 1.0,
+                                        artifact_scale: StrictFloat = 1.0) -> list[Any]:
+        """保存参考与指定成功运行产物的对照，返回 revision、版本证据和并排图片，无需启动 Krita。
+
+        region 均为 [x,y,width,height]；参考按 reference_coordinate_size 映射（省略为原图），
+        artifact_region 使用完整产物 PNG 的原始像素坐标。两端 scale 默认 1，分别等比缩放，
+        不自动对齐宽高；裁切快照保留原始 RGBA，拼图使用棋盘背景。超限报错，不自动缩小。
+        校验源图和运行快照摘要，保存到项目 .smartui/comparisons；不打相似度分，不登记用户确认。
+        """
+        result = await asyncio.to_thread(projects.compare_component, project_root, expected_revision, component_id,
+                                        run_id, reference_id, reference_region, reference_coordinate_size,
+                                        artifact_region, reference_scale, artifact_scale)
+        return [json.dumps(result, ensure_ascii=False), await asyncio.to_thread(_comparison_image, result)]
+
+    @server.tool(structured_output=False)
+    async def project_get_comparison(project_root: str, comparison_id: str) -> list[Any]:
+        """读取既有对照快照、实际运行版本及关联反馈历史，校验图片摘要并返回并排图片。
+
+        is_current 只表示该运行与当前项目记录匹配，不表示视觉通过或磁盘源文件仍未改变。
+        历史对照保留原始内容，不使用当前新产物替换旧图。
+        """
+        result = await asyncio.to_thread(projects.get_comparison, project_root, comparison_id)
+        return [json.dumps(result, ensure_ascii=False), await asyncio.to_thread(_comparison_image, result)]
+
+    @server.tool()
+    async def project_record_feedback(project_root: str, expected_revision: str, comparison_id: str,
+                                       observation: str, suggested_change: str, target_nodes: list[str] | None = None,
+                                       rule_ids: list[str] | None = None, source: str = "model") -> Any:
+        """记录对照中的具体偏差与修改建议，返回稳定反馈 ID 和新 revision。
+
+        target_nodes 是该次绘制计划的节点 key，rule_ids 是该次风格规则 ID，可省略。
+        source 为 model/user，仅记录调用方声明的反馈来源，不证明身份，也不表示用户风格确认。
+        观察与建议由调用模型填写，工具不自动判断视觉偏差或改变技术检查状态。
+        """
+        return await asyncio.to_thread(projects.record_feedback, project_root, expected_revision, comparison_id,
+                                        observation, suggested_change, target_nodes, rule_ids, source)
+
+    @server.tool()
+    async def project_update_feedback(project_root: str, expected_revision: str, feedback_id: str, status: str,
+                                      comment: str, comparison_id: str, source: str = "model") -> Any:
+        """追加偏差复查结果，保留原始观察和全部历史；status 为 open/resolved/dismissed。
+
+        comment 必填。对照必须来自同组件、同参考摘要及同参考区域；resolved 必须引用
+        原反馈运行之后的另一轮成功产物。看图后才能填写结论，技术 verified 不等于视觉偏差解决。
+        source 为 model/user 的来源声明；本工具不会设置风格或组件的用户确认。
+        """
+        return await asyncio.to_thread(projects.update_feedback, project_root, expected_revision, feedback_id,
+                                        status, comment, comparison_id, source)
 
     return server

@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from copy import deepcopy
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -53,7 +54,7 @@ class ProjectStore:
                 "references": {}, "programs": {},
                 "style": {"version": 0, "description": "", "rules": [], "parameters": {},
                           "reference_ids": [], "user_confirmation": None},
-                "components": {},
+                "components": {}, "comparisons": {}, "feedback": {},
             }
             return self._write(root, state)
 
@@ -224,6 +225,135 @@ class ProjectStore:
             component["runs"].append(record)
         return self._update(project_root, expected_revision, change)
 
+    def compare_component(self, project_root: str, expected_revision: str, component_id: str,
+                          run_id: str, reference_id: str, reference_region: list[int] | None = None,
+                          reference_coordinate_size: list[int] | None = None,
+                          artifact_region: list[int] | None = None, reference_scale: float = 1.0,
+                          artifact_scale: float = 1.0) -> dict:
+        from .comparisons import build_comparison
+
+        root = self._root(project_root)
+        for value, field in ((component_id, "component_id"), (run_id, "run_id"), (reference_id, "reference_id")):
+            _identifier(value, field)
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            component = state["components"].get(component_id)
+            if component is None:
+                raise ProjectError(f"组件不存在：{component_id}")
+            run = next((item for item in component["runs"] if item["run_id"] == run_id), None)
+            if run is None or run["status"] not in ("drawn", "verified"):
+                raise ProjectError(f"run_id 必须对应此组件已保存的成功产物：{component_id}/{run_id}")
+            if reference_id not in state["references"]:
+                raise ProjectError(f"未登记参考：{reference_id}")
+            try:
+                plan = json.loads(self._run_artifact(run, "plan_path"))
+                snapshot = json.loads(self._run_artifact(run, "style_snapshot_path"))
+            except (ValueError, UnicodeError) as error:
+                raise ProjectError(f"运行计划或风格快照不是有效 JSON：{run_id}；{error}") from error
+            if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("style"), dict)
+                    or snapshot.get("component_id") != component_id
+                    or snapshot["style"].get("version") != run["style_version"]
+                    or spec_sha256(snapshot.get("spec")) != run["spec_sha256"]):
+                raise ProjectError(f"运行风格快照与记录的风格版本或组件规格不一致：{run_id}")
+            nodes = plan.get("nodes") if isinstance(plan, dict) else None
+            rules = snapshot["style"].get("rules")
+            if (not isinstance(nodes, list) or any(not isinstance(node, dict) or not isinstance(node.get("key"), str) for node in nodes)
+                    or not isinstance(rules, list) or any(not isinstance(rule, dict) for rule in rules)):
+                raise ProjectError(f"运行快照缺少有效的节点或风格规则：{run_id}")
+            comparison_id = uuid4().hex
+            record = build_comparison(str(root), comparison_id, state["references"][reference_id], run,
+                                      reference_region=reference_region,
+                                      reference_coordinate_size=reference_coordinate_size,
+                                      artifact_region=artifact_region, reference_scale=reference_scale,
+                                      artifact_scale=artifact_scale)
+            record.update(component_id=component_id, run_index=component["runs"].index(run),
+                          created_at=datetime.now(timezone.utc).isoformat(),
+                          project_revision=revision,
+                          run={key: run[key] for key in ("run_id", "status", "style_version", "spec_sha256",
+                                                        "program_id", "program_version", "program_sha256")},
+                          node_keys=[node["key"] for node in nodes],
+                          rule_ids=[rule["id"] for rule in rules if isinstance(rule.get("id"), str)])
+            state.setdefault("comparisons", {})[comparison_id] = record
+            try:
+                updated = self._write(root, state)
+            except ProjectError as error:
+                raise ProjectError(f"对照图片已保留，但项目记录写入失败：{record['images']['comparison']['path']}；{error}") from error
+            return self._comparison_result(updated, comparison_id)
+
+    def get_comparison(self, project_root: str, comparison_id: str) -> dict:
+        _identifier(comparison_id, "comparison_id")
+        context = self.context(project_root)
+        self._check_comparison_images(context["data"], comparison_id)
+        return self._comparison_result(context, comparison_id)
+
+    def record_feedback(self, project_root: str, expected_revision: str, comparison_id: str,
+                        observation: str, suggested_change: str, target_nodes: list[str] | None = None,
+                        rule_ids: list[str] | None = None, source: str = "model") -> dict:
+        from .feedback import add_feedback
+
+        feedback_id = uuid4().hex
+        def change(state):
+            self._check_comparison_images(state, comparison_id)
+            add_feedback(state, feedback_id, comparison_id, observation, suggested_change,
+                         [] if target_nodes is None else target_nodes, [] if rule_ids is None else rule_ids, source)
+        context = self._update(project_root, expected_revision, change)
+        return {"project_root": context["project_root"], "revision": context["revision"],
+                "feedback": context["data"]["feedback"][feedback_id]}
+
+    def update_feedback(self, project_root: str, expected_revision: str, feedback_id: str,
+                        status: str, comment: str, comparison_id: str, source: str = "model") -> dict:
+        from .feedback import update_feedback
+
+        def change(state):
+            self._check_comparison_images(state, comparison_id)
+            update_feedback(state, feedback_id, status, comment, comparison_id, source)
+        context = self._update(project_root, expected_revision, change)
+        return {"project_root": context["project_root"], "revision": context["revision"],
+                "feedback": context["data"]["feedback"][feedback_id]}
+
+    @staticmethod
+    def _run_artifact(run, field):
+        path_value = run.get(field)
+        if not isinstance(path_value, str) or not isinstance(run.get("artifact_hashes"), dict) or field not in run["artifact_hashes"]:
+            raise ProjectError(f"运行记录 {run['run_id']} 缺少 {field} 路径或摘要")
+        path = Path(path_value)
+        if not path.is_absolute():
+            raise ProjectError(f"运行记录 {field} 必须是绝对路径：{path}")
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise ProjectError(f"无法读取运行记录 {field}：{path}；{error}") from error
+        if _sha(payload) != run["artifact_hashes"][field]:
+            raise ProjectError(f"运行记录 {field} 的 SHA-256 不符：{path}")
+        return payload
+
+    @staticmethod
+    def _check_comparison_images(state, comparison_id):
+        _identifier(comparison_id, "comparison_id")
+        record = state.get("comparisons", {}).get(comparison_id)
+        if record is None:
+            raise ProjectError(f"对照记录不存在：{comparison_id}")
+        for item in record["images"].values():
+            path = Path(item["path"])
+            if not path.is_absolute():
+                raise ProjectError(f"对照图片必须是绝对路径：{path}")
+            try:
+                payload = path.read_bytes()
+            except OSError as error:
+                raise ProjectError(f"无法读取对照图片：{path}；{error}") from error
+            if _sha(payload) != item["sha256"]:
+                raise ProjectError(f"对照图片 SHA-256 不符：{path}")
+
+    @staticmethod
+    def _comparison_result(context, comparison_id):
+        data = context["data"]
+        feedback = {key: value for key, value in data.get("feedback", {}).items()
+                    if value["comparison_id"] == comparison_id or
+                    any(item["comparison_id"] == comparison_id for item in value["history"])}
+        return {"project_root": context["project_root"], "revision": context["revision"],
+                "comparison": data["comparisons"][comparison_id], "feedback": feedback}
+
     @staticmethod
     def _root(project_root):
         if not isinstance(project_root, str) or not project_root.strip() or not Path(project_root).is_absolute():
@@ -260,6 +390,9 @@ class ProjectStore:
             for field in ("project_id", "name", "references", "style", "components", "programs"):
                 if field not in state:
                     raise ProjectError(f"项目缺少 {field}：{path}")
+            for field in ("comparisons", "feedback"):
+                if field in state and not isinstance(state[field], dict):
+                    raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
             hashes = state.get("document_hashes")
             if not isinstance(hashes, dict) or set(hashes) != {"style.md", "components.md"}:
                 raise ProjectError(f"项目缺少受管文档摘要：{path}")
@@ -366,7 +499,7 @@ class ProjectStore:
     @staticmethod
     def _context(root, state, revision):
         data = deepcopy(state)
-        for component in data["components"].values():
+        for component_id, component in data["components"].items():
             latest = component["latest_run"]
             program = data["programs"][component["spec"]["program_id"]]
             component["needs_review"] = (latest is None or
@@ -376,6 +509,18 @@ class ProjectStore:
                 latest.get("program_id") != program["id"] or
                 latest.get("program_version") != program["version"] or
                 latest.get("program_sha256") != program["sha256"])
+            component["open_feedback_count"] = sum(
+                item["status"] == "open" and item["component_id"] == component_id
+                for item in data.get("feedback", {}).values())
+        for comparison in data.get("comparisons", {}).values():
+            component = data["components"][comparison["component_id"]]
+            latest = component["latest_run"]
+            comparison["is_current"] = bool(latest and not component["needs_review"]
+                                             and latest["run_id"] == comparison["run"]["run_id"])
+        for feedback in data.get("feedback", {}).values():
+            reviewed = feedback["history"][-1]["comparison_id"] if feedback["history"] else feedback["comparison_id"]
+            feedback["reviewed_comparison_id"] = reviewed
+            feedback["applies_to_current_run"] = data["comparisons"][reviewed]["is_current"]
         return {"project_root": str(root), "revision": revision, "data": data}
 
     def _render(self, state):
@@ -473,6 +618,40 @@ class ProjectStore:
                 component_lines.append("| " + " | ".join(self._cell(value) for value in (
                     run["run_id"], result, run.get("style_version", "未记录"), run.get("error") or "—")) + " |")
             component_lines.append("")
+            comparisons = {key: value for key, value in context.get("comparisons", {}).items()
+                           if value["component_id"] == component_id}
+            if comparisons:
+                component_lines.extend(["### 参考与产物对照", "",
+                    "对照保留当次裁切和运行版本；当前状态只根据项目记录判断，不表示视觉通过。", "",
+                    "| 对照标识 | 参考与原图区域 | 运行标识 | 风格 / 程序版本 | 对应当前记录 | 图片 |",
+                    "| --- | --- | --- | --- | --- | --- |"])
+                for key, comparison in comparisons.items():
+                    run = comparison["run"]
+                    component_lines.append("| " + " | ".join(self._cell(value) for value in (
+                        key, f"{comparison['reference']['id']} {comparison['reference']['region_source_xywh']}",
+                        run["run_id"], f"{run['style_version']} / {run['program_id']} v{run['program_version']}",
+                        "是" if comparison["is_current"] else "否",
+                        self._link("查看对照图片", comparison["images"]["comparison"]["path"]))) + " |")
+                component_lines.append("")
+            feedback_items = [value for value in context.get("feedback", {}).values()
+                              if value["component_id"] == component_id]
+            if feedback_items:
+                component_lines.extend(["### 视觉偏差与复查记录", "",
+                    f"待处理偏差：{component['open_feedback_count']} 项。复查结论仅针对所关联的产物，不代表用户风格确认。", ""])
+                for feedback in feedback_items:
+                    status_text = {"open": "待处理", "resolved": "已解决", "dismissed": "不处理"}[feedback["status"]]
+                    component_lines.extend([
+                        f"#### {feedback['id']}：{status_text}", "",
+                        f"- 原始对照：{feedback['comparison_id']}",
+                        f"- 观察：{feedback['observation']}",
+                        f"- 修改建议：{feedback['suggested_change']}",
+                        f"- 来源声明：{feedback['source']}",
+                        f"- 目标节点：{', '.join(feedback['target_nodes']) or '未指定'}",
+                        f"- 风格规则：{', '.join(feedback['rule_ids']) or '未指定'}",
+                        f"- 复查结论对应当前运行：{'是' if feedback['applies_to_current_run'] else '否'}", ""])
+                    for item in feedback["history"]:
+                        component_lines.append(f"- {item['status']} / {item['comparison_id']} / {item['source']}：{item['comment']}")
+                    component_lines.append("")
         if not context["components"]:
             component_lines.extend(["尚未定义组件。", ""])
         component_lines.extend(["完整规格、产物摘要和检查数据保存在 project.json；本文档由工具生成。", ""])

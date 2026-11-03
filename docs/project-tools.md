@@ -1,6 +1,6 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.3.0 提供十个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格和真实运行记录；具体画法属于项目程序。
+SmartUI Krita v0.4.0 提供十四个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照和偏差反馈。具体画法属于项目程序。
 
 ## 工具参数与调用顺序
 
@@ -18,6 +18,10 @@ SmartUI Krita v0.3.0 提供十个项目工具，与五个底层 `krita_*` 工具
 | `project_define_component` | `project_root: str, expected_revision: str, component_id: str, name: str, spec: dict` | 创建或替换规格，保留执行历史；spec 必须引用已保存的 program_id |
 | `project_plan_component` | `project_root: str, component_id: str` | 执行程序并预检计划，不调用 Krita、不登记绘制成功 |
 | `project_draw_component` | `project_root: str, expected_revision: str, component_id: str, layers: list[str] \| null = null` | 执行、保存、重开检查并记录；省略 layers 完整绘制 |
+| `project_compare_component` | `project_root: str, expected_revision: str, component_id: str, run_id: str, reference_id: str, reference_region: list[int] \| null = null, reference_coordinate_size: list[int] \| null = null, artifact_region: list[int] \| null = null, reference_scale: float = 1.0, artifact_scale: float = 1.0` | 保存参考与运行预览的对照，返回 JSON 和拼图 |
+| `project_get_comparison` | `project_root: str, comparison_id: str` | 校验并读取对照快照、拼图与反馈详情 |
+| `project_record_feedback` | `project_root: str, expected_revision: str, comparison_id: str, observation: str, suggested_change: str, target_nodes: list[str] \| null = null, rule_ids: list[str] \| null = null, source: str = "model"` | 记录带稳定 ID 的偏差反馈 |
+| `project_update_feedback` | `project_root: str, expected_revision: str, feedback_id: str, status: str, comment: str, comparison_id: str, source: str = "model"` | 更新反馈状态并追加复查历史 |
 
 新项目通常依次执行：创建 → 登记并查看参考 → 保存规则和参数 → 保存程序 → 定义组件 → 生成计划 → 绘制 → 查看预览。已有项目先读上下文和已有程序，避免覆盖项目已有制作逻辑。程序接口、可执行最小示例及计划校验规则见[绘制程序约定](drawing-programs.md)。
 
@@ -78,6 +82,8 @@ SmartUI Krita v0.3.0 提供十个项目工具，与五个底层 `krita_*` 工具
 | `style` | version、description、rules、parameters、reference_ids、user_confirmation |
 | `programs` | 按 ID 保存程序元数据：id、name、description、version、sha256、source_path、history |
 | `components` | 名称、spec、目标风格版本、最近成功记录和全部尝试 |
+| `comparisons` | 可选，记录对照的参考、运行、裁切与显示参数及快照摘要 |
+| `feedback` | 可选，记录对照反馈、当前状态与复查历史 |
 | `document_hashes` | 自动生成 style.md 和 components.md 的摘要 |
 
 程序源码路径为项目相对路径 `programs/<id>/<version>.py`。读取时核对实际源码与记录摘要；源码变化通过工具保存为版本，不手改文件绕过记录。程序更新使依赖组件的 `needs_review` 为 true；历史 run 仍记实际程序版本与源码哈希，不把旧产物改成新版本。
@@ -91,3 +97,23 @@ SmartUI Krita v0.3.0 提供十个项目工具，与五个底层 `krita_*` 工具
 预检错误直接报告。进入执行阶段后的失败追加实际错误并保留现场，不替换最近成功记录；历史成功不能证明失败后的磁盘文件有效。资产生成后若项目 revision 冲突，会报告记录未更新并给出结果路径，不自动重试。
 
 `project.json` 是唯一结构化数据源，受管 Markdown 只展示摘要。手改、缺失或多文件写入中断造成摘要不一致时明确报错。状态写入使用项目排他锁、同目录临时文件和原子替换，不静默修复或吞掉错误。
+
+## 对照与偏差反馈
+
+`project_compare_component` 使用指定成功运行保留的实际 PNG 预览和已登记参考。两个区域均为 `[x, y, width, height]`，缺省时取整图。参考区域可按完整缩略图测量，传入该缩略图的 `reference_coordinate_size` 后映射到原图坐标。产物区域直接使用运行预览的像素坐标。双方分别裁切，再按各自的显式倍率等比缩放，默认均为 1。
+
+项目在 `.smartui/comparisons/<comparison_id>/` 保存两份原始像素尺寸的 RGBA 裁切快照和 RGB 棋盘背景拼图。显示尺寸四舍五入到整数像素并记入对照。每份裁切快照和拼图均限制为每边最多 8192 像素、每张最多 3200 万像素。超限时选择更小区域，若仅拼图超限，也可降低显示倍率。
+
+对照记录用 SHA-256 绑定参考、运行输入和保存证据，读取时校验快照。创建和读取都通过 MCP 返回拼图，不调用 Krita 或改写输入。处理过程不做 ICC 颜色转换，不输出自动质量分。
+
+查看拼图后，用 `project_record_feedback` 分别记录可见现象 `observation` 和建议改动 `suggested_change`。可用 `target_nodes` 关联运行所用绘制计划的节点 key，用 `rule_ids` 关联运行所用风格快照的规则。初始状态为 `open`。
+
+用 `project_update_feedback` 追加复查理由。`open` 表示继续跟进，`resolved` 表示偏差已修正，`dismissed` 表示决定结束跟进。复查对照必须与原对照使用同一组件、同一参考 ID、同一参考哈希及同一原图区域。标记 `resolved` 时，复查对照的成功运行序号必须晚于原对照的运行序号。
+
+原始观察与建议保留，后续更新追加历史。新绘制可能使既有复查不再适用于当前运行，反馈状态和历史仍然保留。`source` 可声明 `model` 或 `user`，工具不验证身份，也不据此写入用户风格确认。
+
+`project_context` 返回对照与反馈摘要，`components.md` 展示对应组件的对照和反馈。旧 schema 2 项目缺少可选字段时表示尚无记录。用以下字段区分历史结论与当前绘制结果。
+
+- 对照的 `is_current` 表示对照是否对应当前项目版本与最新运行。它根据项目记录计算，磁盘文件校验在相关操作中执行。
+- 反馈的 `reviewed_comparison_id` 标识当前反馈状态所依据的对照，`applies_to_current_run` 表示它是否适用于当前运行。
+- 组件的 `open_feedback_count` 统计仍为 `open` 的反馈。
