@@ -15,7 +15,7 @@ SmartUI Krita v0.3.0 通过 MCP（模型上下文协议）连接运行中的 Kri
 - MCP 服务运行依赖包含 Pillow，用于读取参考图、生成预览和取色；由 `uv.lock` 安装。
 - 支持本地 stdio MCP 的 Codex 桌面端或 CLI。该插件依赖本机 GUI，不能直接在纯网页运行环境中控制 Krita。
 
-已知本机路径：`C:\Program Files\Krita (x64)\bin\krita.exe`、`C:\Program Files\Python312\python.exe`。配置不固定这些机器专属路径；`uv` 根据项目要求选择 Python。
+Krita 和 Python 的安装路径由本机环境决定，`uv` 根据项目要求选择 Python。
 
 ## 启用 Krita 扩展
 
@@ -33,11 +33,11 @@ Krita 扩展和 MCP 服务必须使用同一桥接目录，默认为 `%LOCALAPPD
 
 根目录 `plugin.json` 和 `mcp.json` 使用 [OpenAI 官方文档的 portable Agent Plugins 格式](https://developers.openai.com/plugins/build/plugins)。`skills/` 由宿主自动发现；`mcp.json` 声明本地 stdio 服务。
 
-项目自带 `.agents/plugins/marketplace.json`，指向根目录内的 `dist/smartui-krita`。先构建精简插件包，避免把虚拟环境和验收产物复制进插件缓存，再注册本地来源并安装：
+项目自带 `.agents/plugins/marketplace.json`，指向根目录内的 `dist/smartui-krita`。在源码仓库根目录构建精简插件包，再注册本地来源并安装：
 
 ```powershell
 uv run --locked python -X utf8 scripts/build_plugin.py
-codex plugin marketplace add D:\Projects\SmartUI
+codex plugin marketplace add (Get-Location).Path
 codex plugin add smartui-krita@smartui-local
 ```
 
@@ -53,7 +53,7 @@ codex plugin add smartui-krita@smartui-local
 uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 ```
 
-`${PLUGIN_ROOT}` 由插件宿主展开。配置同时将工作目录和 `PYTHONPATH` 指向插件根目录。首次启动时 `uv` 根据 `uv.lock` 创建环境并安装运行依赖；`--locked` 检查锁文件一致性，`--no-dev` 排除开发依赖。手工排查可使用 `uv run --locked --project D:\Projects\SmartUI --directory D:\Projects\SmartUI python -m smartui_mcp`；服务通过标准输入输出传输 MCP 消息，不是交互式终端命令。
+`${PLUGIN_ROOT}` 由插件宿主展开。配置同时将工作目录和 `PYTHONPATH` 指向插件根目录。首次启动时 `uv` 根据 `uv.lock` 创建环境并安装运行依赖；`--locked` 检查锁文件一致性，`--no-dev` 排除开发依赖。手工排查时，在插件根目录执行 `uv run --locked --no-dev --project . python -m smartui_mcp`；服务通过标准输入输出传输 MCP 消息，不是交互式终端命令。
 
 工具共 15 个：五个底层 Krita 工具和十个项目工具。
 
@@ -100,7 +100,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 已有文档若已打开，直接检查；否则先打开源文件。批量执行不是事务：失败会停止，已执行操作和失败项的部分效果可能保留。超时后先检查请求结果与 Krita 现场，不自动重发修改请求。
 
-## 自动测试与实机验证
+## 开发验证
 
 在源码根目录运行自动测试，不需要启动 Krita：
 
@@ -108,21 +108,17 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 uv run --locked python -m pytest -q
 ```
 
-当前自动测试为 245 项、10 个子测试，全部通过。v0.3 的[真实 MCP → Krita 验证报告](projects/slimeblock/.smartui/integration/project-program-report.json)已通过：自定义圆形徽章程序生成 3 个绘画图层和 1 个透明度蒙版，循环计算 16 条笔触；程序升级只标记依赖组件，原文件中的条纹与蒙版分别局部修改，其他节点及按钮资产保持不变。四个既有按钮也已通过项目程序重新绘制并登记实际源码版本。
-
-复现通用程序验收使用已迁移的 SlimeBlock 项目，脚本会实际更新验证用徽章：
+验证原生笔刷、图层、蒙版和源文件保存重开时，先启用扩展并启动 Krita，再在源码根目录运行：
 
 ```powershell
-uv run --locked python -X utf8 scripts/verify_program_workflow.py --project-root D:\Projects\SmartUI\projects\slimeblock
+uv run --locked python -X utf8 scripts/verify_krita.py
 ```
 
-精简安装包不包含测试、项目实例、绘制示例或验收产物。SlimeBlock 的七层亮面按钮仅作为[项目 Python 示例](examples/drawing-programs/slimeblock_buttons.py)保留在源码中；需要该画法时，将适用的源码通过 `project_save_program` 保存到对应项目，再提供该程序要求的参数。
+脚本在 `artifacts/` 下创建独立验收文件和报告，不依赖已有业务项目。运行前核对本机笔刷预设；验收期间避免同时操作验收文档。脚本默认笔刷是测试输入，项目制作可以使用其他适用预设。
 
-此前 v0.2 的[项目工具报告](projects/slimeblock/.smartui/integration/report.json)、[风格升级报告](projects/slimeblock/.smartui/integration/style-update-report.json)及[2026 年 11 月 2 日底层实机报告](artifacts/verification-20261102-181548-233791/report.md)保留为历史证据。参考分析与复现验收方法见[验证流程](docs/style-reproduction-validation.md)。
+参考分析与复现质量的验证方法见[验证流程](docs/style-reproduction-validation.md)。项目程序的最小可执行示例见[绘制程序约定](docs/drawing-programs.md#最小程序示例)。
 
-项目结构 v2 不隐式读取旧结构。SlimeBlock 已使用 `scripts/migrate_project_programs.py` 显式迁移：旧文档与项目 JSON 备份在 `.smartui/migrations/`，旧执行记录保持原样，未重绘前的资产不会被登记为新程序版本。该脚本只处理 v0.2 的亮面按钮示例，不猜测其他项目的程序内容。
-
-底层实机验收脚本 `scripts/verify_krita.py` 会创建独立验收文件并实际操作 Krita。运行前启动扩展，查询本机精确笔刷名称；验收期间避免同时操作验收文档。脚本中的默认笔刷是测试输入，不是所有项目的制作要求。
+精简安装包不包含测试和验收脚本，上述命令在源码仓库中使用。具体项目数据与每次运行产物保留在本地，不随工具分发。
 
 ## 项目结构
 

@@ -46,7 +46,7 @@ def build(parameters, spec, component_id):
 
 通过 `project_save_program.source` 保存以上完整源码，再定义组件，先生成计划。计划预检不连接 Krita，也不表示笔刷已安装或实际画面已验收；实际绘制前仍需查询本机预设并查看产物。
 
-仓库 `examples/drawing-programs/slimeblock_buttons.py` 是 SlimeBlock 的七层亮面按钮程序。它要求自己的色板、几何和高光参数，仅在该项目需求适用时使用，不进入安装包。其他参考可以定义不同的节点、参数和绘制步骤。
+项目程序应根据对应参考和编辑需求定义节点、参数与绘制步骤。示例程序只演示通用接口，不限定组件的图层结构或视觉样式。
 
 ## 计划结构
 
