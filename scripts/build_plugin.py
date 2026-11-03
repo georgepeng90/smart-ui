@@ -15,7 +15,7 @@ def main():
         shutil.rmtree(target)
     target.mkdir(parents=True)
     files = ["plugin.json", "mcp.json", "pyproject.toml", "uv.lock", "README.md",
-             "docs/bridge-contract.md", "scripts/install_krita.py", "krita_plugin/smartui_bridge.desktop"]
+             "docs/bridge-contract.md", "docs/project-tools.md", "docs/drawing-programs.md", "scripts/install_krita.py", "krita_plugin/smartui_bridge.desktop"]
     for directory in ("smartui_mcp", "krita_plugin/smartui_bridge"):
         files += [str(p.relative_to(root)) for p in (root / directory).rglob("*.py")]
     files += [str(p.relative_to(root)) for p in (root / "skills").rglob("*.md")]

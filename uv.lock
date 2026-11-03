@@ -769,26 +769,26 @@ wheels = [
 
 [[package]]
 name = "smartui-mcp"
-version = "0.1.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
+    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "pillow" },
     { name = "pytest" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mcp", specifier = ">=1.30,<2" }]
+requires-dist = [
+    { name = "mcp", specifier = ">=1.30,<2" },
+    { name = "pillow", specifier = ">=11" },
+]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "pillow", specifier = ">=11" },
-    { name = "pytest", specifier = ">=8" },
-]
+dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "sse-starlette"

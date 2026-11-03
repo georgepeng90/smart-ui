@@ -8,6 +8,24 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP, Image
 
 from .client import BridgeClient
+from .projects import ProjectStore, ProjectError
+from .references import register_reference, inspect_reference
+from .pipeline import draw_component, plan_component
+
+
+def _project_summary(context):
+    """工具返回制作摘要；完整节点检查留在项目文件中，避免反复挤占对话。"""
+    data = context["data"]
+    components = {}
+    for key, value in data["components"].items():
+        latest = value["latest_run"]
+        components[key] = {"name": value["name"], "spec": value["spec"], "needs_review": value["needs_review"],
+                           "target_style_version": value["target_style_version"], "attempts": len(value["runs"]),
+                           "last_attempt": {k: v for k, v in value["runs"][-1].items() if k in ("run_id", "status", "error")} if value["runs"] else None,
+                           "latest_run": {k: v for k, v in latest.items() if k in ("run_id", "status", "style_version", "program_id", "program_version", "program_sha256", "document", "preview", "verification", "layer_ids")} if latest else None}
+    return {"project_root": context["project_root"], "revision": context["revision"],
+            "project_id": data["project_id"], "name": data["name"], "style": data["style"],
+            "references": data["references"], "programs": data["programs"], "components": components}
 
 
 def _document_path(document: str) -> str:
@@ -19,6 +37,7 @@ def _document_path(document: str) -> str:
 
 def create_server(client: BridgeClient | None = None) -> FastMCP:
     bridge = client if client is not None else BridgeClient()
+    projects = ProjectStore()
     server = FastMCP(
         "SmartUI Krita",
         instructions=(
@@ -76,5 +95,102 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
             raise ValueError(f"Krita preview 必须返回 PNG 绝对路径：{path}")
         image_data = await asyncio.to_thread(path.read_bytes)
         return [json.dumps(result, ensure_ascii=False), Image(data=image_data, format="png")]
+
+    @server.tool()
+    async def project_create(project_root: str, project_id: str, name: str) -> Any:
+        """创建本地项目及自动维护的 style.md、components.md；拒绝覆盖现有同名文档。"""
+        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name))
+
+    @server.tool()
+    async def project_context(project_root: str) -> Any:
+        """读取项目、参考、风格及组件摘要，返回后续写入必须提供的 revision。受管文档被手改时明确报错。"""
+        return _project_summary(await asyncio.to_thread(projects.context, project_root))
+
+    @server.tool()
+    async def project_add_reference(project_root: str, expected_revision: str, reference_id: str, source_path: str) -> Any:
+        """登记只读 PNG/JPEG/WebP 参考，计算源文件哈希并生成预览；项目风格文档自动更新。"""
+        current = await asyncio.to_thread(projects.context, project_root)
+        if current["revision"] != expected_revision:
+            raise ProjectError("项目版本已变化，请重新读取 project_context")
+        if reference_id in current["data"]["references"]:
+            raise ProjectError("参考标识已存在：" + reference_id)
+        reference = await asyncio.to_thread(register_reference, project_root, reference_id, source_path)
+        return _project_summary(await asyncio.to_thread(projects.add_reference, project_root, expected_revision, reference))
+
+    @server.tool(structured_output=False)
+    async def project_inspect_reference(project_root: str, reference_id: str, region: list[int] | None = None,
+                                        patches: list[dict[str, Any]] | None = None, coordinate_size: list[int] | None = None) -> list[Any]:
+        """返回参考区域图片和原图取色依据，不自动判断艺术风格。
+
+        region=[x,y,width,height] 控制预览；patches=[{id,rect:[x,y,width,height]}] 指定取样色块。
+        坐标都相对完整参考图。coordinate_size 省略时使用原图坐标，传 [1080,1920] 时按该基准映射。
+        返回原始 RGB 中位数、通道范围和透明度；不进行 ICC 转换或背景合成。
+        """
+        current = await asyncio.to_thread(projects.context, project_root)
+        if reference_id not in current["data"]["references"]:
+            raise ProjectError("未登记参考：" + reference_id)
+        result = await asyncio.to_thread(inspect_reference, project_root, current["data"]["references"][reference_id],
+                                        region, [] if patches is None else patches, coordinate_size)
+        return [json.dumps(result, ensure_ascii=False), Image(data=await asyncio.to_thread(Path(result["preview"]).read_bytes), format="png")]
+
+    @server.tool()
+    async def project_update_style(project_root: str, expected_revision: str, description: str,
+                                   rules: list[dict[str, Any]], parameters: dict[str, Any], reference_ids: list[str]) -> Any:
+        """保存模型从参考中归纳的风格说明、规则及执行参数，并自动生成风格文档。
+
+        rules 的证据用 evidence:[{reference_id,...}]。参数或规则变化提升风格版本，旧组件标记需复核。
+        parameters 是项目定义的共用参数，由项目绘制程序读取；允许保存待测草稿。
+        不会自动将模型判断登记为用户确认。
+        """
+        return _project_summary(await asyncio.to_thread(projects.update_style, project_root, expected_revision,
+                                                        description, rules, parameters, reference_ids))
+
+    @server.tool()
+    async def project_define_component(project_root: str, expected_revision: str, component_id: str,
+                                       name: str, spec: dict[str, Any]) -> Any:
+        """创建或更新组件规格并生成组件文档，不伪造制作结果。
+
+        spec 必须包含已登记的 program_id，其他字段由项目程序自行定义，不限制组件类型和画法。
+        """
+        return _project_summary(await asyncio.to_thread(projects.define_component, project_root, expected_revision,
+                                                        component_id, name, spec))
+
+    @server.tool()
+    async def project_draw_component(project_root: str, expected_revision: str, component_id: str,
+                                     layers: list[str] | None = None) -> Any:
+        """将已定义组件交给 Krita 原生笔刷绘制、保存重开、核验，并自动更新组件文档。
+
+        执行 spec.program_id 引用的项目 Python 程序。省略 layers 完整绘制，或提供计划节点 key 列表作局部修改。
+        局部修改要求完整计划中的未选节点没有变化，实际执行后再次核对无关节点。
+        源文件位于项目 assets，参数快照和完整调用记录位于 .smartui/runs。Krita 必须已启动。
+        工具通过代表技术检查通过，视觉效果及用户确认须另行查看。失败尝试会记录实际错误，不自动重试。
+        """
+        return await asyncio.to_thread(draw_component, project_root, expected_revision, component_id, layers,
+                                        client=bridge, store=projects)
+
+    @server.tool()
+    async def project_save_program(project_root: str, expected_revision: str, program_id: str,
+                                   name: str, description: str, source: str) -> Any:
+        """保存或更新项目 Python 绘制程序，维护不可变源码版本及依赖组件状态；只检查语法，不执行。
+
+        程序实现 build(parameters, spec, component_id) 并返回包含 width/height/nodes/paint 的计划。
+        节点、图层、蒙版及画法由项目定义。完整格式见 docs/drawing-programs.md。
+        plan/draw 会在本机独立 Python 进程执行该可信源码，不是安全沙箱。
+        """
+        return _project_summary(await asyncio.to_thread(projects.save_program, project_root, expected_revision,
+                                                        program_id, name, description, source))
+
+    @server.tool()
+    async def project_get_program(project_root: str, program_id: str) -> Any:
+        """读取项目绘制程序的完整源码、版本、摘要及版本历史，修改后通过 project_save_program 保存。"""
+        return await asyncio.to_thread(projects.get_program, project_root, program_id)
+
+    @server.tool()
+    async def project_plan_component(project_root: str, component_id: str) -> Any:
+        """执行当前项目 Python 程序并返回经过校验的绘制计划，不调用 Krita。
+
+        使用与绘制相同的独立 Python 进程和 60 秒限制；用于检查节点结构、参数计算及批量笔触。
+        """
+        return await asyncio.to_thread(plan_component, project_root, component_id, store=projects)
 
     return server

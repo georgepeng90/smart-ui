@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "smartui-krita",
-  "version": "0.1.0",
-  "description": "通过本机 Krita 原生笔刷、图层和蒙版绘制与修改可编辑源文件。",
+  "version": "0.3.0",
+  "description": "分析项目参考、维护风格和组件文档，通过 Krita 原生笔刷绘制与修改可编辑源文件。",
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "SmartUI Krita",
-        "shortDescription": "在本机 Krita 中批量绘制并修改分层源文件",
-        "longDescription": "连接运行中的 Krita，检查文档与笔刷预设，批量操作图层、透明度蒙版和原生笔触，保存 .kra 并查看预览。"
+        "shortDescription": "管理参考与项目风格，在 Krita 中绘制可编辑组件",
+        "longDescription": "分析参考并维护风格文档，保存和执行项目自定义的绘制程序，通过 Krita 原生笔刷、图层与蒙版制作组件并局部修改，保存可编辑源文件及版本证据。"
       }
     }
   }

@@ -18,6 +18,8 @@ __pycache__/
 # 本机研究资料和 Agent 工作缓存
 /.research/
 /.serena/
+**/.smartui/cache/
+.smartui-project.lock
 
 # 本地环境配置与运行日志；示例配置允许纳入版本管理
 .env

@@ -1,0 +1,93 @@
+# 项目工具与执行记录
+
+SmartUI Krita v0.3.0 提供十个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格和真实运行记录；具体画法属于项目程序。
+
+## 工具参数与调用顺序
+
+路径使用绝对路径。项目、参考、程序和组件 ID 以字母或数字开头，可包含字母、数字、点、下划线和连字符。
+
+| 工具 | 参数 | 作用 |
+| --- | --- | --- |
+| `project_create` | `project_root: str, project_id: str, name: str` | 创建项目及受管文档，拒绝覆盖 |
+| `project_context` | `project_root: str` | 读取摘要和最新 revision |
+| `project_add_reference` | `project_root: str, expected_revision: str, reference_id: str, source_path: str` | 登记只读 PNG/JPEG/WebP 参考，生成预览 |
+| `project_inspect_reference` | `project_root: str, reference_id: str, region: list[int] \| null = null, patches: list[dict] \| null = null, coordinate_size: list[int] \| null = null` | 返回参考区域图片及原像素取样，不写项目 |
+| `project_update_style` | `project_root: str, expected_revision: str, description: str, rules: list[dict], parameters: dict, reference_ids: list[str]` | 完整替换风格说明、规则、共用参数及引用 |
+| `project_save_program` | `project_root: str, expected_revision: str, program_id: str, name: str, description: str, source: str` | 只检查语法并保存程序源码与版本 |
+| `project_get_program` | `project_root: str, program_id: str` | 读取程序元数据和源码，不执行 |
+| `project_define_component` | `project_root: str, expected_revision: str, component_id: str, name: str, spec: dict` | 创建或替换规格，保留执行历史；spec 必须引用已保存的 program_id |
+| `project_plan_component` | `project_root: str, component_id: str` | 执行程序并预检计划，不调用 Krita、不登记绘制成功 |
+| `project_draw_component` | `project_root: str, expected_revision: str, component_id: str, layers: list[str] \| null = null` | 执行、保存、重开检查并记录；省略 layers 完整绘制 |
+
+新项目通常依次执行：创建 → 登记并查看参考 → 保存规则和参数 → 保存程序 → 定义组件 → 生成计划 → 绘制 → 查看预览。已有项目先读上下文和已有程序，避免覆盖项目已有制作逻辑。程序接口、可执行最小示例及计划校验规则见[绘制程序约定](drawing-programs.md)。
+
+每次状态写入返回新 `revision`；后续写入必须使用它。revision 是 `project.json` 原始字节的 SHA-256，与风格版本和程序版本无关。冲突后重新读取并核对差异，不自动覆盖。
+
+## 参考区域与规则依据
+
+`region` 和取样 `rect` 都是 `[x, y, width, height]`，相对完整参考图。省略 `coordinate_size` 使用原图坐标；若按 1080 × 1920 整图预览测量，传 `[1080,1920]`，工具映射到原图。
+
+```json
+{
+  "project_root": "D:/Art/example",
+  "reference_id": "main",
+  "region": [100, 300, 400, 180],
+  "coordinate_size": [1080, 1920],
+  "patches": [{"id":"face", "rect":[180,350,20,20]}]
+}
+```
+
+返回图片和原像素 RGB 中位数、通道范围及透明度，保留色彩元数据；不进行 ICC 转换或背景合成。登记后的原图哈希或尺寸变化会报错。需实际查看图片，避开抗锯齿、文字和遮挡后解释取样。
+
+规则可写为 `{id, description, evidence:[{reference_id, note}]}`，引用的参考必须已登记。把可见观察、制作假设和待测参数分清楚；截图不能唯一证明原始笔刷、真实材质或图层结构。共用 `parameters` 是项目自定义 JSON 对象，通用工具不要求色板、圆角或高光等特定字段。
+
+## 保存程序与定义组件
+
+`project_save_program.source` 是完整 Python 源码。保存不执行源码，也不检查程序是否已定义可用的 build；用 `project_plan_component` 验证运行行为。程序作为可信本机代码运行，独立进程与 60 秒超时不是安全沙箱。
+
+组件规格最少包含已保存的程序标识，其余字段由程序解释。例如采用[最小矩形程序](drawing-programs.md#最小程序示例)：
+
+```json
+{
+  "project_root":"D:/Art/example",
+  "expected_revision":"替换为最新revision",
+  "component_id":"panel.primary",
+  "name":"主面板",
+  "spec":{"program_id":"flat-panel", "width":320, "height":120, "color":"#6AAD3D"}
+}
+```
+
+执行时 `style.parameters` 作为 `parameters`，完整组件规格作为 `spec`，组件 ID 作为 `component_id`。程序负责其业务参数的必要字段、几何约束及错误说明。通用工具只校验程序返回的计划是否可执行。SlimeBlock 按钮源码是仓库中的项目示例，不在安装包内，也不是任何新项目的默认画法。
+
+## 原文件更新
+
+`layers=["surface"]` 中的值是计划节点 key，不是显示名称或固定角色。可选择绘画图层、分组和透明度蒙版；选择分组只更新该分组自身属性，不隐式包含子树；需要修改子节点时，逐一列出它们的 key。工具比较新计划与上次实际计划，拒绝非目标节点及绘制内容的变化，因此任何参数都可能用于局部调整，前提是它只影响选中范围。
+
+已有源文件通过记录的 UUID 定位。无论完整重画还是局部更新，当前画布和图层结构都必须匹配既有记录；改变尺寸或结构时暂用新组件 ID 创建变体。源文件被外部改动、Krita 存在未保存修改或 UUID 不符时直接报错。完整重画不能用来绕过结构检查。没有旧 plan 的历史资产，需要先完整绘制一次才能局部更新。
+
+共享规则或参数变化后，组件需要重新检查；能否只更新部分节点取决于计划对比，不根据特定参数名或高光角色判断。只更新目标节点不能把未实际执行的变化宣称为完成。
+
+## 状态、版本与证据
+
+`project.json` 使用 schema 2，主要字段如下：
+
+| 字段 | 含义 |
+| --- | --- |
+| `schema_version/project_id/name` | 结构版本、项目标识和名称 |
+| `references` | 只读参考路径、摘要、尺寸、色彩元数据和预览 |
+| `style` | version、description、rules、parameters、reference_ids、user_confirmation |
+| `programs` | 按 ID 保存程序元数据：id、name、description、version、sha256、source_path、history |
+| `components` | 名称、spec、目标风格版本、最近成功记录和全部尝试 |
+| `document_hashes` | 自动生成 style.md 和 components.md 的摘要 |
+
+程序源码路径为项目相对路径 `programs/<id>/<version>.py`。读取时核对实际源码与记录摘要；源码变化通过工具保存为版本，不手改文件绕过记录。程序更新使依赖组件的 `needs_review` 为 true；历史 run 仍记实际程序版本与源码哈希，不把旧产物改成新版本。
+
+规则或共用参数变化提升风格版本；只改风格说明或引用清单不升级。`needs_review` 是派生状态：缺少成功产物、当前规格/风格/程序与实际记录不同，或最近尝试失败，都需要重新检查。
+
+源文件为 `assets/<component_id>.kra`。每次运行在 `.smartui/runs/<run_id>/` 保存 `program.py`、`plan.json`、`style-snapshot.json`、`operations.json`、`result.json`，成功时另有 `preview.png` 与 `output.kra`；更新已有文件时保留 `input.kra`。运行记录包含实际风格版本、规格摘要、程序版本、源码哈希、节点 UUID、文件摘要及检查数据。
+
+`drawn` 表示已绘制，`verified` 表示保存重开后的技术检查通过，`failed` 表示尝试失败。技术检查不证明视觉接近参考，也不代表用户确认；当前工具不代填 `user_confirmation`。
+
+预检错误直接报告。进入执行阶段后的失败追加实际错误并保留现场，不替换最近成功记录；历史成功不能证明失败后的磁盘文件有效。资产生成后若项目 revision 冲突，会报告记录未更新并给出结果路径，不自动重试。
+
+`project.json` 是唯一结构化数据源，受管 Markdown 只展示摘要。手改、缺失或多文件写入中断造成摘要不一致时明确报错。状态写入使用项目排他锁、同目录临时文件和原子替换，不静默修复或吞掉错误。v0.2 历史实例和报告不能作为 schema 2 已完成迁移或 v0.3 实机通过的依据。

@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -8,12 +10,35 @@ import unittest
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from PIL import Image
 
 from smartui_mcp.server import create_server
 from test_client import responding_bridge
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1foAAAAASUVORK5CYII=")
+TOOL_NAMES = {
+    "krita_status", "krita_list_brushes", "krita_inspect_document", "krita_execute_batch", "krita_preview",
+    "project_create", "project_context", "project_add_reference", "project_inspect_reference",
+    "project_update_style", "project_define_component", "project_draw_component",
+    "project_save_program", "project_get_program", "project_plan_component",
+}
+
+CUSTOM_PROGRAM = '''def build(parameters, spec, component_id):
+    extent = spec["extent"]
+    return {
+        "width": extent, "height": extent,
+        "nodes": [
+            {"key": "group", "name": component_id + " 自定义分组", "kind": "grouplayer", "parent": "root"},
+            {"key": "ink", "name": "程序生成的线条", "kind": "paintlayer", "parent": "group"},
+            {"key": "clip", "name": "局部透明度", "kind": "transparencymask", "parent": "ink",
+             "rects": [[0, 0, extent, extent, 180]]},
+        ],
+        "paint": [{"node": "ink", "brush": "项目自选原生笔刷", "color": parameters["color"], "size": 2,
+                   "strokes": [{"kind": "line", "from": [index, 0], "to": [index, extent - 1]}
+                               for index in range(parameters["line_count"])]}],
+    }
+'''
 
 
 class FakeClient:
@@ -37,9 +62,7 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
             fake = FakeClient(png)
             server = create_server(fake)
             tools = await server.list_tools()
-            self.assertEqual({t.name for t in tools}, {
-                "krita_status", "krita_list_brushes", "krita_inspect_document", "krita_execute_batch", "krita_preview"
-            })
+            self.assertEqual({t.name for t in tools}, TOOL_NAMES)
             self.assertIsNone(next(t for t in tools if t.name == "krita_preview").outputSchema)
             document = str(root / "测试.kra")
             await server.call_tool("krita_status", {})
@@ -92,7 +115,7 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                         initialize = await session.initialize()
                         self.assertEqual(initialize.serverInfo.name, "SmartUI Krita")
                         tools = await session.list_tools()
-                        self.assertEqual(len(tools.tools), 5)
+                        self.assertEqual({tool.name for tool in tools.tools}, TOOL_NAMES)
                         result = await session.call_tool("krita_status", {})
                         self.assertFalse(result.isError)
                         self.assertEqual(json.loads(result.content[0].text), {"protocol_version": 1})
@@ -109,6 +132,181 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIn("未找到指定图层", failure.content[0].text)
                         self.assertIn("request_id=", failure.content[0].text)
                         self.assertIn(str(root / "responses"), failure.content[0].text)
+
+    async def test_stdio_project_reference_style_and_component_persist_without_krita(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            project_root = root / "中文项目"
+            source = root / "参考色块.png"
+            with Image.new("RGB", (4, 2), (20, 40, 60)) as image:
+                for x in (2, 3):
+                    for y in (0, 1):
+                        image.putpixel((x, y), (200, 100, 50))
+                image.save(source)
+            original = source.read_bytes()
+            original_mtime = source.stat().st_mtime_ns
+            bridge_root = root / "unused-bridge"
+            parameters = StdioServerParameters(
+                command=sys.executable, args=["-m", "smartui_mcp"],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                env={**os.environ, "SMARTUI_BRIDGE_DIR": str(bridge_root), "SMARTUI_BRIDGE_TIMEOUT": "0.1"},
+            )
+            async with stdio_client(parameters) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    async def call(tool_name, **arguments):
+                        result = await session.call_tool(tool_name, arguments)
+                        self.assertFalse(result.isError, result.content)
+                        return json.loads(result.content[0].text)
+
+                    project = await call("project_create", project_root=str(project_root),
+                                         project_id="demo", name="色块按钮项目")
+                    first_revision = project["revision"]
+                    for filename in ("style.md", "components.md"):
+                        self.assertTrue((project_root / filename).is_file())
+                    project = await call("project_add_reference", project_root=str(project_root),
+                                         expected_revision=project["revision"], reference_id="colors", source_path=str(source))
+                    self.assertEqual(project["references"]["colors"]["sha256"], hashlib.sha256(original).hexdigest())
+                    inspection = await session.call_tool("project_inspect_reference", {
+                        "project_root": str(project_root), "reference_id": "colors", "region": [2, 0, 2, 2],
+                        "patches": [{"id": "left", "rect": [0, 0, 2, 2]}, {"id": "right", "rect": [2, 0, 2, 2]}],
+                    })
+                    self.assertFalse(inspection.isError, inspection.content)
+                    self.assertIsNone(inspection.structuredContent)
+                    samples = json.loads(inspection.content[0].text)
+                    self.assertEqual([item["hex"] for item in samples["samples"]], ["#14283C", "#C86432"])
+                    self.assertEqual(inspection.content[1].mimeType, "image/png")
+                    with Image.open(io.BytesIO(base64.b64decode(inspection.content[1].data))) as preview:
+                        self.assertEqual(preview.size, (2, 2))
+                        self.assertEqual(preview.convert("RGB").getpixel((0, 0)), (200, 100, 50))
+                    project = await call("project_update_style", project_root=str(project_root),
+                                         expected_revision=project["revision"], description="暖色亮面按钮，参数待测",
+                                         rules=[{"id": "face-color", "description": "正面使用右侧色块",
+                                                 "evidence": [{"reference_id": "colors", "patch_id": "right"}]}],
+                                         parameters={"draft": True, "color": "#C86432", "line_count": 64}, reference_ids=["colors"])
+                    project = await call("project_save_program", project_root=str(project_root),
+                                         expected_revision=project["revision"], program_id="custom-lines",
+                                         name="自定义线条程序", description="项目自行定义画法与图层", source=CUSTOM_PROGRAM)
+                    spec = {"program_id": "custom-lines", "extent": 128, "custom_label": "任意组件参数"}
+                    project = await call("project_define_component", project_root=str(project_root),
+                                         expected_revision=project["revision"], component_id="primary", name="主按钮", spec=spec)
+                    context = await call("project_context", project_root=str(project_root))
+                    self.assertEqual(context, project)
+                    self.assertEqual(context["components"]["primary"]["spec"], spec)
+                    self.assertIsNone(context["components"]["primary"]["latest_run"])
+                    self.assertEqual(context["components"]["primary"]["attempts"], 0)
+                    self.assertIsNone(context["style"]["user_confirmation"])
+                    before_failure = {name: (project_root / name).read_bytes()
+                                      for name in ("project.json", "style.md", "components.md")}
+                    failure = await session.call_tool("project_update_style", {
+                        "project_root": str(project_root), "expected_revision": first_revision,
+                        "description": "过时写入", "rules": [], "parameters": {}, "reference_ids": [],
+                    })
+                    self.assertTrue(failure.isError)
+                    self.assertIn("revision", failure.content[0].text)
+                    for name, content in before_failure.items():
+                        self.assertEqual((project_root / name).read_bytes(), content)
+                    style_doc = (project_root / "style.md").read_text(encoding="utf-8")
+                    components_doc = (project_root / "components.md").read_text(encoding="utf-8")
+                    self.assertIn("暖色亮面按钮，参数待测", style_doc)
+                    self.assertIn("face-color", style_doc)
+                    self.assertIn("参考色块.png", style_doc)
+                    self.assertIn("主按钮", components_doc)
+                    self.assertIn("已定义规格，尚未生成", components_doc)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(source.stat().st_mtime_ns, original_mtime)
+            self.assertEqual(list((bridge_root / "requests").glob("*.json")), [])
+
+    async def test_stdio_project_program_save_get_and_plan_without_krita(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            project_root = root / "程序项目"
+            bridge_root = root / "unused-bridge"
+            marker = root / "program-executed.txt"
+            source = f"from pathlib import Path\nPath({str(marker)!r}).write_text('已执行', encoding='utf-8')\n" + CUSTOM_PROGRAM
+            parameters = StdioServerParameters(
+                command=sys.executable, args=["-m", "smartui_mcp"],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                env={**os.environ, "SMARTUI_BRIDGE_DIR": str(bridge_root), "SMARTUI_BRIDGE_TIMEOUT": "0.1"},
+            )
+            async with stdio_client(parameters) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    async def call(tool_name, **arguments):
+                        result = await session.call_tool(tool_name, arguments)
+                        self.assertFalse(result.isError, result.content)
+                        return json.loads(result.content[0].text)
+
+                    project = await call("project_create", project_root=str(project_root), project_id="custom", name="程序项目")
+                    project = await call("project_update_style", project_root=str(project_root),
+                                         expected_revision=project["revision"], description="自定义线条草稿", rules=[],
+                                         parameters={"draft": True, "color": "#204060", "line_count": 96}, reference_ids=[])
+                    project = await call("project_save_program", project_root=str(project_root),
+                                         expected_revision=project["revision"], program_id="lines", name="参数化线条",
+                                         description="自由定义节点、蒙版与批量笔触", source=source)
+                    self.assertFalse(marker.exists(), "保存程序只能检查语法")
+                    fetched = await call("project_get_program", project_root=str(project_root), program_id="lines")
+                    self.assertEqual(fetched["source"], source)
+                    self.assertEqual(fetched["version"], 1)
+                    self.assertEqual(fetched["sha256"], hashlib.sha256(source.encode()).hexdigest())
+                    project = await call("project_define_component", project_root=str(project_root),
+                                         expected_revision=project["revision"], component_id="stripes", name="条纹图案",
+                                         spec={"program_id": "lines", "extent": 120, "custom": {"任意参数": True}})
+                    plan_result = await call("project_plan_component", project_root=str(project_root), component_id="stripes")
+                    self.assertEqual(marker.read_text(encoding="utf-8"), "已执行")
+                    self.assertEqual(plan_result["revision"], project["revision"])
+                    self.assertEqual(plan_result["program_id"], "lines")
+                    self.assertEqual(plan_result["program_version"], 1)
+                    self.assertEqual(plan_result["program_sha256"], fetched["sha256"])
+                    plan = plan_result["plan"]
+                    self.assertEqual([plan["width"], plan["height"]], [120, 120])
+                    self.assertEqual([node["kind"] for node in plan["nodes"]],
+                                     ["grouplayer", "paintlayer", "transparencymask"])
+                    self.assertEqual(plan["nodes"][0]["name"], "stripes 自定义分组")
+                    self.assertEqual(plan["nodes"][2]["rects"], [[0, 0, 120, 120, 180]])
+                    self.assertEqual(plan["paint"][0]["color"], "#204060")
+                    self.assertEqual(len(plan["paint"][0]["strokes"]), 96)
+                    self.assertEqual(plan["paint"][0]["strokes"][-1]["from"], [95, 0])
+                    self.assertEqual(await call("project_context", project_root=str(project_root)), project)
+
+                    modified = source.replace('extent = spec["extent"]', 'extent = spec["extent"] + 1')
+                    project = await call("project_save_program", project_root=str(project_root),
+                                         expected_revision=project["revision"], program_id="lines", name="参数化线条",
+                                         description="更新画布算法", source=modified)
+                    self.assertEqual(project["programs"]["lines"]["version"], 2)
+                    self.assertTrue(project["components"]["stripes"]["needs_review"])
+                    self.assertIsNone(project["components"]["stripes"]["latest_run"])
+                    fetched = await call("project_get_program", project_root=str(project_root), program_id="lines")
+                    self.assertEqual(fetched["source"], modified)
+                    self.assertEqual(len(fetched["history"]), 2)
+                    changed_plan = await call("project_plan_component", project_root=str(project_root), component_id="stripes")
+                    self.assertEqual(changed_plan["plan"]["width"], 121)
+                    self.assertEqual(changed_plan["program_version"], 2)
+
+                    syntax_failure = await session.call_tool("project_save_program", {
+                        "project_root": str(project_root), "expected_revision": project["revision"],
+                        "program_id": "lines", "name": "参数化线条", "description": "无效语法",
+                        "source": "def build(:\n",
+                    })
+                    self.assertTrue(syntax_failure.isError)
+                    self.assertIn("语法无效", syntax_failure.content[0].text)
+                    self.assertEqual(await call("project_context", project_root=str(project_root)), project)
+                    failing_source = "raise RuntimeError('程序执行阶段的实际错误')\n"
+                    project = await call("project_save_program", project_root=str(project_root),
+                                         expected_revision=project["revision"], program_id="lines", name="参数化线条",
+                                         description="语法有效但执行失败", source=failing_source)
+                    self.assertEqual(project["programs"]["lines"]["version"], 3)
+                    runtime_failure = await session.call_tool("project_plan_component", {
+                        "project_root": str(project_root), "component_id": "stripes",
+                    })
+                    self.assertTrue(runtime_failure.isError)
+                    self.assertIn("程序执行失败", runtime_failure.content[0].text)
+                    self.assertIn("RuntimeError: 程序执行阶段的实际错误", runtime_failure.content[0].text)
+                    self.assertEqual(await call("project_context", project_root=str(project_root)), project)
+                    self.assertEqual(project["components"]["stripes"]["attempts"], 0)
+            self.assertEqual(list((bridge_root / "requests").glob("*.json")), [])
 
 
 if __name__ == "__main__":
