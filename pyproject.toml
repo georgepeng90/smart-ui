@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartui-mcp"
-version = "0.5.0"
+version = "0.6.0"
 description = "通过本地文件队列控制 Krita 的 MCP 服务"
 requires-python = ">=3.12"
 dependencies = ["mcp>=1.30,<2", "Pillow>=11", "pydantic>=2,<3"]

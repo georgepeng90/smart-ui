@@ -8,6 +8,7 @@ import shutil
 from uuid import uuid4
 
 from .client import BridgeClient
+from .layout import ProjectLayout
 from .projects import ProjectError, ProjectStore, spec_sha256
 from .programs import run_program
 
@@ -119,8 +120,8 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
         _check_local(compiled, json.loads(plan_bytes), layers)
 
     root = Path(context["project_root"])
-    asset_dir = root / "assets"
-    asset_dir.mkdir(exist_ok=True)
+    asset_dir = ProjectLayout(root, data["paths"]).directory("sources")
+    asset_dir.mkdir(parents=True, exist_ok=True)
     document = asset_dir / (component_id + ".kra")
     if latest and Path(latest["document"]).resolve() != document:
         raise ValueError("已登记源文件路径与组件默认路径不同，请先核对组件记录")

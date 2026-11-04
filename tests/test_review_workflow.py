@@ -106,8 +106,13 @@ def test_project_saves_comparison_and_retrieves_its_original_images_after_redraw
     assert first["artifact"]["display_size"] == [4, 3]
     assert first["node_keys"] == ["outline"]
     assert first["rule_ids"] == [RULE["id"]]
-    state = json.loads((Path(root) / "project.json").read_text(encoding="utf-8"))
-    assert state["comparisons"][first["id"]] == {key: value for key, value in first.items() if key != "is_current"}
+    state = json.loads((Path(root) / ".smartui" / "project.json").read_text(encoding="utf-8"))
+    stored = state["comparisons"][first["id"]]
+    assert stored["id"] == first["id"]
+    for label, image in stored["images"].items():
+        assert not Path(image["path"]).is_absolute()
+        assert image["path"] == Path(first["images"][label]["path"]).relative_to(root).as_posix()
+    assert store.get_comparison(root, first["id"])["comparison"] == first
     assert set(first["images"]) == {"reference", "artifact", "comparison"}
     for label, metadata in first["images"].items():
         path = Path(metadata["path"])
@@ -133,13 +138,13 @@ def test_stale_revision_cannot_create_comparisons_or_feedback(project):
     store, context = project
     first = compare(store, context)
     root = Path(context["project_root"])
-    before = (root / "project.json").read_bytes()
+    before = (root / ".smartui" / "project.json").read_bytes()
     outputs = sorted((root / ".smartui" / "comparisons").rglob("*.png"))
     with pytest.raises(ProjectError, match="revision"):
         compare(store, context)
     with pytest.raises(ProjectError, match="revision"):
         give_feedback(store, first | {"revision": context["revision"]})
-    assert (root / "project.json").read_bytes() == before
+    assert (root / ".smartui" / "project.json").read_bytes() == before
     assert sorted((root / ".smartui" / "comparisons").rglob("*.png")) == outputs
 
 
@@ -174,7 +179,7 @@ def test_feedback_stays_open_until_explicit_review_after_version_change(project,
     assert current["data"]["style"]["user_confirmation"] is None
     assert current["data"]["components"]["sample"]["latest_run"]["status"] == "drawn"
     assert store.get_comparison(root, second_id)["feedback"][feedback["id"]]["observation"] == OBSERVATION
-    document = (Path(root) / "components.md").read_text(encoding="utf-8")
+    document = (Path(root) / "docs" / "ui" / "components.md").read_text(encoding="utf-8")
     for value in (original_id, second_id, OBSERVATION, SUGGESTION):
         assert value in document
 
@@ -188,11 +193,11 @@ def test_comparison_rejects_modified_run_artifacts_before_recording(project, fie
     store, context = project
     root = Path(context["project_root"])
     run = context["data"]["components"]["sample"]["latest_run"]
-    before = (root / "project.json").read_bytes()
+    before = (root / ".smartui" / "project.json").read_bytes()
     Path(run[field]).write_bytes(b"modified after recording")
     with pytest.raises(exception, match=message):
         compare(store, context)
-    assert (root / "project.json").read_bytes() == before
+    assert (root / ".smartui" / "project.json").read_bytes() == before
     assert not list((root / ".smartui" / "comparisons").rglob("*.png"))
 
 
@@ -200,13 +205,13 @@ def test_modified_comparison_image_cannot_be_read_or_used_for_feedback(project):
     store, context = project
     first = compare(store, context)
     root = Path(context["project_root"])
-    before = (root / "project.json").read_bytes()
+    before = (root / ".smartui" / "project.json").read_bytes()
     Path(first["comparison"]["images"]["comparison"]["path"]).write_bytes(b"modified after comparison")
     with pytest.raises(ProjectError, match="对照图片 SHA-256"):
         store.get_comparison(str(root), first["comparison"]["id"])
     with pytest.raises(ProjectError, match="对照图片 SHA-256"):
         give_feedback(store, first)
-    assert (root / "project.json").read_bytes() == before
+    assert (root / ".smartui" / "project.json").read_bytes() == before
 
 
 def test_mcp_validates_the_image_bytes_it_actually_returns(project, monkeypatch):

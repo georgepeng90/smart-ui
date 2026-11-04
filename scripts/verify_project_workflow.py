@@ -113,13 +113,13 @@ async def run(project_root, reference_directory):
                 for identifier,digest in unaffected.items():
                     assert hashlib.sha256(Path(ctx["components"][identifier]["latest_run"]["document"]).read_bytes()).hexdigest()==digest
                 # 旧版本写入必须失败，且不得把项目内容改变。
-                digest=hashlib.sha256((project_root/'project.json').read_bytes()).hexdigest()
+                digest=hashlib.sha256((project_root/'.smartui'/'project.json').read_bytes()).hexdigest()
                 rejected=await session.call_tool("project_update_style",{**common,"expected_revision":initial_revision,"description":"不应写入","rules":[],"parameters":{},"reference_ids":[]})
                 assert rejected.isError
-                assert hashlib.sha256((project_root/'project.json').read_bytes()).hexdigest()==digest
+                assert hashlib.sha256((project_root/'.smartui'/'project.json').read_bytes()).hexdigest()==digest
                 assert all(not value['needs_review'] for value in ctx['components'].values())
                 for document in ('style.md','components.md'):
-                    assert (project_root/document).is_file()
+                    assert (project_root/'docs'/'ui'/document).is_file()
                 report.update(status="passed",outputs=outputs,local_edit=edited,revision=ctx['revision'],
                               checks={"tool_count":15,"source_documents":4,"saved_and_reopened":True,"local_edit_kept_other_nodes":True,
                                       "other_assets_unchanged":True,"stale_revision_rejected":True,"documents_updated":True})

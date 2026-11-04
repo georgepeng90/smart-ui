@@ -2,11 +2,11 @@
 
 完整目标、阶段安排和验收标准见[通用游戏 UI 制作工具链总体规划](docs/toolchain-roadmap.md)。本页说明当前已实现能力和使用方法；总体规划中的后续能力不代表已经实现。
 
-SmartUI Krita v0.5.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可保存参考与实际绘制结果的对照，记录和复查偏差，也可把多份实际产物放在统一背景上检查配色、状态及尺寸变体。
+SmartUI Krita v0.6.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可保存参考与实际绘制结果的对照，记录和复查偏差，也可把多份实际产物放在统一背景上检查配色、状态及尺寸变体。
 
 绘制程序属于项目，由模型根据参考与当前需求编写。通用工具只执行和验证绘制计划，图层数量、名称、几何、材质和绘制步骤由项目程序决定。参考工具提供裁切和取色，模型负责查看图片、归纳依据和校准参数；技术检查通过后仍需查看预览并验收视觉效果。
 
-项目以 `project.json` 为唯一结构化数据源，工具自动维护 `style.md` 和 `components.md`，不会静默覆盖手改文档。工具参数见[项目工具说明](docs/project-tools.md)，程序接口见[绘制程序约定](docs/drawing-programs.md)。参考分析使用 `reference-style` Skill，实际制作与原文件修改使用 `krita-drawing` Skill。
+项目以业务工程根目录中的 `.smartui/project.json` 为唯一结构化数据源，工具默认自动维护 `docs/ui/style.md` 和 `docs/ui/components.md`，不会静默覆盖手改文档。工具参数见[项目工具说明](docs/project-tools.md)，程序接口见[绘制程序约定](docs/drawing-programs.md)。参考分析使用 `reference-style` Skill，实际制作与原文件修改使用 `krita-drawing` Skill。
 
 ## 运行条件
 
@@ -81,6 +81,23 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 | `project_record_feedback` | 根据对照记录观察到的偏差及修改建议 |
 | `project_update_feedback` | 根据对照追加复查记录，更新反馈状态 |
 
+### 业务工程中的项目目录
+
+`project_root` 始终是业务工程根目录的绝对路径。SmartUI 状态保存在 `.smartui/project.json`；参考、文档、程序和源文件与工程一起维护，不放在工具安装目录中。
+
+| 用途 | 默认目录 | `paths` 配置名 |
+| --- | --- | --- |
+| 风格与组件文档 | `docs/ui` | `documents` |
+| 参考原图 | `docs/ui/references` | `references` |
+| 绘制程序版本 | `art/ui/programs` | `programs` |
+| Krita 源文件 | `art/ui/sources` | `sources` |
+
+创建时可通过 `paths` 局部覆盖这些目录，值必须是工程内的相对路径；完整映射写入 schema 3 项目状态。工程外的参考输入会复制到参考目录的 `<reference_id>/<原文件名>`。项目内文件引用以工程相对 POSIX 路径保存，工具返回用于读取和执行的绝对路径；程序元数据的 `source_path` 保持工程相对路径。
+
+创建项目时，工具在 `.smartui/.gitignore` 中按子项忽略 `cache/` 和临时锁 `project.lock`。项目状态及 `.smartui/runs/`、`.smartui/comparisons/`、`.smartui/visual-checks/` 是需要保留的制作记录，不应整体忽略 `.smartui/`。受管文档的链接相对于文档目录生成。
+
+旧目录需要显式迁移，正常读取不会自动兼容旧布局。先运行 `uv run --locked python scripts/migrate_project_layout.py --source-root <旧数据目录绝对路径> --project-root <业务工程绝对路径>` 查看迁移计划，确认结果后使用相同参数加 `--apply` 执行。迁移的目标是业务工程根目录。
+
 ### 在新聊天中制作组件
 
 已有项目先读取 `project_context`。新项目先创建并登记参考，查看图片后保存有依据的风格规则及共用参数，再保存实现 `build(parameters, spec, component_id)` 的项目程序。定义组件时使用 `spec.program_id` 引用它，其余字段由程序定义。先用 `project_plan_component` 检查计划，再确认 Krita 连接及精确笔刷，调用 `project_draw_component`，查看实际预览。
@@ -95,7 +112,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 用新运行对照原参考区域，逐条复查反馈，展示对照拼图、实际 PNG 和可编辑的 .kra 文件。
 ```
 
-源文件位于 `assets/<component_id>.kra`。每次运行的程序快照、计划、风格快照、操作和检查结果位于 `.smartui/runs/<run_id>/`。源码版本更新后，依赖组件需要重新检查；历史记录保留实际使用的程序与风格版本。
+源文件默认位于 `art/ui/sources/<component_id>.kra`。每次运行的程序快照、计划、风格快照、操作和检查结果位于 `.smartui/runs/<run_id>/`。源码版本更新后，依赖组件需要重新检查；历史记录保留实际使用的程序与风格版本。
 
 需要检查复现偏差时，用 `project_compare_component` 对照参考和指定运行的实际预览，查看拼图后再记录偏差。修改并绘制后，用新运行与原参考区域重新对照，逐条复查反馈。对照的裁切快照和拼图保存在 `.smartui/comparisons/<comparison_id>/`。操作细节见[对照与偏差反馈](docs/project-tools.md#对照与偏差反馈)。
 

@@ -4,7 +4,7 @@
 
 ## 保存与执行
 
-用 `project_save_program(project_root, expected_revision, program_id, name, description, source)` 保存完整源码，用 `project_get_program(project_root, program_id)` 读取。保存阶段只编译检查 Python 语法，不执行顶层语句。源码保存在项目 `programs/<id>/<version>.py`，项目状态保留版本、SHA-256 和历史。
+用 `project_save_program(project_root, expected_revision, program_id, name, description, source)` 保存完整源码，用 `project_get_program(project_root, program_id)` 读取。保存阶段只编译检查 Python 语法，不执行顶层语句。`project_root` 是业务工程根目录的绝对路径。源码默认保存在工程内 `art/ui/programs/<id>/<version>.py`，可在创建项目时通过 `paths.programs` 指定工程内相对目录；程序元数据的 `source_path` 始终保存工程相对 POSIX 路径。状态位于 `.smartui/project.json`，项目状态保留版本、SHA-256 和历史。
 
 源码提供入口：
 

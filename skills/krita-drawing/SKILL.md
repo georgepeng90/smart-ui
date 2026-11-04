@@ -9,6 +9,8 @@ description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编�
 
 ## 项目制作
 
+`project_root` 是业务工程根目录的绝对路径。创建时可通过 `paths` 局部指定工程内相对目录，默认文档为 `docs/ui`、参考为 `docs/ui/references`、程序为 `art/ui/programs`、源文件为 `art/ui/sources`。工程外参考登记时会复制入参考目录。正常工具不读取旧布局；先用显式迁移脚本预览，再以 `--apply` 执行。保留 `.smartui` 状态和制作记录，仅忽略缓存。
+
 已有项目先读 `project_context`，需要修改程序时先 `project_get_program`。新项目先创建并登记参考。路径用绝对路径，每次写入用最新 revision；冲突后重新读取并核对差异，不自动覆盖。
 
 用 `project_update_style` 保存共用规则与项目参数，`project_save_program` 保存完整 Python 源码，`project_define_component` 用必需的 `spec.program_id` 引用它。其余参数和规格字段由项目程序决定。不要强加按钮、七层、高光覆盖项或某个固定笔刷。
@@ -21,7 +23,7 @@ description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编�
 
 检查多份产物时，调用 `project_create_visual_check`，每项指定成功运行的 `component_id`、`run_id` 和 `label`。可用原图像素 `region` 裁切，按目标显示尺寸计算等比 `scale`，原尺寸用 1。提供 `#RRGGBB` 纯色背景，可同时查看独立灰度图。用图上序号与标签核对实际样片，需要恢复旧检查图时用 `project_get_visual_check`。检查图辅助比较组件，最终的页面视觉层次还要在目标场景中复查。
 
-`project.json` 是唯一结构化数据源，受管 Markdown 由工具生成。不要手改文档、文档摘要、程序文件或运行记录绕过校验。缺失或摘要不符时报告具体文件并保留差异。
+`.smartui/project.json` 是唯一结构化数据源，受管 Markdown 由工具生成。不要手改文档、文档摘要、程序文件或运行记录绕过校验。缺失或摘要不符时报告具体文件并保留差异。
 
 ## 原文件局部更新
 

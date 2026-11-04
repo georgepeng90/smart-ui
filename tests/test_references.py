@@ -55,6 +55,43 @@ def test_srgb_rendering_intent_is_reported(tmp_path):
     assert result["color_metadata"] == {"has_icc_profile": False, "gamma": None, "srgb": 0}
 
 
+def test_external_reference_is_archived_without_reencoding_and_survives_input_removal(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    source = tmp_path / "外部参考.png"
+    metadata = PngImagePlugin.PngInfo()
+    metadata.add_text("author", "原始元数据")
+    with Image.new("RGB", (4, 4), (20, 40, 60)) as image:
+        image.save(source, pnginfo=metadata)
+    original = source.read_bytes()
+    original_mtime = source.stat().st_mtime_ns
+    result = register_reference(str(root), "sample", str(source))
+    archived = root / "docs" / "ui" / "references" / "sample" / source.name
+    assert result["source"] == str(archived)
+    assert archived.read_bytes() == original
+    assert source.read_bytes() == original
+    assert source.stat().st_mtime_ns == original_mtime
+    source.unlink()
+    inspection = inspect_reference(str(root), result, patches=[{"id": "all", "rect": [0, 0, 4, 4]}])
+    assert inspection["samples"][0]["hex"] == "#14283C"
+
+
+def test_external_reference_uses_configured_directory_and_refuses_archive_conflicts(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    source, _ = make_reference(tmp_path)
+    paths = {"references": "design/references"}
+    result = register_reference(str(root), "sample", str(source), paths=paths)
+    archived = root / "design" / "references" / "sample" / source.name
+    assert result["source"] == str(archived)
+    archived.write_bytes(b"existing project resource")
+    previews = list((root / ".smartui" / "cache" / "references").iterdir())
+    with pytest.raises(ValueError, match="参考归档目标已存在，不能覆盖"):
+        register_reference(str(root), "sample", str(source), paths=paths)
+    assert archived.read_bytes() == b"existing project resource"
+    assert list((root / ".smartui" / "cache" / "references").iterdir()) == previews
+
+
 def test_samples_use_source_pixels_instead_of_downscaled_preview(tmp_path):
     source = tmp_path / "source.png"
     with Image.new("RGB", (2600, 2), "blue") as image:

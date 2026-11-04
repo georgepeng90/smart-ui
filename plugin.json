@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "smartui-krita",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "分析参考、绘制可编辑组件，并通过参考对照与多产物检查复查视觉效果。",
   "extensions": {
     "com.openai": {

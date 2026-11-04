@@ -58,9 +58,9 @@ class MissingBrushBridge:
 
 
 @pytest.fixture
-def project(tmp_path):
+def project(tmp_path, request):
     store = ProjectStore()
-    context = store.create(str(tmp_path / "project"), "demo", "通用绘制项目")
+    context = store.create(str(tmp_path / "project"), "demo", "通用绘制项目", paths=getattr(request, "param", None))
     context = store.save_program(context["project_root"], context["revision"], "drawing",
                                  "组件绘制程序", "由项目定义图层与笔触", PROGRAM)
     context = store.update_style(context["project_root"], context["revision"], "项目参数", [],
@@ -72,8 +72,8 @@ def project(tmp_path):
 
 def record_source(store, context):
     root = Path(context["project_root"])
-    document = root / "assets" / "sample.kra"
-    document.parent.mkdir()
+    document = root / context["data"]["paths"]["sources"] / "sample.kra"
+    document.parent.mkdir(parents=True, exist_ok=True)
     document.write_bytes(b"recorded source artifact")
     spec = context["data"]["components"]["sample"]["spec"]
     program = store.get_program(str(root), spec["program_id"])
@@ -120,7 +120,7 @@ def test_plan_component_executes_project_program_without_creating_assets(project
     assert result["program_version"] == program["version"]
     assert result["program_sha256"] == program["sha256"]
     assert [node["key"] for node in result["plan"]["nodes"]] == ["assembly", "ink", "detail", "clip"]
-    assert not (Path(context["project_root"]) / "assets").exists()
+    assert not (Path(context["project_root"]) / context["data"]["paths"]["sources"] / "sample.kra").exists()
     assert store.context(context["project_root"]) == context
 
 
@@ -132,14 +132,14 @@ def test_bad_program_or_plan_refuses_before_any_krita_call(project, source, reas
     store, context = project
     context = store.save_program(context["project_root"], context["revision"], "drawing", "待检程序", "", source)
     assert_preflight_rejected(store, context, reason)
-    assert not (Path(context["project_root"]) / "assets").exists()
+    assert not (Path(context["project_root"]) / context["data"]["paths"]["sources"] / "sample.kra").exists()
 
 
 def test_missing_execution_parameters_refuses_before_any_krita_call(project):
     store, context = project
     context = store.update_style(context["project_root"], context["revision"], "缺少项目所需参数", [], {}, [])
     assert_preflight_rejected(store, context, "brush")
-    assert not (Path(context["project_root"]) / "assets").exists()
+    assert not (Path(context["project_root"]) / context["data"]["paths"]["sources"] / "sample.kra").exists()
 
 
 def test_tampered_project_program_refuses_before_any_krita_call(project):
@@ -151,7 +151,7 @@ def test_tampered_project_program_refuses_before_any_krita_call(project):
     with pytest.raises(ProjectError, match="程序源码已被手动修改"):
         draw_component(context["project_root"], context["revision"], "sample", client=bridge, store=store)
     assert bridge.calls == []
-    assert not (Path(context["project_root"]) / "assets").exists()
+    assert not (Path(context["project_root"]) / context["data"]["paths"]["sources"] / "sample.kra").exists()
 
 
 def test_missing_installed_brush_records_failed_attempt_without_drawing(project):
@@ -180,9 +180,37 @@ def test_missing_installed_brush_records_failed_attempt_without_drawing(project)
     plan = json.loads(Path(failed["plan_path"]).read_text(encoding="utf-8"))
     assert plan["width"] == 96
     assert failed["program_sha256"] == context["data"]["programs"]["drawing"]["sha256"]
-    document = (Path(context["project_root"]) / "components.md").read_text(encoding="utf-8")
+    document = (Path(context["project_root"]) / context["data"]["paths"]["documents"] / "components.md").read_text(encoding="utf-8")
     assert "最近尝试失败，需要重新检查" in document
     assert failed["error"] in document
+
+
+@pytest.mark.parametrize("project", [{"sources": "design/editable"}], indirect=True)
+def test_drawing_uses_configured_source_directory(project):
+    store, context = project
+    with pytest.raises(RuntimeError, match="Krita 未安装指定笔刷"):
+        draw_component(context["project_root"], context["revision"], "sample", client=MissingBrushBridge(), store=store)
+    root = Path(context["project_root"])
+    failed = store.context(str(root))["data"]["components"]["sample"]["runs"][-1]
+    assert Path(failed["document"]) == root / "design" / "editable" / "sample.kra"
+    assert (root / "design" / "editable").is_dir()
+    assert not (root / "art/ui/sources").exists()
+
+
+def test_partial_drawing_resolves_recorded_files_after_project_directory_move(project):
+    store, context = project
+    context = record_source(store, context)
+    original_root = Path(context["project_root"])
+    moved_root = original_root.with_name("moved-project")
+    original_root.rename(moved_root)
+    moved = store.context(str(moved_root))
+    bridge = MissingBrushBridge()
+    with pytest.raises(RuntimeError, match="Krita 未安装指定笔刷"):
+        draw_component(str(moved_root), moved["revision"], "sample", ["ink"], client=bridge, store=store)
+    assert bridge.calls == [("status", {}), ("brushes", {"query": "project brush"})]
+    latest = moved["data"]["components"]["sample"]["latest_run"]
+    assert Path(latest["document"]).is_relative_to(moved_root)
+    assert Path(latest["plan_path"]).is_relative_to(moved_root)
 
 
 @pytest.mark.parametrize("layers", [None, ["ink"]])

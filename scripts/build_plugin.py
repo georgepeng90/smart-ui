@@ -17,7 +17,7 @@ def main():
     files = ["plugin.json", "mcp.json", "pyproject.toml", "uv.lock", "README.md",
              "docs/bridge-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
              "docs/toolchain-roadmap.md", "docs/style-reproduction-validation.md",
-             "scripts/install_krita.py", "krita_plugin/smartui_bridge.desktop",
+             "scripts/install_krita.py", "scripts/migrate_project_layout.py", "krita_plugin/smartui_bridge.desktop",
              "examples/drawing-programs/semantic_palette.py"]
     for directory in ("smartui_mcp", "krita_plugin/smartui_bridge"):
         files += [str(p.relative_to(root)) for p in (root / directory).rglob("*.py")]

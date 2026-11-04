@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
+from .layout import DEFAULT_PATHS, ProjectLayout, map_state_paths
+
 
 class ProjectError(RuntimeError):
     """项目内容、版本或磁盘状态不符合约定。"""
@@ -40,22 +42,29 @@ def _text(value, field):
 
 
 class ProjectStore:
-    def create(self, project_root: str, project_id: str, name: str) -> dict:
+    def create(self, project_root: str, project_id: str, name: str, paths: dict | None = None) -> dict:
         root = self._root(project_root)
         _identifier(project_id, "project_id")
         _text(name, "name")
+        try:
+            layout = ProjectLayout(root, paths)
+            for key in layout.paths:
+                layout.directory(key)
+        except ValueError as error:
+            raise ProjectError(str(error)) from error
         root.mkdir(parents=True, exist_ok=True)
         with self._lock(root):
-            for filename in ("project.json", "style.md", "components.md"):
-                if (root / filename).exists():
-                    raise ProjectError(f"创建项目不能覆盖已有文件：{root / filename}")
+            for path in (layout.project_file, *layout.documents.values()):
+                if path.exists():
+                    raise ProjectError(f"创建项目不能覆盖已有文件：{path}")
             state = {
-                "schema_version": 2, "project_id": project_id, "name": name,
+                "schema_version": 3, "project_id": project_id, "name": name, "paths": layout.paths,
                 "references": {}, "programs": {},
                 "style": {"version": 0, "description": "", "rules": [], "parameters": {},
                           "reference_ids": [], "user_confirmation": None},
                 "components": {}, "comparisons": {}, "feedback": {}, "visual_checks": {},
             }
+            layout.ensure_gitignore()
             return self._write(root, state)
 
     def context(self, project_root: str) -> dict:
@@ -98,11 +107,11 @@ class ProjectStore:
                 current.update(name=name, description=description)
             else:
                 version = current["version"] + 1 if current else 1
-                relative = f"programs/{program_id}/{version}.py"
-                path = self._program_path(root, relative)
+                relative = f"{state['paths']['programs']}/{program_id}/{version}.py"
+                path = self._program_path(root, relative, state["paths"])
                 try:
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path = self._program_path(root, relative)
+                    path = self._program_path(root, relative, state["paths"])
                     with path.open("xb") as stream:
                         stream.write(payload)
                         stream.flush()
@@ -126,7 +135,7 @@ class ProjectStore:
                 raise ProjectError(f"程序不存在：{program_id}")
             program = deepcopy(state["programs"][program_id])
             try:
-                payload = self._program_path(root, program["source_path"]).read_bytes()
+                payload = self._program_path(root, program["source_path"], state["paths"]).read_bytes()
                 if _sha(payload) != program["sha256"]:
                     raise ProjectError(f"程序源码已被手动修改，摘要不一致：{program['source_path']}")
                 program["source"] = payload.decode("utf-8")
@@ -429,12 +438,14 @@ class ProjectStore:
     @staticmethod
     @contextmanager
     def _lock(root):
-        path = root / ".smartui-project.lock"
+        path = root / ".smartui/project.lock"
         try:
+            ProjectLayout(root)._check_managed_path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
             stream = path.open("x", encoding="utf-8")
         except FileExistsError as error:
             raise ProjectError(f"项目正在被其他操作使用；如进程已退出，请检查并移除锁文件：{path}") from error
-        except OSError as error:
+        except (OSError, ValueError) as error:
             raise ProjectError(f"无法获取项目锁：{path}；{error}") from error
         try:
             with stream:
@@ -445,17 +456,22 @@ class ProjectStore:
             path.unlink()
 
     def _read(self, root):
-        path = root / "project.json"
+        path = ProjectLayout(root).project_file
         try:
             payload = path.read_bytes()
             def reject_constant(value):
                 raise ValueError(f"非法 JSON 数值：{value}")
             state = json.loads(payload, parse_constant=reject_constant)
-            if not isinstance(state, dict) or state.get("schema_version") != 2:
-                raise ProjectError(f"不支持的项目结构：{path}")
-            for field in ("project_id", "name", "references", "style", "components", "programs"):
+            if not isinstance(state, dict) or state.get("schema_version") != 3:
+                raise ProjectError(f"不支持的项目结构，请先显式迁移旧项目：{path}")
+            for field in ("project_id", "name", "references", "style", "components", "programs", "paths"):
                 if field not in state:
                     raise ProjectError(f"项目缺少 {field}：{path}")
+            if not isinstance(state["paths"], dict) or set(state["paths"]) != set(DEFAULT_PATHS):
+                raise ProjectError(f"项目 paths 必须完整声明 documents、references、programs、sources：{path}")
+            layout = ProjectLayout(root, state["paths"])
+            for key in layout.paths:
+                layout.directory(key)
             for field in ("comparisons", "feedback", "visual_checks"):
                 if field in state and not isinstance(state[field], dict):
                     raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
@@ -463,15 +479,15 @@ class ProjectStore:
             if not isinstance(hashes, dict) or set(hashes) != {"style.md", "components.md"}:
                 raise ProjectError(f"项目缺少受管文档摘要：{path}")
             for filename, expected in hashes.items():
-                document = root / filename
+                document = layout.documents[filename]
                 if _sha(document.read_bytes()) != expected:
                     raise ProjectError(f"受管文档已被手动修改，请先处理差异：{document}")
             self._references(state, state["style"]["reference_ids"], "style.reference_ids")
             self._rule_references(state, state["style"]["rules"])
-            self._validate_programs(root, state["programs"])
+            self._validate_programs(root, state["programs"], state["paths"])
             for component in state["components"].values():
                 self._component_program(state, component["spec"])
-            return state, _sha(payload)
+            return map_state_paths(state, layout.resolve), _sha(payload)
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise ProjectError(f"无法读取项目状态或受管文档：{root}；{error}") from error
 
@@ -489,22 +505,19 @@ class ProjectStore:
             raise ProjectError(f"项目 revision 冲突，请重新读取上下文：{root}")
 
     @staticmethod
-    def _program_path(root, relative):
-        path = Path(relative)
-        if path.is_absolute() or not path.parts or path.parts[0] != "programs" or ".." in path.parts:
-            raise ProjectError(f"程序源码路径必须位于项目 programs 目录：{relative}")
-        resolved = (root / path).resolve()
-        if not resolved.is_relative_to(root / "programs"):
-            raise ProjectError(f"程序源码路径越出项目 programs 目录：{relative}")
-        # 版本路径不得通过链接指向另一个位置，即使链接目标仍在项目目录内。
-        for parent in (root / path, *(root / path).parents):
-            if parent == root:
-                break
-            if parent.is_symlink() or (hasattr(parent, "is_junction") and parent.is_junction()):
-                raise ProjectError(f"程序源码路径不能包含符号链接或目录联接：{parent}")
-        return resolved
+    def _program_path(root, relative, paths):
+        try:
+            layout = ProjectLayout(root, paths)
+            path = Path(relative)
+            directory = layout.directory("programs")
+            if path.is_absolute() or ".." in path.parts or not (root / path).is_relative_to(directory):
+                raise ProjectError(f"程序源码路径必须位于项目 programs 目录：{relative}")
+            layout._check_managed_path(root / path)
+            return (root / path).resolve()
+        except ValueError as error:
+            raise ProjectError(str(error)) from error
 
-    def _validate_programs(self, root, programs):
+    def _validate_programs(self, root, programs, paths):
         if not isinstance(programs, dict):
             raise ProjectError("programs 必须是 JSON 对象")
         for program_id, program in programs.items():
@@ -519,13 +532,13 @@ class ProjectStore:
             if type(version) is not int or version < 1 or not isinstance(history, list) or len(history) != version:
                 raise ProjectError(f"程序版本或历史无效：{program_id}")
             for index, item in enumerate(history, 1):
-                expected_path = f"programs/{program_id}/{index}.py"
+                expected_path = f"{paths['programs']}/{program_id}/{index}.py"
                 if (not isinstance(item, dict) or type(item.get("version")) is not int or
                         item["version"] != index or item.get("source_path") != expected_path):
                     raise ProjectError(f"程序历史路径或版本无效：{program_id} 第 {index} 版")
                 if not isinstance(item.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]):
                     raise ProjectError(f"程序源码摘要无效：{expected_path}")
-                path = self._program_path(root, expected_path)
+                path = self._program_path(root, expected_path, paths)
                 if _sha(path.read_bytes()) != item["sha256"]:
                     raise ProjectError(f"程序源码已被手动修改，摘要不一致：{path}")
             if any(program.get(field) != history[-1][field] for field in ("version", "sha256", "source_path")):
@@ -596,6 +609,13 @@ class ProjectStore:
             feedback["applies_to_current_run"] = data["comparisons"][reviewed]["is_current"]
         return {"project_root": str(root), "revision": revision, "data": data}
 
+    def _render_for_root(self, root, state):
+        layout = ProjectLayout(root, state["paths"])
+        display = map_state_paths(state, layout.document_link)
+        for program in display["programs"].values():
+            program["source_path"] = layout.document_link(program["source_path"])
+        return self._render(display)
+
     def _render(self, state):
         style = state["style"]
         style_lines = [f"# {state['name']}：项目风格规范", "", f"风格版本：{style['version']}", "",
@@ -622,7 +642,7 @@ class ProjectStore:
             style_lines.append("| " + " | ".join(self._cell(value) for value in (
                 reference_id, filename, size, self._link("查看源文件", source) if source else "未登记")) + " |")
         style_lines.extend(["", "当前风格引用：" + (", ".join(style["reference_ids"]) or "尚未选择参考资料"), "",
-                            "完整结构化记录保存在 project.json；本文档由工具生成。", ""])
+                            "完整结构化记录保存在工程根目录的 .smartui/project.json；本文档由工具生成。", ""])
         component_lines = [f"# {state['name']}：组件规格与绘制记录", "",
                            "用户确认：所有生成组件均尚未确认。", "", "## 绘制程序", "",
                            "| 程序标识 | 名称 | 当前版本 | 源码路径 | SHA-256 摘要 |",
@@ -746,7 +766,7 @@ class ProjectStore:
                         f"{run['style_version']} / {run['program_id']} v{run['program_version']}",
                         item["region_source_xywh"], item["scale"], "是" if item["is_current"] else "否")) + " |")
                 component_lines.append("")
-        component_lines.extend(["完整规格、产物摘要和检查数据保存在 project.json；本文档由工具生成。", ""])
+        component_lines.extend(["完整规格、产物摘要和检查数据保存在工程根目录的 .smartui/project.json；本文档由工具生成。", ""])
         return {"style.md": "\n".join(style_lines).encode("utf-8"),
                 "components.md": "\n".join(component_lines).encode("utf-8")}
 
@@ -771,23 +791,28 @@ class ProjectStore:
 
     def _write(self, root, state):
         try:
-            documents = self._render(state)
+            layout = ProjectLayout(root, state["paths"])
+            documents = self._render_for_root(root, state)
             state["document_hashes"] = {filename: _sha(payload) for filename, payload in documents.items()}
-            payload = (_json(state) + "\n").encode("utf-8")
+            stored = map_state_paths(state, layout.relative)
+            payload = (_json(stored) + "\n").encode("utf-8")
         except (ValueError, TypeError) as error:
             raise ProjectError(f"项目包含无法写入的 JSON 数据：{error}") from error
-        # 先生成完整临时文件；最后替换 project.json，作为本次多文件写入的提交记录。
+        # 先生成完整临时文件；最后替换项目状态，作为本次多文件写入的提交记录。
         pending = []
         try:
-            for filename, content in {**documents, "project.json": payload}.items():
-                temporary = root / f".{filename}.{uuid4().hex}.tmp"
+            files = [(layout.documents[name], content) for name, content in documents.items()]
+            files.append((layout.project_file, payload))
+            for destination, content in files:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
                 with temporary.open("xb") as stream:
                     stream.write(content)
                     stream.flush()
                     os.fsync(stream.fileno())
-                pending.append((temporary, root / filename))
+                pending.append((temporary, destination))
             for temporary, destination in pending:
                 os.replace(temporary, destination)
         except OSError as error:
             raise ProjectError(f"项目写入失败，请检查磁盘及项目文件；未自动覆盖或修复：{root}；{error}") from error
-        return self._context(root, state, _sha(payload))
+        return self._context(root, map_state_paths(stored, layout.resolve), _sha(payload))

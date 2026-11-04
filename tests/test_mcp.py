@@ -229,13 +229,22 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                         return json.loads(result.content[0].text)
 
                     project = await call("project_create", project_root=str(project_root),
-                                         project_id="demo", name="色块按钮项目")
+                                         project_id="demo", name="色块按钮项目", paths={"references": "docs/ui/source-images"})
+                    self.assertEqual(project["paths"], {
+                        "documents": "docs/ui", "references": "docs/ui/source-images",
+                        "programs": "art/ui/programs", "sources": "art/ui/sources",
+                    })
                     first_revision = project["revision"]
                     for filename in ("style.md", "components.md"):
-                        self.assertTrue((project_root / filename).is_file())
+                        self.assertTrue((project_root / "docs" / "ui" / filename).is_file())
                     project = await call("project_add_reference", project_root=str(project_root),
                                          expected_revision=project["revision"], reference_id="colors", source_path=str(source))
                     self.assertEqual(project["references"]["colors"]["sha256"], hashlib.sha256(original).hexdigest())
+                    archived = project_root / "docs" / "ui" / "source-images" / "colors" / source.name
+                    self.assertEqual(Path(project["references"]["colors"]["source"]), archived)
+                    self.assertEqual(archived.read_bytes(), original)
+                    saved = json.loads((project_root / ".smartui" / "project.json").read_text(encoding="utf-8"))
+                    self.assertEqual(saved["references"]["colors"]["source"], "docs/ui/source-images/colors/参考色块.png")
                     inspection = await session.call_tool("project_inspect_reference", {
                         "project_root": str(project_root), "reference_id": "colors", "region": [2, 0, 2, 2],
                         "patches": [{"id": "left", "rect": [0, 0, 2, 2]}, {"id": "right", "rect": [2, 0, 2, 2]}],
@@ -266,7 +275,7 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(context["components"]["primary"]["attempts"], 0)
                     self.assertIsNone(context["style"]["user_confirmation"])
                     before_failure = {name: (project_root / name).read_bytes()
-                                      for name in ("project.json", "style.md", "components.md")}
+                                      for name in (".smartui/project.json", "docs/ui/style.md", "docs/ui/components.md")}
                     failure = await session.call_tool("project_update_style", {
                         "project_root": str(project_root), "expected_revision": first_revision,
                         "description": "过时写入", "rules": [], "parameters": {}, "reference_ids": [],
@@ -275,8 +284,8 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("revision", failure.content[0].text)
                     for name, content in before_failure.items():
                         self.assertEqual((project_root / name).read_bytes(), content)
-                    style_doc = (project_root / "style.md").read_text(encoding="utf-8")
-                    components_doc = (project_root / "components.md").read_text(encoding="utf-8")
+                    style_doc = (project_root / "docs" / "ui" / "style.md").read_text(encoding="utf-8")
+                    components_doc = (project_root / "docs" / "ui" / "components.md").read_text(encoding="utf-8")
                     self.assertIn("暖色亮面按钮，参数待测", style_doc)
                     self.assertIn("face-color", style_doc)
                     self.assertIn("参考色块.png", style_doc)

@@ -9,6 +9,8 @@ description: 查看项目视觉参考，区分可见特征与制作假设，归�
 
 ## 看图与记录依据
 
+`project_root` 是业务工程根目录的绝对路径。创建时可通过 `paths` 局部指定工程内相对目录，默认文档为 `docs/ui`、参考为 `docs/ui/references`、程序为 `art/ui/programs`、源文件为 `art/ui/sources`。工程外参考登记时会复制入参考目录。正常工具不读取旧布局；先用显式迁移脚本预览，再以 `--apply` 执行。保留 `.smartui` 状态和制作记录，仅忽略缓存。
+
 已有项目先 `project_context`，查看已有规则、组件规格和预览，避免重复建立矛盾规范。新项目先 `project_create`。用 `project_add_reference` 登记只读原图，用 `project_inspect_reference` 查看整图、关键区域和需要的色块。坐标相对完整参考，按预览测量时传 coordinate_size。
 
 必须实际查看返回图片后归纳。按参考中适用的维度分析用色与对比、轮廓比例、描边、明暗和高光阴影、材质纹理、内容关系及尺寸伸缩规则；无需给所有参考套相同栏目。图层数量、材质和程序结构服务于当前需求，不固定为按钮或七层模板。
@@ -27,7 +29,7 @@ description: 查看项目视觉参考，区分可见特征与制作假设，归�
 
 用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。参数按项目程序需要组织，不强加固定色板、圆角或高光字段。用 `project_define_component` 保存完整组件规格，其中 program_id 引用已保存的程序；定义规格不表示已经生成资产。
 
-每次写入用最新 revision，冲突时重新读取核对。style.md 和 components.md 由 MCP 根据 project.json 生成，不直接手改受管 Markdown 或摘要。
+每次写入用最新 revision，冲突时重新读取核对。默认的 `docs/ui/style.md` 和 `docs/ui/components.md` 由 MCP 根据 `.smartui/project.json` 生成，不直接手改受管 Markdown 或摘要。
 
 用 `project_create_visual_check` 并排查看指定成功运行的状态与配色，按实际显示尺寸换算等比倍率，指定纯色背景并按需查看灰度。根据序号对应的样片标签检查共用结构、辨识度和明暗层次。需要记录具体偏差时，继续为对应组件与参考建立对照。
 

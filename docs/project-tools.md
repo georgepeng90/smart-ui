@@ -1,14 +1,14 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.5.0 提供十六个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈和多产物视觉检查。具体画法属于项目程序。
+SmartUI Krita v0.6.0 提供十六个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈和多产物视觉检查。具体画法属于项目程序。
 
 ## 工具参数与调用顺序
 
-路径使用绝对路径。项目、参考、程序和组件 ID 以字母或数字开头，可包含字母、数字、点、下划线和连字符。
+`project_root` 使用业务工程根目录的绝对路径，参考输入的 `source_path` 也使用绝对路径。项目、参考、程序和组件 ID 以字母或数字开头，可包含字母、数字、点、下划线和连字符。
 
 | 工具 | 参数 | 作用 |
 | --- | --- | --- |
-| `project_create` | `project_root: str, project_id: str, name: str` | 创建项目及受管文档，拒绝覆盖 |
+| `project_create` | `project_root: str, project_id: str, name: str, paths: dict \| null = null` | 创建项目及受管文档，拒绝覆盖 |
 | `project_context` | `project_root: str` | 读取摘要和最新 revision |
 | `project_add_reference` | `project_root: str, expected_revision: str, reference_id: str, source_path: str` | 登记只读 PNG/JPEG/WebP 参考，生成预览 |
 | `project_inspect_reference` | `project_root: str, reference_id: str, region: list[int] \| null = null, patches: list[dict] \| null = null, coordinate_size: list[int] \| null = null` | 返回参考区域图片及原像素取样，不写项目 |
@@ -27,7 +27,24 @@ SmartUI Krita v0.5.0 提供十六个项目工具，与五个底层 `krita_*` 工
 
 新项目通常依次执行：创建 → 登记并查看参考 → 保存规则和参数 → 保存程序 → 定义组件 → 生成计划 → 绘制 → 查看预览。已有项目先读上下文和已有程序，避免覆盖项目已有制作逻辑。程序接口、可执行最小示例及计划校验规则见[绘制程序约定](drawing-programs.md)。
 
-每次状态写入返回新 `revision`；后续写入必须使用它。revision 是 `project.json` 原始字节的 SHA-256，与风格版本和程序版本无关。冲突后重新读取并核对差异，不自动覆盖。
+每次状态写入返回新 `revision`；后续写入必须使用它。revision 是 `.smartui/project.json` 原始字节的 SHA-256，与风格版本和程序版本无关。冲突后重新读取并核对差异，不自动覆盖。
+
+## 工程目录与持久化路径
+
+状态文件固定为 `<project_root>/.smartui/project.json`。`project_create.paths` 可局部覆盖下表，省略项使用默认值；状态中保存完整映射。配置只接受工程内相对目录，绝对路径、越出工程的路径和非法配置会直接报错。
+
+| 配置名 | 默认值 | 内容 |
+| --- | --- | --- |
+| `documents` | `docs/ui` | 自动生成的 `style.md`、`components.md` |
+| `references` | `docs/ui/references` | 登记并保存的参考原图 |
+| `programs` | `art/ui/programs` | `<program_id>/<version>.py` |
+| `sources` | `art/ui/sources` | `<component_id>.kra` |
+
+目录映射不改变 `project_root` 的含义。参考输入在工程外时，登记操作将其复制到 `<references>/<reference_id>/<原文件名>`，后续读取和摘要检查针对该副本。工程内输入可保留其原有位置。
+
+项目状态 JSON 中的工程内文件引用保存为工程相对 POSIX 路径，即用 `/` 分隔；明确的工程外路径可以使用绝对路径。运行时 API 返回可直接读取的绝对路径，程序元数据的 `source_path` 除外，它保持工程相对路径。生成文档的资源链接相对于 `documents` 目录，移动整个工程后仍可使用。历史 `operations.json`、`result.json` 等原始执行证据保留当时调用的路径和字节，继续制作使用项目状态中解析后的文件引用。
+
+创建项目时，工具在 `.smartui/.gitignore` 中写入缓存、锁、临时文件及 `migration-backups/` 的忽略规则，并保留已有规则。状态、运行、对照及视觉检查记录应保留，不要整体忽略 `.smartui/`。旧项目必须先显式迁移，正常读取不查找旧位置，也不自动升级 schema：`uv run --locked python scripts/migrate_project_layout.py --source-root <旧数据目录绝对路径> --project-root <业务工程绝对路径>` 默认只展示计划，增加 `--apply` 才执行迁移。迁移器先验证完整备份，再创建新布局并核对摘要；旧目录保持原样，确认新入口可用后再归档旧目录。
 
 ## 参考区域与规则依据
 
@@ -75,11 +92,12 @@ SmartUI Krita v0.5.0 提供十六个项目工具，与五个底层 `krita_*` 工
 
 ## 状态、版本与证据
 
-`project.json` 使用 schema 2，主要字段如下：
+`.smartui/project.json` 使用 schema 3，主要字段如下：
 
 | 字段 | 含义 |
 | --- | --- |
 | `schema_version/project_id/name` | 结构版本、项目标识和名称 |
+| `paths` | 文档、参考、程序与源文件的完整工程内相对目录映射 |
 | `references` | 只读参考路径、摘要、尺寸、色彩元数据和预览 |
 | `style` | version、description、rules、parameters、reference_ids、user_confirmation |
 | `programs` | 按 ID 保存程序元数据：id、name、description、version、sha256、source_path、history |
@@ -89,17 +107,17 @@ SmartUI Krita v0.5.0 提供十六个项目工具，与五个底层 `krita_*` 工
 | `feedback` | 可选，记录对照反馈、当前状态与复查历史 |
 | `document_hashes` | 自动生成 style.md 和 components.md 的摘要 |
 
-程序源码路径为项目相对路径 `programs/<id>/<version>.py`。读取时核对实际源码与记录摘要；源码变化通过工具保存为版本，不手改文件绕过记录。程序更新使依赖组件的 `needs_review` 为 true；历史 run 仍记实际程序版本与源码哈希，不把旧产物改成新版本。
+程序源码默认路径为工程相对路径 `art/ui/programs/<id>/<version>.py`。读取时核对实际源码与记录摘要；源码变化通过工具保存为版本，不手改文件绕过记录。程序更新使依赖组件的 `needs_review` 为 true；历史 run 仍记实际程序版本与源码哈希，不把旧产物改成新版本。
 
 规则或共用参数变化提升风格版本；只改风格说明或引用清单不升级。`needs_review` 是派生状态：缺少成功产物、当前规格/风格/程序与实际记录不同，或最近尝试失败，都需要重新检查。
 
-源文件为 `assets/<component_id>.kra`。每次运行在 `.smartui/runs/<run_id>/` 保存 `program.py`、`plan.json`、`style-snapshot.json`、`operations.json`、`result.json`，成功时另有 `preview.png` 与 `output.kra`；更新已有文件时保留 `input.kra`。运行记录包含实际风格版本、规格摘要、程序版本、源码哈希、节点 UUID、文件摘要及检查数据。
+源文件默认位于 `art/ui/sources/<component_id>.kra`。每次运行在 `.smartui/runs/<run_id>/` 保存 `program.py`、`plan.json`、`style-snapshot.json`、`operations.json`、`result.json`，成功时另有 `preview.png` 与 `output.kra`；更新已有文件时保留 `input.kra`。运行记录包含实际风格版本、规格摘要、程序版本、源码哈希、节点 UUID、文件摘要及检查数据。
 
 `drawn` 表示已绘制，`verified` 表示保存重开后的技术检查通过，`failed` 表示尝试失败。技术检查不证明视觉接近参考，也不代表用户确认；当前工具不代填 `user_confirmation`。
 
 预检错误直接报告。进入执行阶段后的失败追加实际错误并保留现场，不替换最近成功记录；历史成功不能证明失败后的磁盘文件有效。资产生成后若项目 revision 冲突，会报告记录未更新并给出结果路径，不自动重试。
 
-`project.json` 是唯一结构化数据源，受管 Markdown 只展示摘要。手改、缺失或多文件写入中断造成摘要不一致时明确报错。状态写入使用项目排他锁、同目录临时文件和原子替换，不静默修复或吞掉错误。
+`.smartui/project.json` 是唯一结构化数据源，受管 Markdown 只展示摘要。手改、缺失或多文件写入中断造成摘要不一致时明确报错。状态写入使用项目排他锁、同目录临时文件和原子替换，不静默修复或吞掉错误。
 
 ## 对照与偏差反馈
 
@@ -115,7 +133,7 @@ SmartUI Krita v0.5.0 提供十六个项目工具，与五个底层 `krita_*` 工
 
 原始观察与建议保留，后续更新追加历史。新绘制可能使既有复查不再适用于当前运行，反馈状态和历史仍然保留。`source` 可声明 `model` 或 `user`，工具不验证身份，也不据此写入用户风格确认。
 
-`project_context` 返回对照与反馈摘要，`components.md` 展示对应组件的对照和反馈。旧 schema 2 项目缺少可选字段时表示尚无记录。用以下字段区分历史结论与当前绘制结果。
+`project_context` 返回对照与反馈摘要，`components.md` 展示对应组件的对照和反馈。schema 3 的可选字段缺失时表示尚无记录。用以下字段区分历史结论与当前绘制结果。
 
 - 对照的 `is_current` 表示对照是否对应当前项目版本与最新运行。它根据项目记录计算，磁盘文件校验在相关操作中执行。
 - 反馈的 `reviewed_comparison_id` 标识当前反馈状态所依据的对照，`applies_to_current_run` 表示它是否适用于当前运行。

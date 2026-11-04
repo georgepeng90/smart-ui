@@ -56,7 +56,7 @@ def test_saved_visual_check_keeps_historical_run_and_original_pixels(project):
         assert crop.size == (3, 2)
         assert crop.getpixel((0, 0)) == (150, 20, 20, 255)
 
-    document = (Path(root) / "components.md").read_text(encoding="utf-8")
+    document = (Path(root) / "docs" / "ui" / "components.md").read_text(encoding="utf-8")
     for value in (first["id"], mixed["id"], "正常状态", "修改前", "修改后", "overview.png"):
         assert value in document
     stored = store.context(root)["data"]
@@ -89,13 +89,13 @@ def test_visual_check_rejects_stale_revision_and_ineligible_runs_without_writing
     latest = store.record_run(str(root), context["revision"], "sample", {
         "run_id": "failed", "status": "failed", "error": "合成记录用于验证失败状态",
     })
-    before = (root / "project.json").read_bytes()
+    before = (root / ".smartui" / "project.json").read_bytes()
     with pytest.raises(ProjectError, match="revision"):
         _create(store, context, _item())
     for run_id in ("missing", "failed"):
         with pytest.raises(ProjectError, match="成功产物"):
             _create(store, latest, _item(run_id))
-    assert (root / "project.json").read_bytes() == before
+    assert (root / ".smartui" / "project.json").read_bytes() == before
     assert not list((root / ".smartui" / "visual-checks").glob("*"))
 
 
@@ -108,11 +108,11 @@ def test_visual_check_rejects_changed_run_evidence(project, field, exception, me
     store, context = project
     root = Path(context["project_root"])
     run = context["data"]["components"]["sample"]["latest_run"]
-    before = (root / "project.json").read_bytes()
+    before = (root / ".smartui" / "project.json").read_bytes()
     Path(run[field]).write_bytes(b"changed run artifact")
     with pytest.raises(exception, match=message):
         _create(store, context, _item())
-    assert (root / "project.json").read_bytes() == before
+    assert (root / ".smartui" / "project.json").read_bytes() == before
     assert not list((root / ".smartui" / "visual-checks").glob("*"))
 
 

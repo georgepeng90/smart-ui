@@ -22,7 +22,8 @@ __pycache__/
 /.research/
 /.serena/
 **/.smartui/cache/
-.smartui-project.lock
+**/.smartui/project.lock
+**/.smartui/migration-backups/
 
 # Krita 自动备份
 *.kra~

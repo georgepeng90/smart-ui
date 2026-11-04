@@ -5,10 +5,13 @@ import hashlib
 import math
 from pathlib import Path
 import re
+import shutil
 from threading import Lock
 from uuid import uuid4
 
 from PIL import Image
+
+from .layout import ProjectLayout
 
 
 MAX_REFERENCE_PIXELS = 650_000_000
@@ -69,18 +72,25 @@ def _preview(project_root: Path, image: Image.Image, filename: str) -> str:
     return str(path)
 
 
-def register_reference(project_root: str, reference_id: str, source_path: str) -> dict:
-    """登记绝对路径的参考图；预览写入项目缓存，源文件始终只读。"""
+def register_reference(project_root: str, reference_id: str, source_path: str, *, paths: dict | None = None) -> dict:
+    """登记参考图，工程外原图按原始字节归档；原输入保持只读，预览写入项目缓存。"""
     root = _absolute_path(project_root, "project_root")
     if not root.is_dir():
         raise ValueError(f"project_root 必须是目录：{root}")
     identifier = _reference_id(reference_id)
     source = _absolute_path(source_path, "source_path")
+    layout = ProjectLayout(root, paths)
+    archived = source
+    if not source.is_relative_to(root):
+        archived = layout.directory("references") / identifier / source.name
+        layout._check_managed_path(archived)
+        if archived.exists():
+            raise ValueError("参考归档目标已存在，不能覆盖：" + str(archived))
     digest = _sha256(source)
     with _open_image(source) as image:
         result = {
             "id": identifier,
-            "source": str(source),
+            "source": str(archived),
             "sha256": digest,
             "width": image.width,
             "height": image.height,
@@ -92,6 +102,12 @@ def register_reference(project_root: str, reference_id: str, source_path: str) -
             },
         }
         result["preview"] = _preview(root, image, f"{identifier}-{digest[:12]}-{uuid4().hex}.png")
+    if archived != source:
+        archived.parent.mkdir(parents=True, exist_ok=True)
+        with source.open("rb") as original, archived.open("xb") as destination:
+            shutil.copyfileobj(original, destination)
+        if _sha256(archived) != digest:
+            raise ValueError("参考原图在归档过程中发生变化，请检查原图与归档文件：" + str(archived))
     return result
 
 

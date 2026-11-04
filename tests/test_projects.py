@@ -55,21 +55,22 @@ def record(store, project, run):
 def test_create_writes_readable_documents_and_content_revision(store, project):
     from pathlib import Path
     root = Path(project["project_root"])
-    payload = (root / "project.json").read_bytes()
+    payload = (root / ".smartui/project.json").read_bytes()
     assert project["revision"] == hashlib.sha256(payload).hexdigest()
     assert "中文项目" in payload.decode()
     assert project["data"]["style"]["version"] == 0
     assert project["data"]["style"]["user_confirmation"] is None
-    assert project["data"]["schema_version"] == 2
+    assert project["data"]["schema_version"] == 3
     assert project["data"]["programs"] == {}
     for filename in ("style.md", "components.md"):
-        assert "尚未确认" in (root / filename).read_text(encoding="utf-8")
-        assert project["data"]["document_hashes"][filename] == hashlib.sha256((root / filename).read_bytes()).hexdigest()
+        assert "尚未确认" in (root / "docs/ui" / filename).read_text(encoding="utf-8")
+        assert project["data"]["document_hashes"][filename] == hashlib.sha256((root / "docs/ui" / filename).read_bytes()).hexdigest()
     assert store.context(str(root)) == project
 
 
-@pytest.mark.parametrize("existing", ["project.json", "style.md", "components.md"])
+@pytest.mark.parametrize("existing", [".smartui/project.json", "docs/ui/style.md", "docs/ui/components.md"])
 def test_create_refuses_existing_managed_files(store, tmp_path, existing):
+    (tmp_path / existing).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / existing).write_text("用户原稿", encoding="utf-8")
     with pytest.raises(ProjectError, match="不能覆盖"):
         store.create(str(tmp_path), "demo", "项目")
@@ -87,14 +88,14 @@ def test_stale_revision_cannot_overwrite_new_component(store, project):
 def test_manual_document_edits_are_detected_before_read_or_write(store, project, filename):
     from pathlib import Path
     root = Path(project["project_root"])
-    before = (root / "project.json").read_bytes()
-    (root / filename).write_text("手工更新，必须保留", encoding="utf-8")
+    before = (root / ".smartui/project.json").read_bytes()
+    (root / "docs/ui" / filename).write_text("手工更新，必须保留", encoding="utf-8")
     with pytest.raises(ProjectError, match="手动修改"):
         store.context(str(root))
     with pytest.raises(ProjectError, match="手动修改"):
         define(store, project)
-    assert (root / "project.json").read_bytes() == before
-    assert (root / filename).read_text(encoding="utf-8") == "手工更新，必须保留"
+    assert (root / ".smartui/project.json").read_bytes() == before
+    assert (root / "docs/ui" / filename).read_text(encoding="utf-8") == "手工更新，必须保留"
 
 
 def test_projects_are_isolated(store, project, tmp_path):
@@ -117,7 +118,7 @@ def test_style_changes_preserve_old_run_and_mark_component_for_review(store, pro
     assert component["runs"] == [original]
     assert component["latest_run"]["style_version"] == 0
     from pathlib import Path
-    assert "需要重新检查：是" in (Path(project["project_root"]) / "components.md").read_text(encoding="utf-8")
+    assert "需要重新检查：是" in (Path(project["project_root"]) / "docs/ui/components.md").read_text(encoding="utf-8")
 
 
 def test_description_only_does_not_bump_style_version(store, project):
@@ -145,7 +146,7 @@ def test_failed_run_keeps_last_success_but_requires_review(store, project, tmp_p
     assert component["runs"][-1]["error"] == "Krita 绘制失败"
     assert component["needs_review"]
     from pathlib import Path
-    document = (Path(project["project_root"]) / "components.md").read_text(encoding="utf-8")
+    document = (Path(project["project_root"]) / "docs/ui/components.md").read_text(encoding="utf-8")
     assert "最近尝试失败，需要重新检查" in document
     assert "不能据此确认当前磁盘文件仍然有效" in document
     assert "Krita 绘制失败" in document
@@ -199,7 +200,7 @@ def test_reference_ids_and_rule_evidence_must_exist(store, project):
 
 def test_lock_conflict_is_explicit_and_does_not_remove_other_lock(store, project):
     from pathlib import Path
-    lock = Path(project["project_root"]) / ".smartui-project.lock"
+    lock = Path(project["project_root"]) / ".smartui/project.lock"
     lock.write_text("other-process")
     with pytest.raises(ProjectError, match="项目正在被其他操作使用"):
         store.context(project["project_root"])
@@ -229,7 +230,7 @@ def test_interrupted_multi_file_write_is_detected_and_not_silently_repaired(stor
 def test_json_source_has_no_derived_review_state(store, project):
     from pathlib import Path
     project = define(store, project)
-    state = json.loads((Path(project["project_root"]) / "project.json").read_text(encoding="utf-8"))
+    state = json.loads((Path(project["project_root"]) / ".smartui/project.json").read_text(encoding="utf-8"))
     assert "needs_review" not in state["components"]["primary-button"]
     assert project["data"]["components"]["primary-button"]["needs_review"]
 
@@ -247,8 +248,8 @@ def test_markdown_summarizes_rules_references_layers_and_history(store, project,
     run["inspection"]["before"]["large_debug_payload"] = "不应复制到文档的完整检查对象"
     project = record(store, project, run)
     root = Path(project["project_root"])
-    style = (root / "style.md").read_text(encoding="utf-8")
-    components = (root / "components.md").read_text(encoding="utf-8")
+    style = (root / "docs/ui/style.md").read_text(encoding="utf-8")
+    components = (root / "docs/ui/components.md").read_text(encoding="utf-8")
     assert "round-corners：按钮使用圆角" in style
     assert "参考标识：sample" in style
     assert "说明：参考图中按钮四角一致" in style
@@ -257,7 +258,7 @@ def test_markdown_summarizes_rules_references_layers_and_history(store, project,
     assert "工具检查通过，等待用户确认" in components
     assert "目标风格版本：1" in components
     assert "实际产物风格版本：1" in components
-    assert "| button | 按钮程序 | 1 | [查看程序源码](<programs/button/1.py>) |" in components
+    assert "| button | 按钮程序 | 1 | [查看程序源码](<../../art/ui/programs/button/1.py>) |" in components
     assert "目标程序：按钮程序（button），版本 1" in components
     assert "实际产物程序版本：button，版本 1" in components
     assert "本次执行源码" in components
@@ -292,7 +293,7 @@ def test_program_source_is_saved_without_execution_and_history_is_immutable(stor
     assert first["source"] == source
     assert first["version"] == 1
     assert first["sha256"] == hashlib.sha256(source.encode()).hexdigest()
-    assert first["source_path"] == "programs/button/1.py"
+    assert first["source_path"] == "art/ui/programs/button/1.py"
     assert first["history"] == [{key: first[key] for key in ("version", "sha256", "source_path")}]
     renamed = save_program(store, project, source, "可维护的按钮程序", "补充使用说明")
     assert renamed["data"]["programs"]["button"]["version"] == 1
@@ -310,20 +311,20 @@ def test_invalid_program_source_does_not_change_project(store, project, source):
     with pytest.raises(ProjectError, match="source|语法无效"):
         save_program(store, project, source)
     assert store.context(project["project_root"]) == project
-    assert not (Path(project["project_root"]) / "programs").exists()
+    assert not (Path(project["project_root"]) / "art/ui/programs").exists()
 
 
 def test_stale_revision_cannot_write_program_file(store, project):
     current = save_program(store, project)
     with pytest.raises(ProjectError, match="revision 冲突"):
         save_program(store, project, "result = [1]\n")
-    assert not (Path(project["project_root"]) / "programs/button/2.py").exists()
+    assert not (Path(project["project_root"]) / "art/ui/programs/button/2.py").exists()
     assert store.context(project["project_root"]) == current
 
 
 def test_existing_orphan_program_version_is_not_overwritten(store, project):
     project = save_program(store, project)
-    orphan = Path(project["project_root"]) / "programs/button/2.py"
+    orphan = Path(project["project_root"]) / "art/ui/programs/button/2.py"
     orphan.write_text("保留未登记的源码证据", encoding="utf-8")
     with pytest.raises(ProjectError, match="已有版本不能覆盖"):
         save_program(store, project, "result = [2]\n")
@@ -334,9 +335,9 @@ def test_existing_orphan_program_version_is_not_overwritten(store, project):
 @pytest.mark.parametrize("access", ["context", "get_program", "save_program"])
 def test_program_tampering_is_reported_before_read_or_update(store, project, access):
     project = save_program(store, project)
-    path = Path(project["project_root"]) / "programs/button/1.py"
+    path = Path(project["project_root"]) / "art/ui/programs/button/1.py"
     path.write_text("result = ['手改']\n", encoding="utf-8")
-    before = (Path(project["project_root"]) / "project.json").read_bytes()
+    before = (Path(project["project_root"]) / ".smartui/project.json").read_bytes()
     with pytest.raises(ProjectError, match="手动修改.*摘要不一致"):
         if access == "context":
             store.context(project["project_root"])
@@ -344,12 +345,12 @@ def test_program_tampering_is_reported_before_read_or_update(store, project, acc
             store.get_program(project["project_root"], "button")
         else:
             save_program(store, project)
-    assert (Path(project["project_root"]) / "project.json").read_bytes() == before
+    assert (Path(project["project_root"]) / ".smartui/project.json").read_bytes() == before
 
 
 def test_program_metadata_cannot_redirect_source_outside_managed_directory(store, project, tmp_path):
     project = save_program(store, project)
-    path = Path(project["project_root"]) / "project.json"
+    path = Path(project["project_root"]) / ".smartui/project.json"
     state = json.loads(path.read_text(encoding="utf-8"))
     state["programs"]["button"]["source_path"] = str(tmp_path / "outside.py")
     state["programs"]["button"]["history"][0]["source_path"] = str(tmp_path / "outside.py")
@@ -360,7 +361,7 @@ def test_program_metadata_cannot_redirect_source_outside_managed_directory(store
 
 def test_program_directory_link_is_rejected(store, project, tmp_path):
     from unittest.mock import patch
-    linked = Path(project["project_root"]) / "programs"
+    linked = Path(project["project_root"]) / "art/ui/programs"
     real_is_symlink = Path.is_symlink
     with patch.object(Path, "is_symlink", lambda path: path == linked or real_is_symlink(path)):
         with pytest.raises(ProjectError, match="符号链接"):
@@ -370,7 +371,7 @@ def test_program_directory_link_is_rejected(store, project, tmp_path):
 
 @pytest.mark.parametrize("edit", [lambda state: state.update(schema_version=1), lambda state: state.pop("programs")])
 def test_schema_requires_explicit_program_collection(store, project, edit):
-    path = Path(project["project_root"]) / "project.json"
+    path = Path(project["project_root"]) / ".smartui/project.json"
     state = json.loads(path.read_text(encoding="utf-8"))
     edit(state)
     path.write_text(json.dumps(state), encoding="utf-8")
@@ -397,7 +398,7 @@ def test_program_update_preserves_success_and_requires_review(store, project, tm
     assert component["needs_review"]
     assert component["latest_run"] == latest
     assert latest["program_version"] == 1
-    document = (Path(project["project_root"]) / "components.md").read_text(encoding="utf-8")
+    document = (Path(project["project_root"]) / "docs/ui/components.md").read_text(encoding="utf-8")
     assert "目标程序：按钮程序（button），版本 2" in document
     assert "实际产物程序版本：button，版本 1" in document
 
@@ -428,7 +429,7 @@ def test_successful_run_snapshot_must_be_actual_program_source(store, project, t
 def test_old_success_without_program_identity_is_retained_and_requires_review(store, project, tmp_path):
     project = define(store, project)
     project = record(store, project, successful_run(project, tmp_path))
-    path = Path(project["project_root"]) / "project.json"
+    path = Path(project["project_root"]) / ".smartui/project.json"
     state = json.loads(path.read_text(encoding="utf-8"))
     component = state["components"]["primary-button"]
     for run in (component["latest_run"], component["runs"][0]):
@@ -441,4 +442,4 @@ def test_old_success_without_program_identity_is_retained_and_requires_review(st
     latest = project["data"]["components"]["primary-button"]["latest_run"]
     assert "program_id" not in latest
     assert "program_snapshot_path" not in latest
-    assert "历史记录未保存" in (Path(project["project_root"]) / "components.md").read_text(encoding="utf-8")
+    assert "历史记录未保存" in (Path(project["project_root"]) / "docs/ui/components.md").read_text(encoding="utf-8")

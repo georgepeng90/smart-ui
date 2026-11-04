@@ -51,7 +51,7 @@ def _project_summary(context):
                 | {"latest_update": value["history"][-1] if value["history"] else None}
                 for key, value in data.get("feedback", {}).items()}
     return {"project_root": context["project_root"], "revision": context["revision"],
-            "project_id": data["project_id"], "name": data["name"], "style": data["style"],
+            "project_id": data["project_id"], "name": data["name"], "paths": data["paths"], "style": data["style"],
             "references": data["references"], "programs": data["programs"], "components": components,
             "comparisons": comparisons, "visual_checks": visual_checks, "feedback": feedback}
 
@@ -145,9 +145,13 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
         return [json.dumps(result, ensure_ascii=False), Image(data=image_data, format="png")]
 
     @server.tool()
-    async def project_create(project_root: str, project_id: str, name: str) -> Any:
-        """创建本地项目及自动维护的 style.md、components.md；拒绝覆盖现有同名文档。"""
-        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name))
+    async def project_create(project_root: str, project_id: str, name: str, paths: dict[str, str] | None = None) -> Any:
+        """在业务工程绝对根目录创建 .smartui/project.json 及自动维护的风格、组件文档。
+
+        paths 可局部指定 documents、references、programs、sources，均为工程内相对目录；
+        默认分别为 docs/ui、docs/ui/references、art/ui/programs、art/ui/sources。拒绝覆盖现有受管文档。
+        """
+        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name, paths=paths))
 
     @server.tool()
     async def project_context(project_root: str) -> Any:
@@ -156,13 +160,17 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
 
     @server.tool()
     async def project_add_reference(project_root: str, expected_revision: str, reference_id: str, source_path: str) -> Any:
-        """登记只读 PNG/JPEG/WebP 参考，计算源文件哈希并生成预览；项目风格文档自动更新。"""
+        """登记 PNG/JPEG/WebP 参考，工程外原图归档到 references 目录，计算哈希并生成预览。
+
+        原输入保持只读；归档使用 reference_id/原文件名，不覆盖已有文件。项目风格文档自动更新。
+        """
         current = await asyncio.to_thread(projects.context, project_root)
         if current["revision"] != expected_revision:
             raise ProjectError("项目版本已变化，请重新读取 project_context")
         if reference_id in current["data"]["references"]:
             raise ProjectError("参考标识已存在：" + reference_id)
-        reference = await asyncio.to_thread(register_reference, project_root, reference_id, source_path)
+        reference = await asyncio.to_thread(register_reference, project_root, reference_id, source_path,
+                                             paths=current["data"]["paths"])
         return _project_summary(await asyncio.to_thread(projects.add_reference, project_root, expected_revision, reference))
 
     @server.tool(structured_output=False)
@@ -210,7 +218,8 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
 
         执行 spec.program_id 引用的项目 Python 程序。省略 layers 完整绘制，或提供计划节点 key 列表作局部修改。
         局部修改要求完整计划中的未选节点没有变化，实际执行后再次核对无关节点。
-        源文件位于项目 assets，参数快照和完整调用记录位于 .smartui/runs。Krita 必须已启动。
+        源文件位于配置的 sources 目录（默认 art/ui/sources），参数快照和完整调用记录位于 .smartui/runs。
+        Krita 必须已启动。
         工具通过代表技术检查通过，视觉效果及用户确认须另行查看。失败尝试会记录实际错误，不自动重试。
         """
         return await asyncio.to_thread(draw_component, project_root, expected_revision, component_id, layers,
