@@ -243,7 +243,7 @@ class DrawingEngine:
                 elif key in ("name", "blending_mode") and (not isinstance(value, str) or not value):
                     raise ValueError(key + " 必须为非空字符串")
                 if key == "blending_mode" and value not in ("normal", "multiply", "screen", "overlay"):
-                    raise ValueError("首版 blending_mode 支持 normal / multiply / screen / overlay")
+                    raise ValueError("blending_mode 支持 normal / multiply / screen / overlay")
                 if key == "alpha_locked" and node.type() != "paintlayer":
                     raise ValueError("alpha_locked 只适用于绘画图层")
             doc.setModified(True)

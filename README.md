@@ -41,7 +41,7 @@ codex plugin marketplace add (Get-Location).Path
 codex plugin add smartui-krita@smartui-local
 ```
 
-这里使用本机 CLI 的 `plugin add` 命令；没有 `plugin install` 子命令。也可按官方文档重启桌面端后，在插件目录选择“SmartUI 本地插件”来源并安装。不同宿主的本地插件入口可能不同。
+也可按官方文档重启桌面端后，在插件目录选择“SmartUI 本地插件”来源并安装。不同宿主的本地插件入口可能不同。
 
 修改插件代码后重新构建、重新安装，并在新聊天中验证工具是否出现。修改 Krita 内部扩展还需要在 Krita 关闭时重新执行安装器。构建脚本本身不会修改宿主配置。
 
@@ -96,7 +96,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 创建项目时，工具在 `.smartui/.gitignore` 中按子项忽略 `cache/` 和临时锁 `project.lock`。项目状态及 `.smartui/runs/`、`.smartui/comparisons/`、`.smartui/visual-checks/` 是需要保留的制作记录，不应整体忽略 `.smartui/`。受管文档的链接相对于文档目录生成。
 
-旧目录需要显式迁移，正常读取不会自动兼容旧布局。先运行 `uv run --locked python scripts/migrate_project_layout.py --source-root <旧数据目录绝对路径> --project-root <业务工程绝对路径>` 查看迁移计划，确认结果后使用相同参数加 `--apply` 执行。迁移的目标是业务工程根目录。
+需要导入已有数据目录时，使用[数据导入与目录迁移](docs/project-tools.md#数据导入与目录迁移)中的脚本，先预检，再显式执行。迁移的目标是业务工程根目录。
 
 ### 在新聊天中制作组件
 

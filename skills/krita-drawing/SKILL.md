@@ -5,15 +5,15 @@ description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编�
 
 # 在 Krita 中制作与修改项目组件
 
-项目程序定义具体画法，通用工具负责计划校验、Krita 执行和证据记录。工具参数见[项目工具说明](../../docs/project-tools.md)；编写或修改程序时读[绘制程序约定](../../docs/drawing-programs.md)。参考分析与规则提取使用相邻的 [reference-style Skill](../reference-style/SKILL.md)，不从历史示例推定新项目的画法。
+项目程序定义具体画法，通用工具负责计划校验、Krita 执行和证据记录。工具参数见[项目工具说明](../../docs/project-tools.md)；编写或修改程序时读[绘制程序约定](../../docs/drawing-programs.md)。参考分析与规则提取使用相邻的 [reference-style Skill](../reference-style/SKILL.md)，按当前项目的参考和需求确定画法。
 
 ## 项目制作
 
-`project_root` 是业务工程根目录的绝对路径。创建时可通过 `paths` 局部指定工程内相对目录，默认文档为 `docs/ui`、参考为 `docs/ui/references`、程序为 `art/ui/programs`、源文件为 `art/ui/sources`。工程外参考登记时会复制入参考目录。正常工具不读取旧布局；先用显式迁移脚本预览，再以 `--apply` 执行。保留 `.smartui` 状态和制作记录，仅忽略缓存。
+`project_root` 是业务工程根目录的绝对路径。创建时可通过 `paths` 局部指定工程内相对目录，默认文档为 `docs/ui`、参考为 `docs/ui/references`、程序为 `art/ui/programs`、源文件为 `art/ui/sources`。工程外参考登记时会复制入参考目录。状态中的工程内文件引用保存为工程相对 POSIX 路径。保留 `.smartui` 状态和制作记录，缓存、锁及临时文件按生成的忽略规则处理。需要导入数据目录时，按[数据导入与目录迁移](../../docs/project-tools.md#数据导入与目录迁移)先预检，再显式执行。
 
-已有项目先读 `project_context`，需要修改程序时先 `project_get_program`。新项目先创建并登记参考。路径用绝对路径，每次写入用最新 revision；冲突后重新读取并核对差异，不自动覆盖。
+已有项目先读 `project_context`，需要修改程序时先 `project_get_program`。新项目先创建并登记参考。工具调用中的文件路径参数使用绝对路径，`paths` 目录配置及持久化引用使用工程内相对路径。每次写入用最新 revision；冲突后重新读取并核对差异，不自动覆盖。
 
-用 `project_update_style` 保存共用规则与项目参数，`project_save_program` 保存完整 Python 源码，`project_define_component` 用必需的 `spec.program_id` 引用它。其余参数和规格字段由项目程序决定。不要强加按钮、七层、高光覆盖项或某个固定笔刷。
+用 `project_update_style` 保存共用规则与项目参数，`project_save_program` 保存完整 Python 源码，`project_define_component` 用必需的 `spec.program_id` 引用它。其余参数和规格字段由项目程序决定。按实际编辑需求组织图层、绘制步骤与笔刷。
 
 制作换色和状态变体时，用共用参数定义颜色用途和状态差异，用组件规格选择主题、状态和尺寸。共用几何留在同一画法里，按当前需求逐项检查应制作的状态。程序应明确报出缺少的主题、状态或颜色用途引用。需要了解参数如何传给绘制程序时，可查看[颜色用途与状态示例](../../examples/drawing-programs/semantic_palette.py)，该示例使用合成数据演示接口。
 
@@ -29,7 +29,7 @@ description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编�
 
 先读取完整组件规格和程序，按用户反馈调整必要内容，生成计划。`project_draw_component(..., layers=[节点key])` 可选择绘画图层、分组或透明度蒙版；工具比较上次实际计划，拒绝选定范围外变化。局部更新不限制特定参数名或高光角色。
 
-选择分组只更新分组自身属性，不隐式更新子树；需要修改子节点时逐一列出它们的 key。没有旧 plan 的历史资产，应先完整绘制一次再使用局部更新。
+选择分组只更新分组自身属性，不隐式更新子树；需要修改子节点时逐一列出它们的 key。局部更新必须有已登记的 `plan.json` 及其摘要，供工具校验和比较。
 
 针对已有反馈，先读对照和反馈详情，结合其中的节点 key 与规则 ID 确定修改范围。绘制成功后，用新运行和同一参考区域生成新对照。查看拼图后用 `project_update_feedback` 记录复查结论。技术 `verified` 只表示保存重开检查通过，关闭偏差需要新的对照证据。
 

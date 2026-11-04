@@ -68,7 +68,7 @@ async def run(project_root, reference_directory):
                 colors = {item["id"]: item["hex"] for item in samples["samples"] + red["samples"]}
                 print(json.dumps({"sampled_colors": colors}, ensure_ascii=False), flush=True)
 
-                # 颜色来自工具对参考区域的实测；几何是本轮模型给出的初版制作参数，未获用户美术确认。
+                # 颜色来自工具对参考区域的实测；几何是模型提供的制作参数，未获用户美术确认。
                 palettes = {}
                 for theme in ("green", "yellow", "red"):
                     palettes[theme] = {role: colors[theme + "_" + role] for role in ("face", "lower_band", "side", "outer_edge", "inner_edge", "gloss")}
