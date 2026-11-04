@@ -1,6 +1,6 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.7.0 提供二十一个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产和静态组合预览。具体画法属于项目程序。
+SmartUI Krita v0.7.0 提供二十三个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产、正式 PNG 导出和静态组合预览。具体画法属于项目程序。
 
 当前项目组件指关联绘制程序的 Krita 制作对象。ICON（图标）图像采用独立资产流程：生成和编辑由宿主图像工具完成，SmartUI 登记真实产物及来源，再以静态组合预览检查。SmartUI 不内置生图后端；不要将图像资产伪装成组件成功运行。`project_add_reference` 登记的是只读参考，不是生产资产导入。
 
@@ -27,6 +27,8 @@ SmartUI Krita v0.7.0 提供二十一个项目工具，与五个底层 `krita_*` 
 | `project_register_image` | `project_root: str, expected_revision: str, asset_id: str, name: str, source_path: str, provenance: dict` | 按原字节登记 PNG/JPEG/WebP 图像的新版本，不自动选用 |
 | `project_select_image` | `project_root: str, expected_revision: str, asset_id: str, version: int` | 显式选用已登记版本，不重建组合或表示用户确认 |
 | `project_get_image` | `project_root: str, asset_id: str, version: int` | 校验并查看指定版本及真实来源 |
+| `project_export_assets` | `project_root: str, expected_revision: str, component_id: str, run_id: str, exports: list[dict]` | 从明确成功运行的区域批量导出正式 PNG，登记统一资产版本及清单 |
+| `project_get_export` | `project_root: str, export_id: str` | 校验历史清单与归档资产，不依赖生产路径仍为旧版本 |
 | `project_create_composition` | `project_root: str, expected_revision: str, width: int, height: int, background: str, nodes: list[dict]` | 创建固定坐标的静态组合预览并保存源裁切、字体及 PNG 快照 |
 | `project_get_composition` | `project_root: str, composition_id: str` | 校验并读取已保存的组合及来源快照 |
 | `project_record_feedback` | `project_root: str, expected_revision: str, comparison_id: str, observation: str, suggested_change: str, target_nodes: list[str] \| null = null, rule_ids: list[str] \| null = null, source: str = "model"` | 记录带稳定 ID 的偏差反馈 |
@@ -176,6 +178,36 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 工具用 SHA-256 校验来源预览并保存原像素尺寸的 RGBA 裁切快照，采用 Lanczos 等比缩放后合成到纯色背景。灰度图由合成后的彩色总览通过 Pillow 转换为 L 模式，使用 RGB 加权亮度。处理过程不做 ICC 转换。灰度可帮助判断明暗层次，视觉检查由人或模型完成，工具不计算审美分或认证对比度。
 
 快照与检查图保存在 `.smartui/visual-checks/<check_id>/`。用 `project_context` 查看摘要，用 `project_get_visual_check` 按 ID 校验并恢复历史检查。历史图像和来源保持固定。每项的 `is_current` 表示该运行仍是组件当前成功运行且无需复查，整组在所有项目都满足时才为 true。检查图没有页面布局或任意背景图输入。需要记录偏差时，按对应组件和运行建立参考对照，再用现有反馈工具关联节点或规则。
+
+## 正式 PNG 导出
+
+`project_export_assets` 读取明确的组件成功 `run_id`，校验计划、风格快照和预览摘要，再按声明区域生成生产 PNG。当前支持整图或矩形区域导出；不能从已合成的预览中自动去除文字，源程序应提供无示例文案的导出区域。工具不执行 Krita 绘制、不按图层组重新投影，也不修改 Unity `.meta` 或导入设置。
+
+每项导出必须完整声明以下字段；`exports` 包含 1 至 64 项，资产 ID 和输出路径在批次内唯一：
+
+```json
+{
+  "asset_id": "primary-button",
+  "name": "主按钮背景",
+  "output_path": "Assets/UI/primary-button.png",
+  "region": {"x": 0, "y": 0, "width": 120, "height": 60},
+  "state": "normal",
+  "purpose": "主操作按钮的背景，不含文字",
+  "geometry": {
+    "content_rect": {"x": 8, "y": 8, "width": 104, "height": 44},
+    "mode": "nine_slice",
+    "borders": {"left": 20, "top": 20, "right": 20, "bottom": 20}
+  }
+}
+```
+
+`region` 相对来源预览，整图导出也显式提供；`geometry` 相对裁切后的 PNG，约束见[内容区域与伸缩几何](asset-geometry.md)。`output_path` 是工程内 `.png` 相对路径，不能占用 `.smartui`、项目受管文档、参考、程序或源文件目录。同一正式资产保持生产路径；已有未受管目标、不同资产占用的路径、受管输出缺失或摘要不符均报错，不覆盖修复。
+
+正式导出使用已有 `images` 资产身份和不可变版本，来源类型 `component_export` 由导出工具生成，不能通过普通图像登记伪造。版本记录包含组件与运行、来源区域及摘要、状态、用途、几何和实际 PNG 编码设置。导出不改变 `selected_version`；组合可直接引用返回版本，需要改变项目选用版本时再调用 `project_select_image`。
+
+重复导出相同来源和声明会复用最新资产版本及原文件字节；来源、几何或声明改变会保留新版本，即使像素相同。实际 PNG 字节相同时不重写生产文件。整批输入先完成校验再发布，磁盘发布失败会报告错误及恢复结果；项目记录写入失败时保留已发布文件和清单并明确指出，不盲目重试。
+
+每次导出返回 `export.id`、项目 `revision`、每项版本与复用情况，以及 `.smartui/exports/<id>/manifest.json` 的路径和摘要。清单中的文件路径相对工程，`project_get_export` 校验清单和归档资产后读取历史结果；生产路径后来更新不改变旧清单。保留 `.smartui/exports/`，它不是可丢弃缓存。项目上下文包含导出摘要，可从运行找到正式资产，也可从资产记录追溯来源。
 
 ## 独立图像资产与静态组合预览
 

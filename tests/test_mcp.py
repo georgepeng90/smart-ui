@@ -27,6 +27,7 @@ TOOL_NAMES = {
     "project_compare_component", "project_get_comparison", "project_create_visual_check", "project_get_visual_check",
     "project_record_feedback", "project_update_feedback",
     "project_register_image", "project_select_image", "project_get_image",
+    "project_export_assets", "project_get_export",
     "project_create_composition", "project_get_composition",
 }
 

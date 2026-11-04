@@ -152,4 +152,8 @@ def map_state_paths(state, transform):
             fields(node, ("source", "font_path"))
         for item in [*composition["images"].values(), *composition["fonts"].values()]:
             fields(item, ("path",))
+    for export in result.get("exports", {}).values():
+        fields(export["manifest"], ("path",))
+        for item in export["items"]:
+            fields(item["record"], ("path",))
     return result

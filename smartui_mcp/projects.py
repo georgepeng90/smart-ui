@@ -374,6 +374,53 @@ class ProjectStore:
         return {"project_root": updated["project_root"], "revision": updated["revision"],
                 "image": updated["data"]["images"][asset_id]}
 
+    def export_assets(self, project_root: str, expected_revision: str, component_id: str,
+                      run_id: str, exports: list[dict]) -> dict:
+        """从明确组件运行导出正式 PNG，保持资产身份及独立选用状态。"""
+        from .exports import prepare_exports, publish_exports
+
+        _identifier(component_id, "component_id")
+        _identifier(run_id, "run_id")
+        root = self._root(project_root)
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            self._review_run(state, component_id, run_id)
+            plan = prepare_exports(str(root), state["paths"], state, component_id, run_id, exports)
+            record = publish_exports(plan)
+            record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
+            assets = state.setdefault("images", {})
+            for item in record["items"]:
+                asset = assets.setdefault(item["asset_id"], {"id": item["asset_id"], "name": item["name"],
+                                          "selected_version": None, "versions": []})
+                asset["name"] = item["name"]
+                if not item["reused"]:
+                    asset["versions"].append(deepcopy(item["record"]))
+            state.setdefault("exports", {})[record["id"]] = record
+            try:
+                updated = self._write(root, state)
+            except ProjectError as error:
+                raise ProjectError(f"正式资产已发布，但项目记录未更新：{record['manifest']['path']}；{error}") from error
+            return {"project_root": str(root), "revision": updated["revision"],
+                    "export": updated["data"]["exports"][record["id"]]}
+
+    def get_export(self, project_root: str, export_id: str) -> dict:
+        """读取原始导出清单和归档资产，生产路径的后续更新不改变历史结果。"""
+        from .image_assets import verify_image_version
+
+        _identifier(export_id, "export_id")
+        context = self.context(project_root)
+        record = context["data"].get("exports", {}).get(export_id)
+        if record is None:
+            raise ProjectError(f"导出记录不存在：{export_id}")
+        manifest = record["manifest"]
+        path = Path(manifest["path"])
+        if _sha(path.read_bytes()) != manifest["sha256"]:
+            raise ProjectError(f"导出清单 SHA-256 不符：{path}")
+        for item in record["items"]:
+            verify_image_version(item["record"])
+        return {"project_root": context["project_root"], "revision": context["revision"], "export": record}
+
     def get_image(self, project_root: str, asset_id: str, version: int) -> dict:
         from .image_assets import verify_image_version
 
@@ -621,7 +668,7 @@ class ProjectStore:
             layout = ProjectLayout(root, state["paths"])
             for key in layout.paths:
                 layout.directory(key)
-            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions"):
+            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions", "exports"):
                 if field in state and not isinstance(state[field], dict):
                     raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
             for asset_id, asset in state.get("images", {}).items():

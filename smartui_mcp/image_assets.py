@@ -125,5 +125,8 @@ def verify_image_version(record: dict) -> None:
             expected = record.get(field)
             if type(expected) is not type(metadata[field]) or expected != metadata[field]:
                 raise ValueError(f"图像资产 {field} 与记录不一致：记录={expected!r}，实际={metadata[field]!r}")
+        if record.get("provenance", {}).get("kind") == "component_export":
+            from .exports import validate_export_record
+            validate_export_record(record)
     except (OSError, ValueError) as error:
         raise ValueError(f"图像资产版本校验失败：{record.get('path')}；{error}") from error

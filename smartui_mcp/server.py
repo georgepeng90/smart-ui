@@ -94,6 +94,8 @@ def _project_summary(context):
             "references": data["references"], "programs": data["programs"], "components": components,
             "comparisons": comparisons, "visual_checks": visual_checks, "feedback": feedback,
             "images": data.get("images", {}),
+            "exports": {key: {field: value[field] for field in ("id", "source", "manifest", "created_at")}
+                        for key, value in data.get("exports", {}).items()},
             "compositions": {key: {field: value[field] for field in ("id", "width", "height", "background", "is_current", "created_at")}
                              | {"overview": value["images"]["overview"]}
                              for key, value in data.get("compositions", {}).items()}}
@@ -371,6 +373,17 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
         """
         return await asyncio.to_thread(projects.register_image, project_root, expected_revision,
                                        asset_id, name, source_path, provenance)
+
+    @server.tool()
+    async def project_export_assets(project_root: str, expected_revision: str, component_id: StrictStr,
+                                    run_id: StrictStr, exports: list[dict[str, Any]]) -> Any:
+        """从成功组件运行的明确区域导出正式 PNG、几何元数据和清单；不改变选用版本。"""
+        return await asyncio.to_thread(projects.export_assets, project_root, expected_revision, component_id, run_id, exports)
+
+    @server.tool()
+    async def project_get_export(project_root: str, export_id: StrictStr) -> Any:
+        """校验并读取历史导出清单和原始资产版本，不要求生产路径仍为旧版本。"""
+        return await asyncio.to_thread(projects.get_export, project_root, export_id)
 
     @server.tool()
     async def project_select_image(project_root: str, expected_revision: str,

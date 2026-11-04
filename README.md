@@ -59,7 +59,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 `${PLUGIN_ROOT}` 由插件宿主展开。配置同时将工作目录和 `PYTHONPATH` 指向插件根目录。首次启动时 `uv` 根据 `uv.lock` 创建环境并安装运行依赖；`--locked` 检查锁文件一致性，`--no-dev` 排除开发依赖。手工排查时，在插件根目录执行 `uv run --locked --no-dev --project . python -m smartui_mcp`；服务通过标准输入输出传输 MCP 消息，不是交互式终端命令。
 
-工具共 26 个，包括五个底层 Krita 工具和二十一个项目工具。
+工具共 28 个，包括五个底层 Krita 工具和二十三个项目工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -85,6 +85,8 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 | `project_register_image` | 按原字节登记 PNG/JPEG/WebP 独立图像版本及真实来源，不自动选用 |
 | `project_select_image` | 明确选用已登记的图像版本，不表示用户美术确认 |
 | `project_get_image` | 校验并查看指定图像版本、来源及当前选用版本 |
+| `project_export_assets` | 从明确组件运行的区域导出正式 PNG、伸缩元数据及清单，不改变选用状态 |
+| `project_get_export` | 校验并读取历史导出清单及归档资产 |
 | `project_create_composition` | 按明确坐标组合成功组件运行、图像版本和单行文字，保存静态快照 |
 | `project_get_composition` | 校验并读取已保存的静态组合及来源快照 |
 | `project_record_feedback` | 根据对照记录观察到的偏差及修改建议 |
@@ -130,6 +132,8 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 制作 ICON 时使用宿主提供的图像生成或编辑能力，查看实际输出后将真实产物复制到业务工程，再通过 `project_register_image` 登记。生成和编辑来源必须如实提供实际工具名及提示词；已有图像可按 `imported` 登记描述，不补造提示词。登记候选不会自动选用，组合可以引用任意明确的登记版本；需要改变项目选用版本时，单独调用 `project_select_image`。`project_create_composition` 只做固定坐标、纯色背景上的静态预览：图像在目标矩形内等比缩放并居中，组件与图像可以按原像素区域裁切，文字是使用真实 TTF/OTF 字体的单行文本。它不提供自动布局、九宫格、运行时交互或 Krita 位图图层导入。完整工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)和[页面组合 Skill](skills/page-composition/SKILL.md)。
 
 ## 当前绘制接口边界
+
+交付组件 PNG 时，使用 `project_export_assets` 明确指定来源运行、导出区域、状态、用途、生产路径和几何声明。导出沿用图像资产身份和版本，重复相同输入不重写生产文件；源文件或已受管输出被外部修改时明确报错。区域导出不能自动去除已烘焙的文字，不处理 Unity 导入设置。参数见[正式 PNG 导出](docs/project-tools.md#正式-png-导出)。
 
 - `layers` 是计划中的节点 key 列表，可指定绘画图层、分组或透明度蒙版。工具比较上次计划，拒绝目标之外的变化。完整重画也要求当前画布及节点结构仍匹配；新尺寸或新结构暂用新的组件 ID。
 - 计划支持 `paintlayer`、`grouplayer`、`transparencymask`，不代表支持 Krita 的全部节点类型。计划与属性细节见[绘制程序约定](docs/drawing-programs.md)。
