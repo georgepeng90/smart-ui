@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "smartui-krita",
-  "version": "0.6.0",
-  "description": "分析参考、绘制可编辑组件，并通过参考对照与多产物检查复查视觉效果。",
+  "version": "0.7.0",
+  "description": "分析参考、绘制可编辑组件，登记独立图像资产，并组合检查 UI 效果。",
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "SmartUI Krita",
         "shortDescription": "管理参考与项目风格，在 Krita 中绘制可编辑组件",
-        "longDescription": "分析参考并维护风格文档，执行项目自定义绘制程序，通过 Krita 原生笔刷、图层与蒙版制作和修改组件。对照参考和实际产物，在统一背景下检查配色及状态变体，保留可编辑源文件、版本记录和偏差反馈。"
+        "longDescription": "分析参考并维护风格文档，执行项目自定义绘制程序，通过 Krita 原生笔刷、图层与蒙版制作和修改组件。登记宿主生图或已有图像，保留独立版本与选用状态，将组件、图像和文字组合预览。对照参考和实际产物，检查配色及状态变体，保留可编辑源文件、版本记录和偏差反馈。"
       }
     }
   }

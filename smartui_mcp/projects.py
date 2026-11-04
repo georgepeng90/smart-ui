@@ -63,6 +63,7 @@ class ProjectStore:
                 "style": {"version": 0, "description": "", "rules": [], "parameters": {},
                           "reference_ids": [], "user_confirmation": None},
                 "components": {}, "comparisons": {}, "feedback": {}, "visual_checks": {},
+                "images": {}, "compositions": {},
             }
             layout.ensure_gitignore()
             return self._write(root, state)
@@ -332,6 +333,154 @@ class ProjectStore:
             raise ProjectError(f"视觉检查记录不存在：{check_id}")
         return {"project_root": context["project_root"], "revision": context["revision"], "visual_check": record}
 
+    def register_image(self, project_root: str, expected_revision: str, asset_id: str,
+                       name: str, source_path: str, provenance: dict) -> dict:
+        """登记不可变图像版本；生成候选不自动改变选用版本。"""
+        from .image_assets import register_image_file
+
+        root = self._root(project_root)
+        _identifier(asset_id, "asset_id")
+        _text(name, "name")
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            assets = state.setdefault("images", {})
+            asset = assets.get(asset_id)
+            version = len(asset["versions"]) + 1 if asset else 1
+            record = register_image_file(str(root), state["paths"], asset_id, version, source_path, provenance)
+            record["created_at"] = datetime.now(timezone.utc).isoformat()
+            if asset is None:
+                asset = {"id": asset_id, "name": name, "selected_version": None, "versions": []}
+                assets[asset_id] = asset
+            asset["name"] = name
+            asset["versions"].append(record)
+            try:
+                updated = self._write(root, state)
+            except ProjectError as error:
+                raise ProjectError(f"图像文件已保留，但项目记录写入失败：{record['path']}；{error}") from error
+            return {"project_root": str(root), "revision": updated["revision"],
+                    "image": updated["data"]["images"][asset_id], "registered_version": version}
+
+    def select_image(self, project_root: str, expected_revision: str, asset_id: str, version: int) -> dict:
+        """明确选用已登记版本，不生成图像或重建已有组合。"""
+        from .image_assets import verify_image_version
+
+        _identifier(asset_id, "asset_id")
+        def change(state):
+            record = self._image_version(state, asset_id, version)
+            verify_image_version(record)
+            state["images"][asset_id]["selected_version"] = version
+        updated = self._update(project_root, expected_revision, change)
+        return {"project_root": updated["project_root"], "revision": updated["revision"],
+                "image": updated["data"]["images"][asset_id]}
+
+    def get_image(self, project_root: str, asset_id: str, version: int) -> dict:
+        from .image_assets import verify_image_version
+
+        _identifier(asset_id, "asset_id")
+        context = self.context(project_root)
+        record = self._image_version(context["data"], asset_id, version)
+        verify_image_version(record)
+        return {"project_root": context["project_root"], "revision": context["revision"],
+                "asset_id": asset_id, "selected_version": context["data"]["images"][asset_id]["selected_version"],
+                "image_version": record}
+
+    @staticmethod
+    def _image_version(state, asset_id, version):
+        if type(version) is not int or version < 1:
+            raise ProjectError("version 必须是正整数")
+        asset = state.get("images", {}).get(asset_id)
+        if asset is None:
+            raise ProjectError(f"图像资产不存在：{asset_id}")
+        record = next((item for item in asset["versions"] if item["version"] == version), None)
+        if record is None:
+            raise ProjectError(f"图像版本不存在：{asset_id}/{version}")
+        return record
+
+    def create_composition(self, project_root: str, expected_revision: str, width: int,
+                           height: int, background: str, nodes: list[dict]) -> dict:
+        """以明确的资产版本和坐标生成组合快照，不调用生图或重画源组件。"""
+        from .compositions import build_composition
+        from .image_assets import verify_image_version
+        from .visual_checks import RUN_FIELDS
+
+        root = self._root(project_root)
+        if not isinstance(nodes, list) or not 1 <= len(nodes) <= 64:
+            raise ProjectError("nodes 必须包含 1 到 64 项")
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            resolved = []
+            for index, node in enumerate(nodes):
+                if not isinstance(node, dict):
+                    raise ProjectError(f"nodes[{index}] 必须是对象")
+                kind = node.get("kind")
+                common = {"id", "kind", "x", "y"}
+                if kind == "component":
+                    required = common | {"component_id", "run_id", "width", "height"}
+                    optional = {"region"}
+                elif kind == "image":
+                    required = common | {"asset_id", "version", "width", "height"}
+                    optional = {"region"}
+                elif kind == "text":
+                    required = common | {"text", "font_path", "font_size", "color"}
+                    optional = {"stroke_width", "stroke_color"}
+                else:
+                    raise ProjectError(f"nodes[{index}].kind 必须是 component、image 或 text")
+                if not required <= node.keys() or node.keys() - (required | optional):
+                    raise ProjectError(f"nodes[{index}] 字段不符合 {kind} 节点要求")
+                entry = dict(node)
+                if kind == "component":
+                    _identifier(node["component_id"], f"nodes[{index}].component_id")
+                    _identifier(node["run_id"], f"nodes[{index}].run_id")
+                    _, run, _, snapshot = self._review_run(state, node["component_id"], node["run_id"])
+                    missing = set(RUN_FIELDS) - run.keys()
+                    if missing:
+                        raise ProjectError(f"组件运行 {node['component_id']}/{node['run_id']} 缺少字段：{', '.join(sorted(missing))}")
+                    self._run_artifact(run, "preview")
+                    entry.pop("run_id")
+                    entry.update(source=run["preview"], sha256=run["artifact_hashes"]["preview"],
+                                 run={key: run[key] for key in RUN_FIELDS}, spec=snapshot["spec"])
+                elif kind == "image":
+                    _identifier(node["asset_id"], f"nodes[{index}].asset_id")
+                    record = self._image_version(state, node["asset_id"], node["version"])
+                    verify_image_version(record)
+                    entry.update(source=record["path"], sha256=record["sha256"])
+                if kind in ("component", "image"):
+                    entry.setdefault("region", None)
+                resolved.append(entry)
+            composition_id = uuid4().hex
+            record = build_composition(str(root), composition_id, width, height, background, resolved)
+            record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
+            state.setdefault("compositions", {})[composition_id] = record
+            try:
+                updated = self._write(root, state)
+            except ProjectError as error:
+                raise ProjectError(f"组合图片已保留，但项目记录写入失败：{record['images']['overview']['path']}；{error}") from error
+            return self._composition_result(updated, composition_id)
+
+    def get_composition(self, project_root: str, composition_id: str) -> dict:
+        _identifier(composition_id, "composition_id")
+        result = self._composition_result(self.context(project_root), composition_id)
+        # 历史记录使用保存的图片和字体，不依赖原图仍然存在。
+        record = result["composition"]
+        for item in [*record["images"].values(), *record["fonts"].values()]:
+            path = Path(item["path"])
+            try:
+                payload = path.read_bytes()
+            except OSError as error:
+                raise ProjectError(f"无法读取组合快照：{path}；{error}") from error
+            if _sha(payload) != item["sha256"]:
+                raise ProjectError(f"组合快照 SHA-256 不符：{path}")
+        return result
+
+    @staticmethod
+    def _composition_result(context, composition_id):
+        record = context["data"].get("compositions", {}).get(composition_id)
+        if record is None:
+            raise ProjectError(f"组合预览不存在：{composition_id}")
+        return {"project_root": context["project_root"], "revision": context["revision"], "composition": record}
+
     def _review_run(self, state, component_id, run_id):
         component = state["components"].get(component_id)
         if component is None:
@@ -472,9 +621,21 @@ class ProjectStore:
             layout = ProjectLayout(root, state["paths"])
             for key in layout.paths:
                 layout.directory(key)
-            for field in ("comparisons", "feedback", "visual_checks"):
+            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions"):
                 if field in state and not isinstance(state[field], dict):
                     raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
+            for asset_id, asset in state.get("images", {}).items():
+                _identifier(asset_id, "images 标识")
+                if (not isinstance(asset, dict) or asset.get("id") != asset_id
+                        or not isinstance(asset.get("versions"), list) or not asset["versions"]):
+                    raise ProjectError(f"图像资产记录无效：{asset_id}")
+                _text(asset.get("name"), f"images.{asset_id}.name")
+                for index, record in enumerate(asset["versions"], 1):
+                    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != index:
+                        raise ProjectError(f"图像版本必须从 1 起连续记录：{asset_id}")
+                selected = asset["selected_version"]
+                if selected is not None and (type(selected) is not int or not 1 <= selected <= len(asset["versions"])):
+                    raise ProjectError(f"图像选用版本无效：{asset_id}/{selected}")
             hashes = state.get("document_hashes")
             if not isinstance(hashes, dict) or set(hashes) != {"style.md", "components.md"}:
                 raise ProjectError(f"项目缺少受管文档摘要：{path}")
@@ -607,6 +768,17 @@ class ProjectStore:
             reviewed = feedback["history"][-1]["comparison_id"] if feedback["history"] else feedback["comparison_id"]
             feedback["reviewed_comparison_id"] = reviewed
             feedback["applies_to_current_run"] = data["comparisons"][reviewed]["is_current"]
+        for composition in data.get("compositions", {}).values():
+            for node in composition["nodes"]:
+                if node["kind"] == "image":
+                    asset = data["images"][node["asset_id"]]
+                    node["is_current"] = node["version"] == asset["selected_version"]
+                elif node["kind"] == "component":
+                    component = data["components"][node["component_id"]]
+                    latest = component["latest_run"]
+                    node["is_current"] = bool(latest and not component["needs_review"]
+                                              and latest["run_id"] == node["run"]["run_id"])
+            composition["is_current"] = all(node["is_current"] for node in composition["nodes"] if node["kind"] != "text")
         return {"project_root": str(root), "revision": revision, "data": data}
 
     def _render_for_root(self, root, state):
@@ -765,6 +937,32 @@ class ProjectStore:
                         index, item["label"], item["component_id"], run["run_id"],
                         f"{run['style_version']} / {run['program_id']} v{run['program_version']}",
                         item["region_source_xywh"], item["scale"], "是" if item["is_current"] else "否")) + " |")
+                component_lines.append("")
+        if context.get("images"):
+            component_lines.extend(["## 独立图像资产", "",
+                "登记与选用分开；选用版本不表示用户美术确认。", "",
+                "| 资产 | 名称 | 选用版本 | 已登记版本与文件 |",
+                "| --- | --- | --- | --- |"])
+            for asset in context["images"].values():
+                versions = "、".join(self._link(f"v{item['version']}（{item['width']}×{item['height']}）", item["path"])
+                                     for item in asset["versions"])
+                component_lines.append("| " + " | ".join(self._cell(value) for value in (
+                    asset["id"], asset["name"], asset["selected_version"] if asset["selected_version"] is not None else "尚未选用", versions)) + " |")
+            component_lines.append("")
+        if context.get("compositions"):
+            component_lines.extend(["## UI 组合预览", "",
+                "预览保存组件、图像和字体的实际快照；引用版本匹配不表示视觉确认或运行态验证。", ""])
+            for composition in context["compositions"].values():
+                component_lines.extend([f"### 组合 {composition['id']}", "",
+                    f"画布：{composition['width']} × {composition['height']}；背景：{composition['background']}。", "",
+                    self._link("查看组合预览", composition["images"]["overview"]["path"]), "",
+                    f"引用是否对应当前选用及组件运行：{'是' if composition['is_current'] else '否'}。", "",
+                    "| 节点 | 类型 | 来源 | 实际显示区域 |", "| --- | --- | --- | --- |"])
+                for node in composition["nodes"]:
+                    source = (f"{node['asset_id']} v{node['version']}" if node["kind"] == "image" else
+                              f"{node['component_id']} / {node['run']['run_id']}" if node["kind"] == "component" else node["text"])
+                    component_lines.append("| " + " | ".join(self._cell(value) for value in (
+                        node["id"], node["kind"], source, node["display_rect"])) + " |")
                 component_lines.append("")
         component_lines.extend(["完整规格、产物摘要和检查数据保存在工程根目录的 .smartui/project.json；本文档由工具生成。", ""])
         return {"style.md": "\n".join(style_lines).encode("utf-8"),

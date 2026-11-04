@@ -4,10 +4,10 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP, Image
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictFloat, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr
 
 from .client import BridgeClient
 from .projects import ProjectStore, ProjectError
@@ -23,6 +23,45 @@ class VisualCheckItem(BaseModel):
     label: StrictStr
     region: list[StrictInt] | None = None
     scale: StrictFloat = 1.0
+
+
+class CompositionNodeBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: StrictStr
+    x: StrictInt
+    y: StrictInt
+
+
+class CompositionComponent(CompositionNodeBase):
+    kind: Literal["component"]
+    component_id: StrictStr
+    run_id: StrictStr
+    width: StrictInt
+    height: StrictInt
+    region: list[StrictInt] | None = None
+
+
+class CompositionImage(CompositionNodeBase):
+    kind: Literal["image"]
+    asset_id: StrictStr
+    version: StrictInt
+    width: StrictInt
+    height: StrictInt
+    region: list[StrictInt] | None = None
+
+
+class CompositionText(CompositionNodeBase):
+    kind: Literal["text"]
+    text: StrictStr
+    font_path: StrictStr
+    font_size: StrictInt
+    color: StrictStr
+    stroke_width: StrictInt = 0
+    stroke_color: StrictStr = "#000000"
+
+
+CompositionNode = Annotated[CompositionComponent | CompositionImage | CompositionText, Field(discriminator="kind")]
 
 
 def _project_summary(context):
@@ -53,7 +92,11 @@ def _project_summary(context):
     return {"project_root": context["project_root"], "revision": context["revision"],
             "project_id": data["project_id"], "name": data["name"], "paths": data["paths"], "style": data["style"],
             "references": data["references"], "programs": data["programs"], "components": components,
-            "comparisons": comparisons, "visual_checks": visual_checks, "feedback": feedback}
+            "comparisons": comparisons, "visual_checks": visual_checks, "feedback": feedback,
+            "images": data.get("images", {}),
+            "compositions": {key: {field: value[field] for field in ("id", "width", "height", "background", "is_current", "created_at")}
+                             | {"overview": value["images"]["overview"]}
+                             for key, value in data.get("compositions", {}).items()}}
 
 
 def _document_path(document: str) -> str:
@@ -81,6 +124,21 @@ def _visual_check_content(result):
     if "grayscale" in images:
         content.append(_verified_png(images["grayscale"], "视觉检查灰度图"))
     return content
+
+
+def _image_content(result):
+    record = result["image_version"]
+    path = Path(record["path"])
+    payload = path.read_bytes()
+    if hashlib.sha256(payload).hexdigest() != record["sha256"]:
+        raise ProjectError(f"返回的图像资产 SHA-256 不符：{path}")
+    image_format = {".png": "png", ".jpg": "jpeg", ".webp": "webp"}[path.suffix]
+    return [json.dumps(result, ensure_ascii=False), Image(data=payload, format=image_format)]
+
+
+def _composition_content(result):
+    return [json.dumps(result, ensure_ascii=False),
+            _verified_png(result["composition"]["images"]["overview"], "组合预览")]
 
 
 def create_server(client: BridgeClient | None = None) -> FastMCP:
@@ -302,6 +360,50 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
         """
         result = await asyncio.to_thread(projects.get_visual_check, project_root, check_id)
         return await asyncio.to_thread(_visual_check_content, result)
+
+    @server.tool()
+    async def project_register_image(project_root: str, expected_revision: str, asset_id: StrictStr,
+                                     name: StrictStr, source_path: StrictStr, provenance: dict) -> Any:
+        """按原字节登记 PNG/JPEG/WebP 的新版本，不调用生图，不自动选用。
+
+        source_path 必须是绝对路径。provenance.kind 为 generated/edited 时必须有真实 tool、prompt；
+        imported 时必须有 description。其他实际生成信息可附加，不填造未知模型或种子。
+        """
+        return await asyncio.to_thread(projects.register_image, project_root, expected_revision,
+                                       asset_id, name, source_path, provenance)
+
+    @server.tool()
+    async def project_select_image(project_root: str, expected_revision: str,
+                                   asset_id: StrictStr, version: StrictInt) -> Any:
+        """明确选用一个已登记的图像版本；不重建已有组合，不表示用户美术确认。"""
+        return await asyncio.to_thread(projects.select_image, project_root, expected_revision, asset_id, version)
+
+    @server.tool(structured_output=False)
+    async def project_get_image(project_root: str, asset_id: StrictStr, version: StrictInt) -> list[Any]:
+        """校验并查看指定图像版本，返回实际图片、来源、摘要及当前选用版本。"""
+        result = await asyncio.to_thread(projects.get_image, project_root, asset_id, version)
+        return await asyncio.to_thread(_image_content, result)
+
+    @server.tool(structured_output=False)
+    async def project_create_composition(project_root: str, expected_revision: str, width: StrictInt,
+                                          height: StrictInt, background: StrictStr,
+                                          nodes: list[CompositionNode]) -> list[Any]:
+        """按明确坐标组合组件成功运行、独立图像版本及单行文字，保存来源快照和 PNG。
+
+        nodes 按叠放顺序排列。component 用 component_id/run_id；image 用 asset_id/version。
+        图像区域 region=[x,y,width,height] 可省略；目标 width/height 内等比居中，不拉伸。
+        text 必须指定真实 TTF/OTF font_path、font_size、color；x/y 为文字左上基准，描边不能越界。
+        这是一份静态组合预览，不负责布局求解、九宫格、自动换行、运行时交互或生图。
+        """
+        result = await asyncio.to_thread(projects.create_composition, project_root, expected_revision,
+                                         width, height, background, [node.model_dump() for node in nodes])
+        return await asyncio.to_thread(_composition_content, result)
+
+    @server.tool(structured_output=False)
+    async def project_get_composition(project_root: str, composition_id: StrictStr) -> list[Any]:
+        """校验并读取已有组合快照，源资产更新不改变原图；is_current 仅反映引用版本。"""
+        result = await asyncio.to_thread(projects.get_composition, project_root, composition_id)
+        return await asyncio.to_thread(_composition_content, result)
 
     @server.tool()
     async def project_record_feedback(project_root: str, expected_revision: str, comparison_id: str,

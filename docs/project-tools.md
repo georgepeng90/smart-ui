@@ -1,6 +1,8 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.6.0 提供十六个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈和多产物视觉检查。具体画法属于项目程序。
+SmartUI Krita v0.7.0 提供二十一个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产和静态组合预览。具体画法属于项目程序。
+
+当前项目组件指关联绘制程序的 Krita 制作对象。ICON（图标）图像采用独立资产流程：生成和编辑由宿主图像工具完成，SmartUI 登记真实产物及来源，再以静态组合预览检查。SmartUI 不内置生图后端；不要将图像资产伪装成组件成功运行。`project_add_reference` 登记的是只读参考，不是生产资产导入。
 
 ## 工具参数与调用顺序
 
@@ -22,6 +24,11 @@ SmartUI Krita v0.6.0 提供十六个项目工具，与五个底层 `krita_*` 工
 | `project_get_comparison` | `project_root: str, comparison_id: str` | 校验并读取对照快照、拼图与反馈详情 |
 | `project_create_visual_check` | `project_root: str, expected_revision: str, items: list[dict], background: str, columns: int = 3, grayscale: bool = true` | 保存多份运行预览的彩色总览与可选灰度图 |
 | `project_get_visual_check` | `project_root: str, check_id: str` | 校验并读取已保存的视觉检查图与来源记录 |
+| `project_register_image` | `project_root: str, expected_revision: str, asset_id: str, name: str, source_path: str, provenance: dict` | 按原字节登记 PNG/JPEG/WebP 图像的新版本，不自动选用 |
+| `project_select_image` | `project_root: str, expected_revision: str, asset_id: str, version: int` | 显式选用已登记版本，不重建组合或表示用户确认 |
+| `project_get_image` | `project_root: str, asset_id: str, version: int` | 校验并查看指定版本及真实来源 |
+| `project_create_composition` | `project_root: str, expected_revision: str, width: int, height: int, background: str, nodes: list[dict]` | 创建固定坐标的静态组合预览并保存源裁切、字体及 PNG 快照 |
+| `project_get_composition` | `project_root: str, composition_id: str` | 校验并读取已保存的组合及来源快照 |
 | `project_record_feedback` | `project_root: str, expected_revision: str, comparison_id: str, observation: str, suggested_change: str, target_nodes: list[str] \| null = null, rule_ids: list[str] \| null = null, source: str = "model"` | 记录带稳定 ID 的偏差反馈 |
 | `project_update_feedback` | `project_root: str, expected_revision: str, feedback_id: str, status: str, comment: str, comparison_id: str, source: str = "model"` | 更新反馈状态并追加复查历史 |
 
@@ -38,7 +45,7 @@ SmartUI Krita v0.6.0 提供十六个项目工具，与五个底层 `krita_*` 工
 | `documents` | `docs/ui` | 自动生成的 `style.md`、`components.md` |
 | `references` | `docs/ui/references` | 登记并保存的参考原图 |
 | `programs` | `art/ui/programs` | `<program_id>/<version>.py` |
-| `sources` | `art/ui/sources` | `<component_id>.kra` |
+| `sources` | `art/ui/sources` | `<component_id>.kra` 及 `images/<asset_id>/<version>/image.<png|jpg|webp>` |
 
 目录映射不改变 `project_root` 的含义。参考输入在工程外时，登记操作将其复制到 `<references>/<reference_id>/<原文件名>`，后续读取和摘要检查针对该副本。工程内输入可保留其原有位置。
 
@@ -114,6 +121,8 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 | `components` | 名称、spec、目标风格版本、最近成功记录和全部尝试 |
 | `comparisons` | 可选，记录对照的参考、运行、裁切与显示参数及快照摘要 |
 | `visual_checks` | 可选，记录检查图使用的成功运行、裁切与显示参数，以及保存图片的摘要 |
+| `images` | 可选，记录独立图像资产及不可变连续版本；缺省表示尚无登记图像 |
+| `compositions` | 可选，记录静态组合、源节点及图像/字体快照；缺省表示尚无组合 |
 | `feedback` | 可选，记录对照反馈、当前状态与复查历史 |
 | `document_hashes` | 自动生成 style.md 和 components.md 的摘要 |
 
@@ -167,3 +176,31 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 工具用 SHA-256 校验来源预览并保存原像素尺寸的 RGBA 裁切快照，采用 Lanczos 等比缩放后合成到纯色背景。灰度图由合成后的彩色总览通过 Pillow 转换为 L 模式，使用 RGB 加权亮度。处理过程不做 ICC 转换。灰度可帮助判断明暗层次，视觉检查由人或模型完成，工具不计算审美分或认证对比度。
 
 快照与检查图保存在 `.smartui/visual-checks/<check_id>/`。用 `project_context` 查看摘要，用 `project_get_visual_check` 按 ID 校验并恢复历史检查。历史图像和来源保持固定。每项的 `is_current` 表示该运行仍是组件当前成功运行且无需复查，整组在所有项目都满足时才为 true。检查图没有页面布局或任意背景图输入。需要记录偏差时，按对应组件和运行建立参考对照，再用现有反馈工具关联节点或规则。
+
+## 独立图像资产与静态组合预览
+
+SmartUI 不内置模型生图或图像编辑后端。先用宿主可用的图像工具制作并查看实际结果，再将需要纳入项目的 PNG、JPEG 或 WebP 文件复制到业务工程中，登记时由工具按原字节归档到受管资产目录。`project_add_reference` 的参考登记语义不同，不能代替生产图像登记。
+
+### 图像登记、来源与选用
+
+`project_register_image` 的完整必需参数为 `project_root: str, expected_revision: str, asset_id: str, name: str, source_path: str, provenance: dict`，没有可省略参数。`source_path` 必须是实际图像的绝对路径。支持 PNG、JPEG、WebP；版本由工具按资产递增分配，从 1 开始，不能覆盖已有版本。文件按原始字节保存到 `paths.sources/images/<asset_id>/<version>/image.<png|jpg|webp>`，并记录尺寸、模式、透明度、SHA-256 和来源。
+
+`provenance` 是 JSON 对象，`kind` 必须为 `generated`、`edited` 或 `imported`。`generated` 和 `edited` 必须包含非空字符串 `tool` 与 `prompt`；`imported` 必须包含非空字符串 `description`。实际可得的模型、种子、参考等额外资料可作为 JSON 字段保留；未知信息不伪造，已有图像不补造提示词。注册只添加候选版本，新资产的 `selected_version` 初始为 `null`。
+
+`project_select_image(project_root, expected_revision, asset_id, version)` 校验图像文件和摘要后设置选用版本，不重建组合，也不代表用户美术确认。`project_get_image(project_root, asset_id, version)` 校验并返回实际图像、来源、摘要及当前选用版本。状态中的 `images` 为可选 schema 3 字段，缺省表示没有登记资产；存在时包含资产 ID、名称、`selected_version` 和按顺序连续排列的 `versions` 记录。
+
+### 静态组合预览
+
+`project_create_composition` 的完整必需顶层参数为 `project_root: str, expected_revision: str, width: int, height: int, background: str, nodes: list[dict]`，均无默认值。画布尺寸为正整数，背景必填 `#RRGGBB`。`nodes` 必须含 1 至 64 个节点，`id` 唯一，按列表顺序绘制；坐标和目标区域使用画布像素，必须位于画布内。节点类型如下：
+
+| `kind` | 必需字段（不含共有的 `id`, `kind`, `x`, `y`） | 可选字段及默认值 |
+| --- | --- | --- |
+| `component` | `component_id: str, run_id: str, width: int, height: int` | `region: list[int] \| null = null` |
+| `image` | `asset_id: str, version: int, width: int, height: int` | `region: list[int] \| null = null` |
+| `text` | `text: str, font_path: str, font_size: int, color: str` | `stroke_width: int = 0`, `stroke_color: str = "#000000"` |
+
+组件须引用该组件的一次成功绘制记录。图像可引用任意已登记版本，是否当前选用不改变其固定来源。组件与图像的目标 `width`、`height` 定义摆放矩形；图像按原比例等比缩放并居中，不拉伸、不额外裁切。`region` 是可选的原图像素裁切 `[x, y, width, height]`。预览使用纯色背景和 alpha 合成，不转换 ICC 或 gamma。文字是单行，`font_path` 必须指向实际 TTF/OTF 文件且字体必须包含每个所用字符；越界或缺字会报错。字体文件会随组合保存快照。
+
+组合文件保存在 `.smartui/compositions/<composition_id>/`，包含 overview PNG、组件/图像源裁切和字体快照；项目状态中的可选 `compositions` 保存节点依据、尺寸与摘要。`project_get_composition(project_root, composition_id)` 校验快照后读取历史组合；即使源资产之后更新，历史图仍使用保存时快照。`is_current` 只表示组合中的图像版本仍为当前选用版本，或组件运行仍匹配当前成功运行；文字节点不参与判定。它不表示预览经过用户确认。新版本选用后旧组合不会自动重建。
+
+该工具是固定坐标预览，不提供自动布局、九宫格、自动换行、运行时交互或将位图导入 Krita 文档。它也不生成图像。关于实际生成、查看、复制、登记、局部替换与组合检查的操作顺序，见[ICON 资产 Skill](../skills/icon-assets/SKILL.md)。

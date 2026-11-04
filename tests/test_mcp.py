@@ -26,6 +26,8 @@ TOOL_NAMES = {
     "project_save_program", "project_get_program", "project_plan_component",
     "project_compare_component", "project_get_comparison", "project_create_visual_check", "project_get_visual_check",
     "project_record_feedback", "project_update_feedback",
+    "project_register_image", "project_select_image", "project_get_image",
+    "project_create_composition", "project_get_composition",
 }
 
 CUSTOM_PROGRAM = '''def build(parameters, spec, component_id):

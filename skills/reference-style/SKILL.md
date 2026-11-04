@@ -25,9 +25,15 @@ description: 查看项目视觉参考，区分可见特征与制作假设，归�
 
 按当前需求列出组件需要的状态和主题，说明各状态如何区分、哪些轮廓、边厚、留白或内容位置需要共用。把有依据的颜色用途和状态差异交给共用参数，让组件规格引用所需主题和状态。若参考只显示部分状态，把补充画法记为待验证方案，并将视觉区别和运行时交互分别验收。
 
+## 区分基础 UI 与 ICON 的风格要求
+
+基础 UI 与 ICON（图标）共享适用的参考依据，但分别描述制作要求。基础 UI 记录几何、边厚、伸缩和状态；ICON 记录内容语义、造型、描边、配色、明暗和细节密度，以及目标显示尺寸、使用背景、透明背景需求和留白。不要将面板的圆角、九宫格或拉伸规则直接套到 ICON，也不要因参考含有 ICON 就要求为它编写 Krita 绘制程序。
+
+ICON 图像采用独立的宿主生图或图像编辑流程。SmartUI 不内置生图后端；登记真实产物后，可查看版本、明确选用并建立固定坐标的静态 UI 组合。检查时同时查看单图和实际尺寸的组合，关注辨识度、视觉重心及与文字、容器的关系。布局调整复用选用图像；需要改图时创建新版本。占位可以验证布局，不能代替完整美术效果验收。工具字段与限制见[独立图像资产与静态组合预览](../../docs/project-tools.md#独立图像资产与静态组合预览)，实际操作见[ICON 资产 Skill](../icon-assets/SKILL.md)。
+
 ## 维护项目文档与校准
 
-用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。参数按项目程序需要组织，不强加固定色板、圆角或高光字段。用 `project_define_component` 保存完整组件规格，其中 program_id 引用已保存的程序；定义规格不表示已经生成资产。
+用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。说明规则适用于基础 UI、ICON 还是两者，参数按实际用途组织，不强加固定色板、圆角或高光字段。需要通过 Krita 制作的组件用 `project_define_component` 保存完整规格，其中 program_id 引用已保存的程序；定义规格不表示已经生成资产。ICON 占位和独立生成图像不登记为待绘制组件。
 
 每次写入用最新 revision，冲突时重新读取核对。默认的 `docs/ui/style.md` 和 `docs/ui/components.md` 由 MCP 根据 `.smartui/project.json` 生成，不直接手改受管 Markdown 或摘要。
 

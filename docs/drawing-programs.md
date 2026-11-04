@@ -2,6 +2,8 @@
 
 项目程序把共用参数和组件规格转换成可验证的 Krita 绘制计划。形状、图层数量、材质、笔刷选择和伸缩规则由程序决定，通用工具不内置按钮或其他固定组件画法。
 
+本接口用于基础 UI 的可编辑制作，可以在组件规格中表达 ICON 容器、占位和留白约束。ICON 图像走独立的宿主生图或编辑流程，不要求提供 `build` 或 `program_id`；SmartUI 不提供生图后端，也不把图像资产作为绘制计划提交。独立图像登记和静态组合预览见[项目工具说明](project-tools.md#独立图像资产与静态组合预览)。
+
 ## 保存与执行
 
 用 `project_save_program(project_root, expected_revision, program_id, name, description, source)` 保存完整源码，用 `project_get_program(project_root, program_id)` 读取。保存阶段只编译检查 Python 语法，不执行顶层语句。`project_root` 是业务工程根目录的绝对路径。源码默认保存在工程内 `art/ui/programs/<id>/<version>.py`，可在创建项目时通过 `paths.programs` 指定工程内相对目录；程序元数据的 `source_path` 始终保存工程相对 POSIX 路径。状态位于 `.smartui/project.json`，项目状态保留版本、SHA-256 和历史。

@@ -144,4 +144,12 @@ def map_state_paths(state, transform):
             fields(item, ("source",))
         for image in check["images"].values():
             fields(image, ("path",))
+    for asset in result.get("images", {}).values():
+        for version in asset["versions"]:
+            fields(version, ("path",))
+    for composition in result.get("compositions", {}).values():
+        for node in composition["nodes"]:
+            fields(node, ("source", "font_path"))
+        for item in [*composition["images"].values(), *composition["fonts"].values()]:
+            fields(item, ("path",))
     return result

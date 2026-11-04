@@ -1,11 +1,17 @@
 ---
 name: krita-drawing
-description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编辑 .kra、检查保存重开结果并原位修改选定节点；也可用底层笔刷和图层工具执行明确操作。用于 Krita 本地制作与源文件编辑。
+description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编辑 .kra、检查保存重开结果并原位修改选定节点；也可用底层笔刷和图层工具执行明确操作。用于 Krita 本地制作与源文件编辑，不承担 ICON 的模型生图。
 ---
 
 # 在 Krita 中制作与修改项目组件
 
 项目程序定义具体画法，通用工具负责计划校验、Krita 执行和证据记录。工具参数见[项目工具说明](../../docs/project-tools.md)；编写或修改程序时读[绘制程序约定](../../docs/drawing-programs.md)。参考分析与规则提取使用相邻的 [reference-style Skill](../reference-style/SKILL.md)，按当前项目的参考和需求确定画法。
+
+## 基础 UI 与 ICON 的制作边界
+
+本 Skill 制作基础 UI 及其 ICON 容器、占位和留白；ICON 图像通过独立的宿主生图或图像编辑流程制作，共享适用风格依据，并在目标尺寸的静态 UI 组合中检查。不要为 ICON 图像强制编写 Krita 程序，也不要将整张 UI 生图作为可编辑组件的交付。生成位图不等同于可分层修改的 `.kra`。ICON 的生成、登记和组合工作流见[icon-assets Skill](../icon-assets/SKILL.md)。
+
+SmartUI 不提供 ICON 生图后端，也不导入位图为 Krita 图层；项目可登记独立图像并创建固定坐标的静态组合预览。占位可作为组件规格中的布局约束，必要时绘制明确的占位标记；不因尚未生成 ICON 而伪造组件成功运行。已有明确资产引用缺失时应报错，不能静默换成占位。组合接口限制见[项目工具说明](../../docs/project-tools.md#独立图像资产与静态组合预览)。
 
 ## 项目制作
 

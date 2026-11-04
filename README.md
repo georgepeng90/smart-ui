@@ -2,9 +2,11 @@
 
 完整目标、阶段安排和验收标准见[通用游戏 UI 制作工具链总体规划](docs/toolchain-roadmap.md)。本页说明当前已实现能力和使用方法；总体规划中的后续能力不代表已经实现。
 
-SmartUI Krita v0.6.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可保存参考与实际绘制结果的对照，记录和复查偏差，也可把多份实际产物放在统一背景上检查配色、状态及尺寸变体。
+SmartUI Krita v0.7.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可保存参考与实际绘制结果的对照，记录和复查偏差，也可检查多份实际产物，并登记独立图像版本、明确选用版本及创建静态 UI 组合预览。
 
 绘制程序属于项目，由模型根据参考与当前需求编写。通用工具只执行和验证绘制计划，图层数量、名称、几何、材质和绘制步骤由项目程序决定。参考工具提供裁切和取色，模型负责查看图片、归纳依据和校准参数；技术检查通过后仍需查看预览并验收视觉效果。
+
+基础 UI 与 ICON（图标）图像采用独立制作流程。基础 UI 通过 Krita 制作；独立图像由宿主可用的生图或图像编辑工具生成，再复制到项目并登记真实来源信息。SmartUI 不内置生图后端，但已支持独立图像版本登记、选用、查看及基于固定坐标的静态 UI 组合预览。工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)，参数与边界见[项目工具说明](docs/project-tools.md#独立图像资产与静态组合预览)。
 
 项目以业务工程根目录中的 `.smartui/project.json` 为唯一结构化数据源，工具默认自动维护 `docs/ui/style.md` 和 `docs/ui/components.md`，不会静默覆盖手改文档。工具参数见[项目工具说明](docs/project-tools.md)，程序接口见[绘制程序约定](docs/drawing-programs.md)。参考分析使用 `reference-style` Skill，实际制作与原文件修改使用 `krita-drawing` Skill。
 
@@ -12,7 +14,7 @@ SmartUI Krita v0.6.0 通过 MCP（模型上下文协议）连接运行中的 Kri
 
 - Windows、Krita 5.3.4.1 及可用的 Python 插件支持。
 - Python 3.12 或更高版本，以及 PATH 中可执行的 `uv`。
-- MCP 服务运行依赖包含 Pillow，用于读取参考图、生成预览和取色；由 `uv.lock` 安装。
+- MCP 服务运行依赖包含 Pillow，用于读取参考图、生成预览和取色；fontTools 用于检查组合文字所需的字体字符；均由 `uv.lock` 安装。
 - 支持本地 stdio MCP 的 Codex 桌面端或 CLI。该插件依赖本机 GUI，不能直接在纯网页运行环境中控制 Krita。
 
 Krita 和 Python 的安装路径由本机环境决定，`uv` 根据项目要求选择 Python。
@@ -55,7 +57,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 `${PLUGIN_ROOT}` 由插件宿主展开。配置同时将工作目录和 `PYTHONPATH` 指向插件根目录。首次启动时 `uv` 根据 `uv.lock` 创建环境并安装运行依赖；`--locked` 检查锁文件一致性，`--no-dev` 排除开发依赖。手工排查时，在插件根目录执行 `uv run --locked --no-dev --project . python -m smartui_mcp`；服务通过标准输入输出传输 MCP 消息，不是交互式终端命令。
 
-工具共 21 个，包括五个底层 Krita 工具和十六个项目工具。
+工具共 26 个，包括五个底层 Krita 工具和二十一个项目工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -78,6 +80,11 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 | `project_get_comparison` | 读取对照拼图、证据和相关反馈 |
 | `project_create_visual_check` | 按指定裁切、等比倍率和纯色背景并排展示多个成功运行的产物，可同时生成灰度图 |
 | `project_get_visual_check` | 校验并读取已保存的视觉检查图与对应运行记录 |
+| `project_register_image` | 按原字节登记 PNG/JPEG/WebP 独立图像版本及真实来源，不自动选用 |
+| `project_select_image` | 明确选用已登记的图像版本，不表示用户美术确认 |
+| `project_get_image` | 校验并查看指定图像版本、来源及当前选用版本 |
+| `project_create_composition` | 按明确坐标组合成功组件运行、图像版本和单行文字，保存静态快照 |
+| `project_get_composition` | 校验并读取已保存的静态组合及来源快照 |
 | `project_record_feedback` | 根据对照记录观察到的偏差及修改建议 |
 | `project_update_feedback` | 根据对照追加复查记录，更新反馈状态 |
 
@@ -90,7 +97,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 | 风格与组件文档 | `docs/ui` | `documents` |
 | 参考原图 | `docs/ui/references` | `references` |
 | 绘制程序版本 | `art/ui/programs` | `programs` |
-| Krita 源文件 | `art/ui/sources` | `sources` |
+| Krita 源文件与独立图像 | `art/ui/sources` | `sources` |
 
 创建时可通过 `paths` 局部覆盖这些目录，值必须是工程内的相对路径；完整映射写入 schema 3 项目状态。工程外的参考输入会复制到参考目录的 `<reference_id>/<原文件名>`。项目内文件引用以工程相对 POSIX 路径保存，工具返回用于读取和执行的绝对路径；程序元数据的 `source_path` 保持工程相对路径。
 
@@ -118,12 +125,15 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 需要比较配色、状态、尺寸或修改前后的效果时，用 `project_create_visual_check` 指定各个产物的成功运行 ID、标签、显示倍率和共同的纯色背景。用彩色总览和可选灰度图检查应共用的轮廓、留白以及各状态的辨识度。操作细节见[多产物视觉检查](docs/project-tools.md#多产物视觉检查)，共用参数的写法见[配色与状态变体示例](docs/drawing-programs.md#配色与状态变体示例)。
 
+制作 ICON 时使用宿主提供的图像生成或编辑能力，查看实际输出后将真实产物复制到业务工程，再通过 `project_register_image` 登记。生成和编辑来源必须如实提供实际工具名及提示词；已有图像可按 `imported` 登记描述，不补造提示词。登记候选不会自动选用，显式选用后才可用于组合。`project_create_composition` 只做固定坐标、纯色背景上的静态预览：图像在目标矩形内等比缩放并居中，组件与图像可以按原像素区域裁切，文字是使用真实 TTF/OTF 字体的单行文本。它不提供自动布局、九宫格、运行时交互或 Krita 位图图层导入。完整工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)。
+
 ## 当前绘制接口边界
 
 - `layers` 是计划中的节点 key 列表，可指定绘画图层、分组或透明度蒙版。工具比较上次计划，拒绝目标之外的变化。完整重画也要求当前画布及节点结构仍匹配；新尺寸或新结构暂用新的组件 ID。
 - 计划支持 `paintlayer`、`grouplayer`、`transparencymask`，不代表支持 Krita 的全部节点类型。计划与属性细节见[绘制程序约定](docs/drawing-programs.md)。
 - `line` 的起止坐标是整数像素，可分别指定起终点压力。`path` 支持直线、二次与三次贝塞尔曲线及闭合路径。路径绘制不保留自由手绘的逐点压力、倾角和时间信息。
 - 项目工具不自动识别艺术风格，不自动确认视觉质量，也不包含 Unity 导入。
+- SmartUI 不提供模型生图后端；图像生成和编辑由宿主工具完成。独立图像资产登记与静态坐标组合可用，但不会自动布局或导入为 Krita 位图图层。
 
 已有文档若已打开，直接检查；否则先打开源文件。批量执行不是事务：失败会停止，已执行操作和失败项的部分效果可能保留。超时后先检查请求结果与 Krita 现场，不自动重发修改请求。
 
@@ -154,6 +164,7 @@ plugin.json                    插件身份和显示信息
 mcp.json                       MCP 启动配置
 skills/krita-drawing/           Krita 制作、检查与修改工作流
 skills/reference-style/         参考分析与风格文档维护
+skills/icon-assets/             独立图像资产登记、版本选用与 UI 静态组合
 smartui_mcp/                    MCP 服务、项目存储与程序执行
 krita_plugin/                  Krita 内部扩展
 examples/drawing-programs/      绘制程序示例，安装包包含通用配色与状态示例
