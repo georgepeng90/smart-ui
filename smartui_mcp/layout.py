@@ -156,4 +156,9 @@ def map_state_paths(state, transform):
         fields(export["manifest"], ("path",))
         for item in export["items"]:
             fields(item["record"], ("path",))
+    for page in result.get("layouts", {}).values():
+        for version in page["versions"]:
+            for node in version["definition"]["nodes"]:
+                if node["kind"] == "text":
+                    fields(node, ("font_path",))
     return result

@@ -506,6 +506,50 @@ class ProjectStore:
                 raise ProjectError(f"组合图片已保留，但项目记录写入失败：{record['images']['overview']['path']}；{error}") from error
             return self._composition_result(updated, composition_id)
 
+    def save_layout(self, project_root: str, expected_revision: str, layout_id: str, name: str,
+                    width: int, height: int, background: str, nodes: list[dict]) -> dict:
+        """保存可更新页面定义；不生成图像、不改变资产选用或既有快照。"""
+        from .page_layouts import validate_definition, resolve_definition, definition_for_storage
+
+        _identifier(layout_id, "layout_id")
+        _text(name, "name")
+        root = self._root(project_root)
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            definition = validate_definition(width, height, background, nodes)
+            resolve_definition(state, definition)
+            digest = spec_sha256(definition_for_storage(definition, ProjectLayout(root, state["paths"])))
+            layouts = state.setdefault("layouts", {})
+            layout = layouts.get(layout_id)
+            if layout and layout["name"] == name and layout["versions"][-1]["definition_sha256"] == digest:
+                return self._layout_result(self._context(root, state, revision), layout_id, None)
+            if layout is None:
+                layout = {"id": layout_id, "name": name, "current_version": 0, "versions": []}
+                layouts[layout_id] = layout
+            version = layout["current_version"] + 1
+            layout.update(name=name, current_version=version)
+            layout["versions"].append({"version": version, "name": name, "definition": definition, "definition_sha256": digest,
+                                       "created_at": datetime.now(timezone.utc).isoformat()})
+            return self._layout_result(self._write(root, state), layout_id, version)
+
+    def get_layout(self, project_root: str, layout_id: str, version: int | None = None) -> dict:
+        _identifier(layout_id, "layout_id")
+        return self._layout_result(self.context(project_root), layout_id, version)
+
+    @staticmethod
+    def _layout_result(context, layout_id, version):
+        layout = context["data"].get("layouts", {}).get(layout_id)
+        if layout is None:
+            raise ProjectError(f"页面布局不存在：{layout_id}")
+        selected = layout["current_version"] if version is None else version
+        if type(selected) is not int or not 1 <= selected <= len(layout["versions"]):
+            raise ProjectError(f"页面布局版本不存在：{layout_id}/{selected}")
+        record = layout["versions"][selected - 1]
+        return {"project_root": context["project_root"], "revision": context["revision"],
+                "layout": {"id": layout_id, "current_version": layout["current_version"],
+                           **deepcopy(record)}}
+
     def get_composition(self, project_root: str, composition_id: str) -> dict:
         _identifier(composition_id, "composition_id")
         result = self._composition_result(self.context(project_root), composition_id)
@@ -668,7 +712,7 @@ class ProjectStore:
             layout = ProjectLayout(root, state["paths"])
             for key in layout.paths:
                 layout.directory(key)
-            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions", "exports"):
+            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions", "exports", "layouts"):
                 if field in state and not isinstance(state[field], dict):
                     raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
             for asset_id, asset in state.get("images", {}).items():
@@ -683,6 +727,18 @@ class ProjectStore:
                 selected = asset["selected_version"]
                 if selected is not None and (type(selected) is not int or not 1 <= selected <= len(asset["versions"])):
                     raise ProjectError(f"图像选用版本无效：{asset_id}/{selected}")
+            for layout_id, page in state.get("layouts", {}).items():
+                _identifier(layout_id, "layouts 标识")
+                if (not isinstance(page, dict) or page.get("id") != layout_id or
+                        not isinstance(page.get("versions"), list) or not page["versions"] or
+                        type(page.get("current_version")) is not int or page["current_version"] != len(page["versions"])):
+                    raise ProjectError(f"页面布局记录无效：{layout_id}")
+                _text(page.get("name"), f"layouts.{layout_id}.name")
+                for index, record in enumerate(page["versions"], 1):
+                    if (not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != index
+                            or record.get("definition_sha256") != spec_sha256(record.get("definition"))):
+                        raise ProjectError(f"页面布局版本或定义摘要无效：{layout_id}/{index}")
+                    _text(record.get("name"), f"layouts.{layout_id}.versions[{index}].name")
             hashes = state.get("document_hashes")
             if not isinstance(hashes, dict) or set(hashes) != {"style.md", "components.md"}:
                 raise ProjectError(f"项目缺少受管文档摘要：{path}")

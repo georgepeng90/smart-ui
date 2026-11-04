@@ -1,6 +1,6 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.7.0 提供二十三个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产、正式 PNG 导出和静态组合预览。具体画法属于项目程序。
+SmartUI Krita v0.7.0 提供二十五个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产、正式 PNG 导出、可更新页面布局和静态组合预览。具体画法属于项目程序。
 
 当前项目组件指关联绘制程序的 Krita 制作对象。ICON（图标）图像采用独立资产流程：生成和编辑由宿主图像工具完成，SmartUI 登记真实产物及来源，再以静态组合预览检查。SmartUI 不内置生图后端；不要将图像资产伪装成组件成功运行。`project_add_reference` 登记的是只读参考，不是生产资产导入。
 
@@ -29,6 +29,8 @@ SmartUI Krita v0.7.0 提供二十三个项目工具，与五个底层 `krita_*` 
 | `project_get_image` | `project_root: str, asset_id: str, version: int` | 校验并查看指定版本及真实来源 |
 | `project_export_assets` | `project_root: str, expected_revision: str, component_id: str, run_id: str, exports: list[dict]` | 从明确成功运行的区域批量导出正式 PNG，登记统一资产版本及清单 |
 | `project_get_export` | `project_root: str, export_id: str` | 校验历史清单与归档资产，不依赖生产路径仍为旧版本 |
+| `project_save_layout` | `project_root: str, expected_revision: str, layout_id: str, name: str, width: int, height: int, background: str, nodes: list[dict]` | 保存完整页面定义及修订，校验真实资产与字体，不生成图像 |
+| `project_get_layout` | `project_root: str, layout_id: str, version: int \| null = null` | 读取当前布局或明确的历史修订 |
 | `project_create_composition` | `project_root: str, expected_revision: str, width: int, height: int, background: str, nodes: list[dict]` | 创建固定坐标的静态组合预览并保存源裁切、字体及 PNG 快照 |
 | `project_get_composition` | `project_root: str, composition_id: str` | 校验并读取已保存的组合及来源快照 |
 | `project_record_feedback` | `project_root: str, expected_revision: str, comparison_id: str, observation: str, suggested_change: str, target_nodes: list[str] \| null = null, rule_ids: list[str] \| null = null, source: str = "model"` | 记录带稳定 ID 的偏差反馈 |
@@ -208,6 +210,26 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 重复导出相同来源和声明会复用最新资产版本及原文件字节；来源、几何或声明改变会保留新版本，即使像素相同。实际 PNG 字节相同时不重写生产文件。整批输入先完成校验再发布，磁盘发布失败会报告错误及恢复结果；项目记录写入失败时保留已发布文件和清单并明确指出，不盲目重试。
 
 每次导出返回 `export.id`、项目 `revision`、每项版本与复用情况，以及 `.smartui/exports/<id>/manifest.json` 的路径和摘要。清单中的文件路径相对工程，`project_get_export` 校验清单和归档资产后读取历史结果；生产路径后来更新不改变旧清单。保留 `.smartui/exports/`，它不是可丢弃缓存。项目上下文包含导出摘要，可从运行找到正式资产，也可从资产记录追溯来源。
+
+## 可更新的页面布局
+
+`project_save_layout` 使用稳定 `layout_id` 保存完整定义，变化时产生连续修订；相同名称和定义重复保存不增加修订。`project_get_layout` 返回 `layout.definition`、`layout.version`、摘要和当前修订号，指定 `version` 可读取历史定义。位置、文案变化只产生布局修订，不生成新图像版本，也不改变选用状态。保存目前只校验定义和输入，浏览器构建接口尚未接入。
+
+画布宽高为正整数，背景必填 `#RRGGBB`，节点为按叠放顺序排列的 1 至 512 项。节点 ID 在页面内唯一；坐标单位为参考画布像素，左上为原点。所有节点必填 `id`、`kind`、`x`、`y`、`width`、`height`，位置非负整数、尺寸正整数，布局主体必须位于画布内。图像主体之外的光晕由几何决定，页面渲染时按画布裁切。
+
+图像节点必填 `asset_id` 和 `binding`，例如：
+
+```json
+{"id":"confirm","kind":"image","asset_id":"primary-button","binding":{"kind":"fixed","version":1},"x":32,"y":100,"width":240,"height":48}
+```
+
+`binding` 必须为 `{"kind":"fixed","version":正整数}` 或 `{"kind":"selected"}`。固定绑定始终解析指定版本；选用绑定解析项目当前 `selected_version`，没有选用版时报错。保存时校验引用及目标伸缩尺寸，但不把选用绑定改成固定绑定。正式导出使用该版本的 `geometry`；没有几何声明的独立导入或生成图像明确按完整原图等比居中，不推断九宫格。
+
+文字节点额外必填 `text`、`font_path`、`font_size`、`line_height`、`align`、`wrap`、`overflow`、`color`。`font_path` 是真实 TTF/OTF 文件绝对路径；字号和行高为正整数像素，`align` 为 `left/center/right`，`wrap` 为布尔值，`overflow` 为显式的 `error/clip`。文字允许换行，不允许其他控制字符。`stroke_width` 可省略，表示无描边；`stroke_color` 可省略，表示黑色。文本框的物理溢出将在浏览器构建时校验。
+
+保存会校验字体和所需字符，并写入 `font_sha256`。读取定义、改位置后可保留该字段再次保存；字体内容改变时旧摘要会阻止误用，核对新字体后移除旧摘要再保存以绑定新内容。字体缺失、缺字、非法参数或来源摘要不符直接报错。工程内字体路径相对工程持久化，返回时恢复为绝对路径；工程外字体仍需在本机存在。
+
+`layouts` 是 schema 3 的可选状态字段，缺省表示尚无布局；历史修订保留定义和字体依据。布局尚不包含父子分组、自动布局、业务交互或 Unity 对象绑定。
 
 ## 独立图像资产与静态组合预览
 

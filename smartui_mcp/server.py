@@ -96,6 +96,8 @@ def _project_summary(context):
             "images": data.get("images", {}),
             "exports": {key: {field: value[field] for field in ("id", "source", "manifest", "created_at")}
                         for key, value in data.get("exports", {}).items()},
+            "layouts": {key: {field: value[field] for field in ("id", "name", "current_version")}
+                        for key, value in data.get("layouts", {}).items()},
             "compositions": {key: {field: value[field] for field in ("id", "width", "height", "background", "is_current", "created_at")}
                              | {"overview": value["images"]["overview"]}
                              for key, value in data.get("compositions", {}).items()}}
@@ -417,6 +419,19 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
         """校验并读取已有组合快照，源资产更新不改变原图；is_current 仅反映引用版本。"""
         result = await asyncio.to_thread(projects.get_composition, project_root, composition_id)
         return await asyncio.to_thread(_composition_content, result)
+
+    @server.tool()
+    async def project_save_layout(project_root: str, expected_revision: str, layout_id: StrictStr, name: StrictStr,
+                                  width: StrictInt, height: StrictInt, background: StrictStr,
+                                  nodes: list[dict[str, Any]]) -> Any:
+        """保存页面修订和固定/选用资产绑定；保留独立文本框，不绘制或重新生成资产。"""
+        return await asyncio.to_thread(projects.save_layout, project_root, expected_revision, layout_id, name,
+                                       width, height, background, nodes)
+
+    @server.tool()
+    async def project_get_layout(project_root: str, layout_id: StrictStr, version: StrictInt | None = None) -> Any:
+        """读取可修改的当前布局或明确的历史修订；省略 version 读取当前修订。"""
+        return await asyncio.to_thread(projects.get_layout, project_root, layout_id, version)
 
     @server.tool()
     async def project_record_feedback(project_root: str, expected_revision: str, comparison_id: str,

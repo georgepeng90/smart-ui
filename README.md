@@ -8,7 +8,7 @@ SmartUI Krita v0.7.0 通过 MCP（模型上下文协议）连接运行中的 Kri
 
 基础 UI 与 ICON（图标）图像采用独立制作流程。基础 UI 通过 Krita 制作；独立图像由宿主可用的生图或图像编辑工具生成，再复制到项目并登记真实来源信息。SmartUI 不内置生图后端，但已支持独立图像版本登记、选用、查看及基于固定坐标的静态 UI 组合预览。工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)，参数与边界见[项目工具说明](docs/project-tools.md#独立图像资产与静态组合预览)。
 
-用已有组件安排页面、移动实例或修改文案时，使用[页面组合 Skill](skills/page-composition/SKILL.md)。先查询并引用实际资产，组件外观变化才进入 Krita 制作；布局变化只创建新的组合。当前提供静态 PNG 快照，浏览器预览和可更新布局仍属于规划能力。
+用已有组件安排页面、移动实例或修改文案时，使用[页面组合 Skill](skills/page-composition/SKILL.md)。先查询并引用实际资产，组件外观变化才进入 Krita 制作。可更新布局已支持修订、固定或跟随选用的资产绑定及独立文本框；当前静态组合仍提供 PNG 快照，浏览器渲染尚未接入。
 
 项目以业务工程根目录中的 `.smartui/project.json` 为唯一结构化数据源，工具默认自动维护 `docs/ui/style.md` 和 `docs/ui/components.md`，不会静默覆盖手改文档。工具参数见[项目工具说明](docs/project-tools.md)，程序接口见[绘制程序约定](docs/drawing-programs.md)。参考分析使用 `reference-style` Skill，实际制作与原文件修改使用 `krita-drawing` Skill。
 
@@ -59,7 +59,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 `${PLUGIN_ROOT}` 由插件宿主展开。配置同时将工作目录和 `PYTHONPATH` 指向插件根目录。首次启动时 `uv` 根据 `uv.lock` 创建环境并安装运行依赖；`--locked` 检查锁文件一致性，`--no-dev` 排除开发依赖。手工排查时，在插件根目录执行 `uv run --locked --no-dev --project . python -m smartui_mcp`；服务通过标准输入输出传输 MCP 消息，不是交互式终端命令。
 
-工具共 28 个，包括五个底层 Krita 工具和二十三个项目工具。
+工具共 30 个，包括五个底层 Krita 工具和二十五个项目工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -87,6 +87,8 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 | `project_get_image` | 校验并查看指定图像版本、来源及当前选用版本 |
 | `project_export_assets` | 从明确组件运行的区域导出正式 PNG、伸缩元数据及清单，不改变选用状态 |
 | `project_get_export` | 校验并读取历史导出清单及归档资产 |
+| `project_save_layout` | 保存可更新页面定义、稳定实例、资产绑定与独立文本框 |
+| `project_get_layout` | 读取当前布局或指定历史修订 |
 | `project_create_composition` | 按明确坐标组合成功组件运行、图像版本和单行文字，保存静态快照 |
 | `project_get_composition` | 校验并读取已保存的静态组合及来源快照 |
 | `project_record_feedback` | 根据对照记录观察到的偏差及修改建议 |
