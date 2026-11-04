@@ -8,6 +8,8 @@ SmartUI Krita v0.7.0 通过 MCP（模型上下文协议）连接运行中的 Kri
 
 基础 UI 与 ICON（图标）图像采用独立制作流程。基础 UI 通过 Krita 制作；独立图像由宿主可用的生图或图像编辑工具生成，再复制到项目并登记真实来源信息。SmartUI 不内置生图后端，但已支持独立图像版本登记、选用、查看及基于固定坐标的静态 UI 组合预览。工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)，参数与边界见[项目工具说明](docs/project-tools.md#独立图像资产与静态组合预览)。
 
+用已有组件安排页面、移动实例或修改文案时，使用[页面组合 Skill](skills/page-composition/SKILL.md)。先查询并引用实际资产，组件外观变化才进入 Krita 制作；布局变化只创建新的组合。当前提供静态 PNG 快照，浏览器预览和可更新布局仍属于规划能力。
+
 项目以业务工程根目录中的 `.smartui/project.json` 为唯一结构化数据源，工具默认自动维护 `docs/ui/style.md` 和 `docs/ui/components.md`，不会静默覆盖手改文档。工具参数见[项目工具说明](docs/project-tools.md)，程序接口见[绘制程序约定](docs/drawing-programs.md)。参考分析使用 `reference-style` Skill，实际制作与原文件修改使用 `krita-drawing` Skill。
 
 ## 运行条件
@@ -125,7 +127,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 需要比较配色、状态、尺寸或修改前后的效果时，用 `project_create_visual_check` 指定各个产物的成功运行 ID、标签、显示倍率和共同的纯色背景。用彩色总览和可选灰度图检查应共用的轮廓、留白以及各状态的辨识度。操作细节见[多产物视觉检查](docs/project-tools.md#多产物视觉检查)，共用参数的写法见[配色与状态变体示例](docs/drawing-programs.md#配色与状态变体示例)。
 
-制作 ICON 时使用宿主提供的图像生成或编辑能力，查看实际输出后将真实产物复制到业务工程，再通过 `project_register_image` 登记。生成和编辑来源必须如实提供实际工具名及提示词；已有图像可按 `imported` 登记描述，不补造提示词。登记候选不会自动选用，显式选用后才可用于组合。`project_create_composition` 只做固定坐标、纯色背景上的静态预览：图像在目标矩形内等比缩放并居中，组件与图像可以按原像素区域裁切，文字是使用真实 TTF/OTF 字体的单行文本。它不提供自动布局、九宫格、运行时交互或 Krita 位图图层导入。完整工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)。
+制作 ICON 时使用宿主提供的图像生成或编辑能力，查看实际输出后将真实产物复制到业务工程，再通过 `project_register_image` 登记。生成和编辑来源必须如实提供实际工具名及提示词；已有图像可按 `imported` 登记描述，不补造提示词。登记候选不会自动选用，组合可以引用任意明确的登记版本；需要改变项目选用版本时，单独调用 `project_select_image`。`project_create_composition` 只做固定坐标、纯色背景上的静态预览：图像在目标矩形内等比缩放并居中，组件与图像可以按原像素区域裁切，文字是使用真实 TTF/OTF 字体的单行文本。它不提供自动布局、九宫格、运行时交互或 Krita 位图图层导入。完整工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)和[页面组合 Skill](skills/page-composition/SKILL.md)。
 
 ## 当前绘制接口边界
 
@@ -165,6 +167,7 @@ mcp.json                       MCP 启动配置
 skills/krita-drawing/           Krita 制作、检查与修改工作流
 skills/reference-style/         参考分析与风格文档维护
 skills/icon-assets/             独立图像资产登记、版本选用与 UI 静态组合
+skills/page-composition/        已有资产的页面排版、修改路由与静态组合
 smartui_mcp/                    MCP 服务、项目存储与程序执行
 krita_plugin/                  Krita 内部扩展
 examples/drawing-programs/      绘制程序示例，安装包包含通用配色与状态示例

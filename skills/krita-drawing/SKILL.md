@@ -1,11 +1,13 @@
 ---
 name: krita-drawing
-description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编辑 .kra、检查保存重开结果并原位修改选定节点；也可用底层笔刷和图层工具执行明确操作。用于 Krita 本地制作与源文件编辑，不承担 ICON 的模型生图。
+description: 使用本机 Krita 执行项目 Python 绘制程序，生成可编辑 .kra、检查保存重开结果并原位修改选定节点；也可用底层笔刷和图层工具执行明确操作。用于组件制作与源文件编辑；已有资产的页面排版使用 page-composition，ICON 模型生图使用 icon-assets。
 ---
 
 # 在 Krita 中制作与修改项目组件
 
 项目程序定义具体画法，通用工具负责计划校验、Krita 执行和证据记录。工具参数见[项目工具说明](../../docs/project-tools.md)；编写或修改程序时读[绘制程序约定](../../docs/drawing-programs.md)。参考分析与规则提取使用相邻的 [reference-style Skill](../reference-style/SKILL.md)，按当前项目的参考和需求确定画法。
+
+任务只是把已有组件排成页面、移动实例或修改文案时，使用 [page-composition Skill](../page-composition/SKILL.md)。先查询可复用资产，不因需要一张完整页面而重绘基础 UI；只有外观或所需状态确实变化时，才进入本制作流程。
 
 ## 基础 UI 与 ICON 的制作边界
 

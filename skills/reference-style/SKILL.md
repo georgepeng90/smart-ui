@@ -7,6 +7,8 @@ description: 查看项目视觉参考，区分可见特征与制作假设，归�
 
 用 SmartUI 项目 MCP 工具保存参考依据与风格，而不是只在聊天中留下结论。调用参数见[项目工具说明](../../docs/project-tools.md)。编写项目绘制程序时读[程序约定](../../docs/drawing-programs.md)；实际 Krita 制作与修改使用 [krita-drawing Skill](../krita-drawing/SKILL.md)。
 
+已有资产的页面排版使用 [page-composition Skill](../page-composition/SKILL.md)。反馈先定位到组件外观或状态、资产导出、页面布局、文字或运行时适配；布局变化不触发基础组件重绘。
+
 ## 看图与记录依据
 
 `project_root` 是业务工程根目录的绝对路径。创建时可通过 `paths` 局部指定工程内相对目录，默认文档为 `docs/ui`、参考为 `docs/ui/references`、程序为 `art/ui/programs`、源文件为 `art/ui/sources`。工程外参考登记时会复制入参考目录。状态中的工程内文件引用保存为工程相对 POSIX 路径。保留 `.smartui` 状态和制作记录，缓存、锁及临时文件按生成的忽略规则处理。需要导入数据目录时，按[数据导入与目录迁移](../../docs/project-tools.md#数据导入与目录迁移)先预检，再显式执行。
