@@ -2,13 +2,13 @@
 
 完整目标、阶段安排和验收标准见[通用游戏 UI 制作工具链总体规划](docs/toolchain-roadmap.md)。本页说明当前已实现能力和使用方法；总体规划中的后续能力不代表已经实现。
 
-SmartUI Krita v0.7.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可保存参考与实际绘制结果的对照，记录和复查偏差，也可检查多份实际产物，并登记独立图像版本、明确选用版本及创建静态 UI 组合预览。
+SmartUI Krita v0.8.0 通过 MCP（模型上下文协议）连接运行中的 Krita，登记参考图，保存项目风格、Python 绘制程序和组件规格，生成可编辑 `.kra`，并在同一源文件中更新选定图层。项目可对照参考、记录偏差、导出正式 PNG 并维护图像版本；页面组合复用这些资产，支持九宫格、独立文字、可更新布局、浏览器预览及同页 PNG 截图。
 
 绘制程序属于项目，由模型根据参考与当前需求编写。通用工具只执行和验证绘制计划，图层数量、名称、几何、材质和绘制步骤由项目程序决定。参考工具提供裁切和取色，模型负责查看图片、归纳依据和校准参数；技术检查通过后仍需查看预览并验收视觉效果。
 
 基础 UI 与 ICON（图标）图像采用独立制作流程。基础 UI 通过 Krita 制作；独立图像由宿主可用的生图或图像编辑工具生成，再复制到项目并登记真实来源信息。SmartUI 不内置生图后端，但已支持独立图像版本登记、选用、查看及基于固定坐标的静态 UI 组合预览。工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)，参数与边界见[项目工具说明](docs/project-tools.md#独立图像资产与静态组合预览)。
 
-用已有组件安排页面、移动实例或修改文案时，使用[页面组合 Skill](skills/page-composition/SKILL.md)。先查询并引用实际资产，组件外观变化才进入 Krita 制作。可更新布局已支持修订、固定或跟随选用的资产绑定及独立文本框；当前静态组合仍提供 PNG 快照，浏览器渲染尚未接入。
+用已有组件安排页面、移动实例或修改文案时，使用[页面组合 Skill](skills/page-composition/SKILL.md)。先查询并引用实际资产，组件外观变化才进入 Krita 制作。AI 修改布局定义，用户在浏览器查看效果；布局支持修订、固定或跟随选用的资产绑定及独立文本框。每次构建保留可离线打开的 HTML、同页 PNG、字体与图像快照。
 
 项目以业务工程根目录中的 `.smartui/project.json` 为唯一结构化数据源，工具默认自动维护 `docs/ui/style.md` 和 `docs/ui/components.md`，不会静默覆盖手改文档。工具参数见[项目工具说明](docs/project-tools.md)，程序接口见[绘制程序约定](docs/drawing-programs.md)。参考分析使用 `reference-style` Skill，实际制作与原文件修改使用 `krita-drawing` Skill。
 
@@ -16,10 +16,18 @@ SmartUI Krita v0.7.0 通过 MCP（模型上下文协议）连接运行中的 Kri
 
 - Windows、Krita 5.3.4.1 及可用的 Python 插件支持。
 - Python 3.12 或更高版本，以及 PATH 中可执行的 `uv`。
-- MCP 服务运行依赖包含 Pillow，用于读取参考图、生成预览和取色；fontTools 用于检查组合文字所需的字体字符；均由 `uv.lock` 安装。
+- MCP 服务运行依赖包含 Pillow、fontTools 和 Playwright，由 `uv.lock` 安装。浏览器预览还需要安装与当前 Playwright 匹配的 Chromium。
 - 支持本地 stdio MCP 的 Codex 桌面端或 CLI。该插件依赖本机 GUI，不能直接在纯网页运行环境中控制 Krita。
 
 Krita 和 Python 的安装路径由本机环境决定，`uv` 根据项目要求选择 Python。
+
+在实际运行的插件根目录安装浏览器：
+
+```powershell
+uv run --locked --no-dev --project . python -m playwright install chromium
+```
+
+浏览器缺失或启动失败会明确报错，不自动下载或换用其他渲染器。页面预览不要求 Krita 正在运行；它只读取已经保存的资产。
 
 ## 启用 Krita 扩展
 
@@ -59,7 +67,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 `${PLUGIN_ROOT}` 由插件宿主展开。配置同时将工作目录和 `PYTHONPATH` 指向插件根目录。首次启动时 `uv` 根据 `uv.lock` 创建环境并安装运行依赖；`--locked` 检查锁文件一致性，`--no-dev` 排除开发依赖。手工排查时，在插件根目录执行 `uv run --locked --no-dev --project . python -m smartui_mcp`；服务通过标准输入输出传输 MCP 消息，不是交互式终端命令。
 
-工具共 30 个，包括五个底层 Krita 工具和二十五个项目工具。
+工具共 32 个，包括五个底层 Krita 工具和二十七个项目工具。
 
 | 工具 | 用途 |
 | --- | --- |
@@ -89,6 +97,8 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 | `project_get_export` | 校验并读取历史导出清单及归档资产 |
 | `project_save_layout` | 保存可更新页面定义、稳定实例、资产绑定与独立文本框 |
 | `project_get_layout` | 读取当前布局或指定历史修订 |
+| `project_build_layout` | 解析绑定，构建离线 HTML、同页 PNG 与独立资源快照 |
+| `project_get_page_build` | 校验并读取构建，分别报告布局修订与选用资产是否仍匹配 |
 | `project_create_composition` | 按明确坐标组合成功组件运行、图像版本和单行文字，保存静态快照 |
 | `project_get_composition` | 校验并读取已保存的静态组合及来源快照 |
 | `project_record_feedback` | 根据对照记录观察到的偏差及修改建议 |
@@ -107,7 +117,7 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 创建时可通过 `paths` 局部覆盖这些目录，值必须是工程内的相对路径；完整映射写入 schema 3 项目状态。工程外的参考输入会复制到参考目录的 `<reference_id>/<原文件名>`。项目内文件引用以工程相对 POSIX 路径保存，工具返回用于读取和执行的绝对路径；程序元数据的 `source_path` 保持工程相对路径。
 
-创建项目时，工具在 `.smartui/.gitignore` 中按子项忽略 `cache/` 和临时锁 `project.lock`。项目状态及 `.smartui/runs/`、`.smartui/comparisons/`、`.smartui/visual-checks/` 是需要保留的制作记录，不应整体忽略 `.smartui/`。受管文档的链接相对于文档目录生成。
+创建项目时，工具在 `.smartui/.gitignore` 中按子项忽略 `cache/` 和临时锁 `project.lock`。项目状态及 `.smartui/runs/`、`.smartui/comparisons/`、`.smartui/visual-checks/`、`.smartui/exports/`、`.smartui/page-builds/` 是需要保留的制作记录，不应整体忽略 `.smartui/`。受管文档的链接相对于文档目录生成。
 
 需要导入已有数据目录时，使用[数据导入与目录迁移](docs/project-tools.md#数据导入与目录迁移)中的脚本，先预检，再显式执行。迁移的目标是业务工程根目录。
 
@@ -133,7 +143,18 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 
 制作 ICON 时使用宿主提供的图像生成或编辑能力，查看实际输出后将真实产物复制到业务工程，再通过 `project_register_image` 登记。生成和编辑来源必须如实提供实际工具名及提示词；已有图像可按 `imported` 登记描述，不补造提示词。登记候选不会自动选用，组合可以引用任意明确的登记版本；需要改变项目选用版本时，单独调用 `project_select_image`。`project_create_composition` 只做固定坐标、纯色背景上的静态预览：图像在目标矩形内等比缩放并居中，组件与图像可以按原像素区域裁切，文字是使用真实 TTF/OTF 字体的单行文本。它不提供自动布局、九宫格、运行时交互或 Krita 位图图层导入。完整工作流见[ICON 资产 Skill](skills/icon-assets/SKILL.md)和[页面组合 Skill](skills/page-composition/SKILL.md)。
 
-## 当前绘制接口边界
+## 页面组合与组件制作
+
+### 使用已有资产组合页面
+
+1. 用 `project_export_assets` 导出无文案的组件 PNG，或用 `project_register_image` 登记独立图像。
+2. 用 `project_save_layout` 保存页面定义。图像引用 `asset_id`，明确选择固定版本或跟随选用；文字保留为独立文本框，指定真实字体、行高、对齐、换行和溢出规则。
+3. 用 `project_build_layout` 生成 HTML 和 PNG，打开返回的 HTML 检查实际效果。两者来自同一浏览器页面，九宫格使用正式资产记录的内容区域与固定边。
+4. 修改位置或文案后保存并重建；资产选用变化仅在下次构建时解析，历史快照始终保留。用 `project_get_page_build` 校验并读取历史结果。
+
+完整字段与边界见[页面布局与浏览器构建](docs/project-tools.md#可更新的页面布局)。当前没有拖拽编辑、父子分组、自动布局、业务交互或 Unity 渲染一致性保证。
+
+### 组件制作与导出
 
 交付组件 PNG 时，使用 `project_export_assets` 明确指定来源运行、导出区域、状态、用途、生产路径和几何声明。导出沿用图像资产身份和版本，重复相同输入不重写生产文件；源文件或已受管输出被外部修改时明确报错。区域导出不能自动去除已烘焙的文字，不处理 Unity 导入设置。参数见[正式 PNG 导出](docs/project-tools.md#正式-png-导出)。
 
@@ -152,6 +173,14 @@ uv run --locked --no-dev --project ${PLUGIN_ROOT} python -m smartui_mcp
 ```powershell
 uv run --locked python -m pytest -q
 ```
+
+测试包含真实 Chromium 渲染，运行前需执行上述浏览器安装命令。测试字体由用例生成；完整中文字体与页面工作流可使用本机真实 TTF/OTF 额外验证：
+
+```powershell
+uv run --locked python -X utf8 scripts/verify_page_workflow.py --output-root <新的绝对目录> --font-path <真实字体绝对路径>
+```
+
+该脚本用明确标记的模拟组件来源验证正式导出、选用绑定、九宫格、中文文本框、页面重建和历史快照，生成报告、HTML 与 PNG；它不替代 Krita 实际绘制验收或用户美术确认。
 
 验证原生笔刷、图层、蒙版和源文件保存重开时，先启用扩展并启动 Krita，再在源码根目录运行：
 

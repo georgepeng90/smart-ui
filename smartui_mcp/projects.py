@@ -537,6 +537,55 @@ class ProjectStore:
         _identifier(layout_id, "layout_id")
         return self._layout_result(self.context(project_root), layout_id, version)
 
+    def build_layout(self, project_root: str, expected_revision: str, layout_id: str,
+                     version: int | None = None) -> dict:
+        """用明确布局修订构建新的浏览器快照，不覆盖历史构建。"""
+        from .page_builds import build_page
+
+        _identifier(layout_id, "layout_id")
+        root = self._root(project_root)
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            page = self._layout_result(self._context(root, state, revision), layout_id, version)["layout"]
+            build_id = f"page-{uuid4().hex[:12]}"
+            record = build_page(root, build_id, layout_id, page["version"], page["definition"], state)
+            record.update(layout_definition_sha256=page["definition_sha256"],
+                          created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
+            state.setdefault("page_builds", {})[build_id] = record
+            try:
+                updated = self._write(root, state)
+            except ProjectError as error:
+                raise ProjectError(f"页面快照已保留，但项目记录写入失败：{record['files']['html']['path']}；{error}") from error
+            return self._page_build_result(updated, build_id)
+
+    def get_page_build(self, project_root: str, build_id: str) -> dict:
+        """读取已保存构建，只依赖快照，不要求原始图像和字体继续存在。"""
+        from .page_builds import verify_build
+
+        _identifier(build_id, "build_id")
+        context = self.context(project_root)
+        record = context["data"].get("page_builds", {}).get(build_id)
+        if record is None:
+            raise ProjectError(f"页面构建不存在：{build_id}")
+        verify_build(record)
+        return self._page_build_result(context, build_id)
+
+    @staticmethod
+    def _page_build_result(context, build_id):
+        state = context["data"]
+        record = state.get("page_builds", {}).get(build_id)
+        if record is None:
+            raise ProjectError(f"页面构建不存在：{build_id}")
+        layout = state["layouts"][record["layout_id"]]
+        matches_bindings = all(
+            node["binding"]["kind"] == "fixed" or
+            state["images"][node["asset_id"]]["selected_version"] == node["version"]
+            for node in record["nodes"] if node["kind"] == "image")
+        return {"project_root": context["project_root"], "revision": context["revision"],
+                "page_build": deepcopy(record), "matches_layout": layout["current_version"] == record["layout_version"],
+                "matches_bindings": matches_bindings}
+
     @staticmethod
     def _layout_result(context, layout_id, version):
         layout = context["data"].get("layouts", {}).get(layout_id)
@@ -712,7 +761,7 @@ class ProjectStore:
             layout = ProjectLayout(root, state["paths"])
             for key in layout.paths:
                 layout.directory(key)
-            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions", "exports", "layouts"):
+            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions", "exports", "layouts", "page_builds"):
                 if field in state and not isinstance(state[field], dict):
                     raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
             for asset_id, asset in state.get("images", {}).items():
@@ -739,6 +788,17 @@ class ProjectStore:
                             or record.get("definition_sha256") != spec_sha256(record.get("definition"))):
                         raise ProjectError(f"页面布局版本或定义摘要无效：{layout_id}/{index}")
                     _text(record.get("name"), f"layouts.{layout_id}.versions[{index}].name")
+            for build_id, build in state.get("page_builds", {}).items():
+                _identifier(build_id, "page_builds 标识")
+                if not isinstance(build, dict) or build.get("id") != build_id:
+                    raise ProjectError(f"页面构建记录无效：{build_id}")
+                page = state.get("layouts", {}).get(build.get("layout_id"))
+                version = build.get("layout_version")
+                if (page is None or type(version) is not int or not 1 <= version <= len(page["versions"]) or
+                        build.get("layout_definition_sha256") != page["versions"][version - 1]["definition_sha256"]):
+                    raise ProjectError(f"页面构建引用的布局修订或摘要无效：{build_id}")
+                from .page_builds import validate_build_record
+                validate_build_record(build)
             hashes = state.get("document_hashes")
             if not isinstance(hashes, dict) or set(hashes) != {"style.md", "components.md"}:
                 raise ProjectError(f"项目缺少受管文档摘要：{path}")

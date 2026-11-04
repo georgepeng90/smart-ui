@@ -161,4 +161,9 @@ def map_state_paths(state, transform):
             for node in version["definition"]["nodes"]:
                 if node["kind"] == "text":
                     fields(node, ("font_path",))
+    for build in result.get("page_builds", {}).values():
+        for node in build["nodes"]:
+            fields(node, ("source", "font_path"))
+        for item in build["files"].values():
+            fields(item, ("path",))
     return result

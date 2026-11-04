@@ -1,6 +1,6 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.7.0 提供二十五个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产、正式 PNG 导出、可更新页面布局和静态组合预览。具体画法属于项目程序。
+SmartUI Krita v0.8.0 提供二十七个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产、正式 PNG 导出、可更新页面布局、浏览器构建和静态组合预览。具体画法属于项目程序。
 
 当前项目组件指关联绘制程序的 Krita 制作对象。ICON（图标）图像采用独立资产流程：生成和编辑由宿主图像工具完成，SmartUI 登记真实产物及来源，再以静态组合预览检查。SmartUI 不内置生图后端；不要将图像资产伪装成组件成功运行。`project_add_reference` 登记的是只读参考，不是生产资产导入。
 
@@ -31,6 +31,8 @@ SmartUI Krita v0.7.0 提供二十五个项目工具，与五个底层 `krita_*` 
 | `project_get_export` | `project_root: str, export_id: str` | 校验历史清单与归档资产，不依赖生产路径仍为旧版本 |
 | `project_save_layout` | `project_root: str, expected_revision: str, layout_id: str, name: str, width: int, height: int, background: str, nodes: list[dict]` | 保存完整页面定义及修订，校验真实资产与字体，不生成图像 |
 | `project_get_layout` | `project_root: str, layout_id: str, version: int \| null = null` | 读取当前布局或明确的历史修订 |
+| `project_build_layout` | `project_root: str, expected_revision: str, layout_id: str, version: int \| null = null` | 构建不可变浏览器快照，返回离线 HTML、同页 PNG 和资源证据 |
+| `project_get_page_build` | `project_root: str, build_id: str` | 校验历史构建，返回 JSON、PNG 与两种匹配状态 |
 | `project_create_composition` | `project_root: str, expected_revision: str, width: int, height: int, background: str, nodes: list[dict]` | 创建固定坐标的静态组合预览并保存源裁切、字体及 PNG 快照 |
 | `project_get_composition` | `project_root: str, composition_id: str` | 校验并读取已保存的组合及来源快照 |
 | `project_record_feedback` | `project_root: str, expected_revision: str, comparison_id: str, observation: str, suggested_change: str, target_nodes: list[str] \| null = null, rule_ids: list[str] \| null = null, source: str = "model"` | 记录带稳定 ID 的偏差反馈 |
@@ -213,7 +215,7 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 
 ## 可更新的页面布局
 
-`project_save_layout` 使用稳定 `layout_id` 保存完整定义，变化时产生连续修订；相同名称和定义重复保存不增加修订。`project_get_layout` 返回 `layout.definition`、`layout.version`、摘要和当前修订号，指定 `version` 可读取历史定义。位置、文案变化只产生布局修订，不生成新图像版本，也不改变选用状态。保存目前只校验定义和输入，浏览器构建接口尚未接入。
+`project_save_layout` 使用稳定 `layout_id` 保存完整定义，变化时产生连续修订；相同名称和定义重复保存不增加修订。`project_get_layout` 返回 `layout.definition`、`layout.version`、摘要和当前修订号，指定 `version` 可读取历史定义。位置、文案变化只产生布局修订，不生成新图像版本，也不改变选用状态。保存校验定义和输入；浏览器排版及物理溢出在构建时检查。
 
 画布宽高为正整数，背景必填 `#RRGGBB`，节点为按叠放顺序排列的 1 至 512 项。节点 ID 在页面内唯一；坐标单位为参考画布像素，左上为原点。所有节点必填 `id`、`kind`、`x`、`y`、`width`、`height`，位置非负整数、尺寸正整数，布局主体必须位于画布内。图像主体之外的光晕由几何决定，页面渲染时按画布裁切。
 
@@ -230,6 +232,23 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 保存会校验字体和所需字符，并写入 `font_sha256`。读取定义、改位置后可保留该字段再次保存；字体内容改变时旧摘要会阻止误用，核对新字体后移除旧摘要再保存以绑定新内容。字体缺失、缺字、非法参数或来源摘要不符直接报错。工程内字体路径相对工程持久化，返回时恢复为绝对路径；工程外字体仍需在本机存在。
 
 `layouts` 是 schema 3 的可选状态字段，缺省表示尚无布局；历史修订保留定义和字体依据。布局尚不包含父子分组、自动布局、业务交互或 Unity 对象绑定。
+
+### 浏览器构建与历史快照
+
+`project_build_layout(project_root, expected_revision, layout_id, version=None)` 构建指定修订；省略 `version` 使用当前修订。每次调用创建新构建，不覆盖旧结果。返回 JSON 和实际 PNG，JSON 包含 `page_build.id`、布局修订及摘要、解析后的图像版本和几何、`files`、`renderer` 与新 `revision`。
+
+`files.html.path` 是可离线打开的 `preview.html`，支持查看和缩放；`files.overview.path` 是同一 HTML 在 Chromium 中的 PNG 截图，采用参考画布尺寸及设备像素比 1。图像和字体内嵌在 HTML 中，无网络请求；图片切片由共用几何生成，分别裁片后缩放，防止相邻切片串色。文字通过浏览器独立排版，等待字体与图片加载完成后截图，不另用 Pillow 排字。`overflow: error` 在超出文本框时中止构建；`clip` 明确裁切并在测量证据中标记溢出，不自动缩小字号。浏览器版本、用户代理、实际像素比、字体摘要和节点测量保存在 `renderer`。
+
+构建保存在 `.smartui/page-builds/<build_id>/`：HTML、PNG、解析后的 `inputs.json` 及图像/字体文件都有 SHA-256。相同资源在文件快照中复用。`inputs.json` 仅使用同目录资源名，项目状态使用工程相对路径，项目整体移动后可以恢复读取。独立 HTML 可以单独复制查看；不同系统或浏览器的重绘可能存在字体栅格化差异，已保存 PNG 才是该次 Chromium 的实际输出。
+
+`project_get_page_build(project_root, build_id)` 校验全部快照并返回 JSON 和 PNG；原图和原字体被删除不影响历史读取。资产或字体在构建前缺失、改变或无法加载会明确失败，失败不会保存成功构建。首次使用需按 README 安装 Chromium。快照是制作证据，不能当成临时缓存删除。
+
+读取结果把两种状态分别报告，均不代表视觉或用户确认：
+
+- `matches_layout`：构建使用的布局修订仍是当前修订。布局位置、文字或名称更新后为 false。
+- `matches_bindings`：此构建的所有选用绑定仍对应当前 `selected_version`；固定绑定不受选用变化影响。修改选用不会改写快照，需显式重建。
+
+`page_builds` 是 schema 3 的可选状态字段；`project_context` 返回布局和构建摘要。浏览器预览没有拖拽编辑、自动刷新或自动重建，不代表 Unity 的运行态渲染结果。
 
 ## 独立图像资产与静态组合预览
 

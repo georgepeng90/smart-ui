@@ -98,6 +98,9 @@ def _project_summary(context):
                         for key, value in data.get("exports", {}).items()},
             "layouts": {key: {field: value[field] for field in ("id", "name", "current_version")}
                         for key, value in data.get("layouts", {}).items()},
+            "page_builds": {key: {field: value[field] for field in ("id", "layout_id", "layout_version", "created_at")}
+                            | {"html": value["files"]["html"], "overview": value["files"]["overview"]}
+                            for key, value in data.get("page_builds", {}).items()},
             "compositions": {key: {field: value[field] for field in ("id", "width", "height", "background", "is_current", "created_at")}
                              | {"overview": value["images"]["overview"]}
                              for key, value in data.get("compositions", {}).items()}}
@@ -432,6 +435,21 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
     async def project_get_layout(project_root: str, layout_id: StrictStr, version: StrictInt | None = None) -> Any:
         """读取可修改的当前布局或明确的历史修订；省略 version 读取当前修订。"""
         return await asyncio.to_thread(projects.get_layout, project_root, layout_id, version)
+
+    @server.tool(structured_output=False)
+    async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr,
+                                   version: StrictInt | None = None) -> list[Any]:
+        """构建独立离线 HTML 和同页 Chromium PNG；明确解析选用版本，保留历史快照及字体证据。"""
+        result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id, version)
+        return [json.dumps(result, ensure_ascii=False),
+                await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
+
+    @server.tool(structured_output=False)
+    async def project_get_page_build(project_root: str, build_id: StrictStr) -> list[Any]:
+        """读取并校验独立页面快照；分别返回布局修订和选用资产是否匹配当前状态。"""
+        result = await asyncio.to_thread(projects.get_page_build, project_root, build_id)
+        return [json.dumps(result, ensure_ascii=False),
+                await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
 
     @server.tool()
     async def project_record_feedback(project_root: str, expected_revision: str, comparison_id: str,
