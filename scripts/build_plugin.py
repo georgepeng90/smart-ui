@@ -16,9 +16,9 @@ def main():
     target.mkdir(parents=True)
     files = ["plugin.json", "mcp.json", "pyproject.toml", "uv.lock", "README.md",
              "docs/photocraft-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
-             "docs/toolchain-roadmap.md", "docs/style-reproduction-validation.md", "docs/asset-geometry.md",
+             "docs/toolchain-roadmap.md", "docs/typography-plan.md", "docs/style-reproduction-validation.md", "docs/asset-geometry.md",
              "examples/drawing-programs/semantic_palette.py",
-             "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py"]
+             "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py", "scripts/adopt_typography.py"]
     for directory in ("smartui_mcp",):
         files += [str(p.relative_to(root)) for p in (root / directory).rglob("*.py")]
     files += [str(p.relative_to(root)) for p in (root / "skills").rglob("*.md")]

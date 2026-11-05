@@ -45,23 +45,26 @@ def image_node(tmp_path):
 @pytest.fixture
 def text_node(tmp_path):
     # 合成字体覆盖用例文本，只验证字体加载和浏览器排版，不代表中文美术效果。
-    characters = sorted(set("中文 A</script><script>window.injected=1</script>&\u2028"))
+    characters = sorted(set("中文 AJ</script><script>window.injected=1</script>&\u2028"))
     names = {character: f"uni{ord(character):04X}" for character in characters}
     builder = FontBuilder(1000, isTTF=True)
     builder.setupGlyphOrder([".notdef", *names.values()])
     builder.setupCharacterMap({ord(character): name for character, name in names.items()})
     glyphs = {}
+    metrics = {}
     for name in [".notdef", *names.values()]:
         pen = TTGlyphPen(None)
+        bearing = -160 if name == names["J"] else 80
         if name not in (".notdef", names[" "]):
-            pen.moveTo((80, 0))
+            pen.moveTo((bearing, 0))
             pen.lineTo((520, 0))
             pen.lineTo((520, 700))
-            pen.lineTo((80, 700))
+            pen.lineTo((bearing, 700))
             pen.closePath()
         glyphs[name] = pen.glyph()
+        metrics[name] = (600, bearing)
     builder.setupGlyf(glyphs)
-    builder.setupHorizontalMetrics({name: (600, 80) for name in glyphs})
+    builder.setupHorizontalMetrics(metrics)
     builder.setupHorizontalHeader(ascent=800, descent=-200)
     builder.setupNameTable({"familyName": "BrowserPreviewTest", "styleName": "Regular",
                             "uniqueFontIdentifier": "BrowserPreviewTest", "fullName": "BrowserPreviewTest",
@@ -72,8 +75,8 @@ def text_node(tmp_path):
     builder.save(font)
     return {"id": "中文文案", "kind": "text", "x": 20, "y": 30, "width": 200, "height": 80,
             "text": "中文 A", "font_path": str(font), "font_sha256": _sha(font),
-            "font_size": 20, "line_height": 28, "align": "left", "wrap": True,
-            "overflow": "error", "color": "#FFFFFF", "stroke_width": 0, "stroke_color": "#000000"}
+            "font_size": 20, "line_height": 28, "letter_spacing": 0, "align": "left", "wrap": True,
+            "overflow": "error", "fill": {"color": "#FFFFFF", "opacity": 1}, "stroke": None, "shadow": None}
 
 
 def test_nine_slice_corners_offsets_and_browser_evidence(tmp_path, page, image_node):
@@ -206,14 +209,14 @@ def test_wrap_and_alignment_are_browser_layout(tmp_path, page, text_node):
 @pytest.mark.parametrize("align", ["left", "center", "right"])
 def test_text_alignment_reserves_space_for_the_complete_stroke(tmp_path, page, text_node, align):
     text_node.update(align=align, width=80, height=36, wrap=False,
-                     stroke_width=6, stroke_color="#FF0000")
+                     stroke={"width": 6, "color": "#FF0000", "opacity": 1})
     page["nodes"] = [text_node]
     result = render_page(tmp_path / "render", page)
     measure = result["renderer"]["nodes"][0]
     box, content = measure["box"], measure["content_box"]
     assert box == [text_node[key] for key in ("x", "y", "width", "height")]
     assert measure["overflow"] is False
-    half_stroke = text_node["stroke_width"] / 2
+    half_stroke = text_node["stroke"]["width"] / 2
     assert content[0] - half_stroke >= box[0] - 0.02
     assert content[0] + content[2] + half_stroke <= box[0] + box[2] + 0.02
     if align == "left":
@@ -228,7 +231,8 @@ def test_text_alignment_reserves_space_for_the_complete_stroke(tmp_path, page, t
 
 
 def test_stroked_text_wraps_within_the_inner_box_and_still_rejects_real_overflow(tmp_path, page, text_node):
-    text_node.update(text="A A", width=37, height=64, stroke_width=4, wrap=True)
+    text_node.update(text="A A", width=37, height=64, wrap=True,
+                     stroke={"width": 4, "color": "#000000", "opacity": 1})
     page["nodes"] = [text_node]
     result = render_page(tmp_path / "wrapped", page)
     measure = result["renderer"]["nodes"][0]
@@ -240,6 +244,147 @@ def test_stroked_text_wraps_within_the_inner_box_and_still_rejects_real_overflow
     text_node.update(text="中文 A", width=48, height=36, wrap=False)
     with pytest.raises(ValueError, match="中文文案.*超出文本框"):
         render_page(tmp_path / "too-narrow", page)
+
+
+@pytest.mark.parametrize(("align", "dx", "dy"), [("left", 17, 12), ("center", -17, -12), ("right", -17, 12)])
+def test_text_effect_colors_opacity_and_asymmetric_alignment(tmp_path, page, text_node, align, dx, dy):
+    text_node.update(text="A", width=76, height=65, font_size=28, line_height=35, align=align, wrap=False,
+                     fill={"color": "#00FF00", "opacity": 0.5},
+                     stroke={"width": 4, "color": "#FF0000", "opacity": 0.6},
+                     shadow={"offset_x": dx, "offset_y": dy, "blur": 0, "color": "#0000FF", "opacity": 0.4})
+    page.update(background="transparent", nodes=[text_node])
+    result = render_page(tmp_path / "render", page)
+    measure = result["renderer"]["nodes"][0]
+    insets = measure["effect_insets"]
+    assert insets == {"left": max(2, -dx), "right": max(2, dx),
+                      "top": max(2, -dy), "bottom": max(2, dy)}
+    x, y, width, height = measure["box"]
+    left, _, content_width, _ = measure["content_box"]
+    inner_left, inner_right = x + insets["left"], x + width - insets["right"]
+    if align == "left":
+        assert left == pytest.approx(inner_left)
+    elif align == "right":
+        assert left + content_width == pytest.approx(inner_right)
+    else:
+        assert left + content_width / 2 == pytest.approx((inner_left + inner_right) / 2)
+    assert measure["effects_bounds"] == [left - insets["left"], y,
+                                         content_width + insets["left"] + insets["right"],
+                                         text_node["line_height"] + insets["top"] + insets["bottom"]]
+    assert measure["overflow"] is False
+    with Image.open(result["overview"]["path"]) as image:
+        pixels = image.convert("RGBA")
+        colors = pixels.getcolors(pixels.width * pixels.height)
+        assert {(0, 255, 0, 128), (255, 0, 0, 153), (0, 0, 255, 102)} <= {color for _, color in colors}
+        channels = pixels.split()
+        fill_box, shadow_box = channels[1].getbbox(), channels[2].getbbox()
+        assert [shadow_box[0] - fill_box[0], shadow_box[1] - fill_box[1]] == [dx, dy]
+        ink_left, ink_top, ink_right, ink_bottom = channels[3].getbbox()
+        assert x <= ink_left < ink_right <= x + width
+        assert y <= ink_top < ink_bottom <= y + height
+
+
+def test_transparent_effects_leave_text_layout_and_pixels_unchanged(tmp_path, page, text_node):
+    page["nodes"] = [text_node]
+    baseline = render_page(tmp_path / "baseline", page)
+    text_node.update(stroke={"width": 100, "color": "#FF0000", "opacity": 0},
+                     shadow={"offset_x": -100, "offset_y": 100, "blur": 30, "color": "#0000FF", "opacity": 0})
+    invisible = render_page(tmp_path / "invisible", page)
+    assert invisible["renderer"]["nodes"] == baseline["renderer"]["nodes"]
+    assert invisible["overview"]["sha256"] == baseline["overview"]["sha256"]
+    text_node["fill"]["opacity"] = 0
+    no_visible_text = render_page(tmp_path / "no-visible-text", page)
+    assert no_visible_text["renderer"]["nodes"] == baseline["renderer"]["nodes"]
+    with Image.open(no_visible_text["overview"]["path"]) as image:
+        assert image.convert("RGB").getcolors() == [(page["width"] * page["height"], (18, 52, 86))]
+
+
+def test_signed_letter_spacing_and_shadow_budget_change_wrapping(tmp_path, page, text_node):
+    text_node.update(text="A A", width=48, height=94, letter_spacing=1)
+    page.update(background="transparent", nodes=[text_node])
+    baseline = render_page(tmp_path / "baseline", page)["renderer"]["nodes"][0]
+    text_node["letter_spacing"] = -1
+    condensed = render_page(tmp_path / "condensed", page)["renderer"]["nodes"][0]
+    assert baseline["content_box"][2] - condensed["content_box"][2] == pytest.approx(6)
+    text_node.update(letter_spacing=1,
+                     shadow={"offset_x": -8, "offset_y": 2, "blur": 2, "color": "#0000FF", "opacity": 1})
+    result = render_page(tmp_path / "wrapped", page)
+    wrapped = result["renderer"]["nodes"][0]
+    assert wrapped["overflow"] is False
+    assert wrapped["effect_insets"] == {"left": 13, "right": 0, "top": 3, "bottom": 7}
+    assert wrapped["content_box"][3] - baseline["content_box"][3] == pytest.approx(text_node["line_height"])
+    with Image.open(result["overview"]["path"]) as image:
+        image = image.convert("RGB")
+        rows = [y for y in range(image.height)
+                if any(color == (255, 255, 255)
+                       for _, color in image.crop((0, y, image.width, y + 1)).getcolors(image.width))]
+        assert rows[-1] - rows[0] >= text_node["line_height"]
+        assert any(b - a > 1 for a, b in zip(rows, rows[1:]))
+        colors = image.crop((text_node["x"], text_node["y"], wrapped["content_box"][0], text_node["y"] + 28))
+        assert any(b > 0 and r == g == 0 for _, (r, g, b) in colors.getcolors(colors.width * colors.height))
+
+
+def test_blurred_shadow_overflow_errors_or_clips_to_fixed_text_box(tmp_path, page, text_node):
+    text_node.update(text="A", width=52, height=60, wrap=False,
+                     shadow={"offset_x": 16, "offset_y": 4, "blur": 4, "color": "#0000FF", "opacity": 0.5})
+    page.update(background="transparent", nodes=[text_node])
+    complete = render_page(tmp_path / "complete", page)
+    text_node["width"] = 24
+    with pytest.raises(ValueError, match="中文文案.*超出文本框.*含效果"):
+        render_page(tmp_path / "reject", page)
+    text_node["overflow"] = "clip"
+    clipped = render_page(tmp_path / "clip", page)
+    measure = clipped["renderer"]["nodes"][0]
+    assert measure["overflow"] is True
+    assert measure["box"] == [20, 30, 24, 60]
+    assert measure["effects_bounds"][0] + measure["effects_bounds"][2] > 44
+    with Image.open(complete["overview"]["path"]) as full, Image.open(clipped["overview"]["path"]) as cropped:
+        clip_box = (20, 30, 44, 90)
+        assert full.crop(clip_box).tobytes() == cropped.crop(clip_box).tobytes()
+        assert cropped.getbbox()[2] == 44
+        assert full.getbbox()[2] > 44
+        colors = full.getcolors(full.width * full.height)
+        assert 0 < max(a for _, (r, g, b, a) in colors if b and not r and not g) < 128
+
+
+@pytest.mark.parametrize("change", [{"text": "J"}, {"text": "AA", "align": "right", "letter_spacing": -26}])
+def test_actual_glyph_overhang_errors_or_clips_even_when_dom_range_fits(tmp_path, page, text_node, change):
+    text_node.update(width=48, height=36, wrap=False, **change)
+    page.update(background="transparent", nodes=[text_node])
+    with pytest.raises(ValueError, match="中文文案.*超出文本框.*含效果"):
+        render_page(tmp_path / "reject", page)
+    text_node["overflow"] = "clip"
+    result = render_page(tmp_path / "clip", page)
+    measure = result["renderer"]["nodes"][0]
+    assert measure["overflow"] is True
+    left, _, width, _ = measure["content_box"]
+    assert 20 <= left <= left + width <= 68
+    html = Path(result["html"]["path"])
+    visible = tmp_path / "outside.png"
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        tab = browser.new_page(viewport={"width": page["width"], "height": page["height"]})
+        tab.goto(html.as_uri())
+        tab.evaluate("() => window.smartuiForScreenshot()")
+        tab.locator(".node").evaluate("node => { node.style.overflow = 'visible'; }")
+        tab.screenshot(path=str(visible), omit_background=True)
+        browser.close()
+    with Image.open(result["overview"]["path"]) as clipped, Image.open(visible) as unclipped:
+        assert 20 <= clipped.getbbox()[0] < clipped.getbbox()[2] <= 68
+        assert unclipped.getbbox()[0] < 20 or unclipped.getbbox()[2] > 68
+
+
+def test_line_height_and_visible_ink_determine_vertical_effect_budget(tmp_path, page, text_node):
+    text_node.update(text="A", height=18, line_height=16, wrap=False,
+                     stroke={"width": 2, "color": "#FF0000", "opacity": 1})
+    page.update(background="transparent", nodes=[text_node])
+    result = render_page(tmp_path / "render", page)
+    measure = result["renderer"]["nodes"][0]
+    assert measure["content_box"][3] > text_node["height"]
+    assert measure["effects_bounds"][1::2] == [30, 18]
+    assert measure["overflow"] is False
+    with Image.open(result["overview"]["path"]) as image:
+        _, top, _, bottom = image.getbbox()
+        assert 30 <= top < bottom <= 48
 
 
 def test_missing_and_modified_sources_are_explicit_errors(tmp_path, page, image_node, text_node):

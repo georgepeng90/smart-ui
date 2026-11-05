@@ -17,7 +17,9 @@ import pytest
 from smartui_mcp.projects import ProjectError
 from test_compositions import text_node
 from test_export_workflow import export_item
-from test_page_layouts import exported_project, image_node, label, project_bytes, save
+from test_page_layouts import (
+    exported_project, image_node, label, project_bytes, project_font, save, typography_project, typography_spec,
+)
 from test_review_workflow import project, project_session, record_sample_run
 
 
@@ -29,8 +31,8 @@ def files(record):
     return {key: Path(value["path"]).read_bytes() for key, value in record["files"].items()}
 
 
-def test_build_uses_real_browser_and_replaces_the_current_preview(exported_project, label):
-    store, context = exported_project
+def test_build_uses_real_browser_and_replaces_the_current_preview(typography_project, label):
+    store, context = typography_project
     other_label = {**label, "id": "second-label", "y": 18}
     saved = save(store, context, [image_node("first"), image_node("second", x=25), label, other_label])
     before_assets = deepcopy(store.context(context["project_root"])["data"]["images"])
@@ -57,6 +59,13 @@ def test_build_uses_real_browser_and_replaces_the_current_preview(exported_proje
     inputs = json.loads(Path(record["files"]["inputs"]["path"]).read_text(encoding="utf-8"))
     assert inputs["nodes"][0]["source"] == record["nodes"][0]["snapshot_key"]
     assert inputs["nodes"][2]["font_path"] == record["nodes"][2]["snapshot_key"]
+    assert [node["text_style_id"] for node in inputs["nodes"][2:]] == ["button-label", "button-label"]
+    assert inputs["nodes"][2]["text_style_sha256"] == inputs["nodes"][3]["text_style_sha256"]
+    assert inputs["nodes"][2]["text_style_sha256"] == record["nodes"][2]["text_style_sha256"]
+    assert inputs["nodes"][2]["font_size"] == 20
+    assert inputs["nodes"][2]["fill"] == {"color": "#FF0000", "opacity": 1}
+    assert inputs["nodes"][2]["stroke"] is None
+    assert inputs["nodes"][2]["shadow"] is None
     old_files = files(record)
     second = build(store, first)
     assert second["page_build"]["id"] == record["id"]
@@ -108,8 +117,8 @@ def test_export_geometry_change_marks_the_preview_stale_even_when_pixels_match(e
     assert rebuilt["page_build"]["nodes"][0]["geometry"] == item["geometry"]
 
 
-def test_rebuild_replaces_changed_layout_and_removes_unused_input_files(exported_project, label):
-    store, context = exported_project
+def test_rebuild_replaces_changed_layout_and_removes_unused_input_files(typography_project, label):
+    store, context = typography_project
     first = build(store, save(store, context, [image_node(x=2), label]))
     previous = first["page_build"]
     copied_font = Path(previous["nodes"][1]["font_path"])
@@ -125,14 +134,14 @@ def test_rebuild_replaces_changed_layout_and_removes_unused_input_files(exported
     assert not copied_font.exists()
 
 
-def test_current_preview_files_are_independent_of_the_original_image_and_font(exported_project, label):
-    store, context = exported_project
+def test_current_preview_files_are_independent_of_the_original_image_and_font(typography_project, label, project_font):
+    store, context = typography_project
     saved = save(store, context, [image_node(), label])
     built = build(store, saved)
     before = files(built["page_build"])
     state = store.context(context["project_root"])["data"]
     Path(state["images"]["button"]["path"]).unlink()
-    Path(label["font_path"]).unlink()
+    project_font.unlink()
     raw = project_bytes(built)
     restored = store.get_page_build(context["project_root"], built["page_build"]["id"])
     assert restored["page_build"] == built["page_build"]
@@ -141,8 +150,8 @@ def test_current_preview_files_are_independent_of_the_original_image_and_font(ex
     assert project_bytes(built) == raw
 
 
-def test_every_preview_file_is_verified_before_returning_the_current_build(exported_project, label):
-    store, context = exported_project
+def test_every_preview_file_is_verified_before_returning_the_current_build(typography_project, label):
+    store, context = typography_project
     built = build(store, save(store, context, [image_node(), label]))
     record = built["page_build"]
     raw = project_bytes(built)
@@ -161,17 +170,18 @@ def test_every_preview_file_is_verified_before_returning_the_current_build(expor
     assert path.name in str(error.value)
 
 
-def test_current_build_survives_project_move_without_the_original_font(exported_project, label, tmp_path):
-    store, context = exported_project
+def test_current_build_survives_project_move_without_the_original_font(typography_project, label, project_font, tmp_path):
+    store, context = typography_project
     built = build(store, save(store, context, [image_node(), label]))
     record = built["page_build"]
     original = files(record)
-    Path(label["font_path"]).unlink()
+    project_font.unlink()
     moved = tmp_path / "移动后的页面快照工程"
     shutil.move(context["project_root"], moved)
     restored = store.get_page_build(str(moved), record["id"])
     assert files(restored["page_build"]) == original
     assert restored["page_build"]["layout_sha256"] == record["layout_sha256"]
+    assert restored["matches_layout"] and restored["matches_bindings"]
     for item in restored["page_build"]["files"].values():
         assert Path(item["path"]).is_relative_to(moved)
     for node in restored["page_build"]["nodes"]:
@@ -189,8 +199,8 @@ def test_revision_conflict_leaves_no_build_or_state_change(exported_project):
     assert not (root / "smart-ui/previews/pages").exists()
 
 
-def test_overflow_failure_preserves_the_current_build_and_project_state(exported_project, label):
-    store, context = exported_project
+def test_overflow_failure_preserves_the_current_build_and_project_state(typography_project, label):
+    store, context = typography_project
     first = build(store, save(store, context, [image_node()]))
     before = files(first["page_build"])
     label.update(text="A A A A A A A A", width=10, height=15, wrap=False, overflow="error")
@@ -214,9 +224,9 @@ def test_missing_required_snapshot_file_record_is_a_schema_error(exported_projec
         store.get_page_build(context["project_root"], build_id)
 
 
-@pytest.mark.parametrize("change", ["node_x", "node_text", "page_width"])
-def test_preview_metadata_must_match_the_rendered_inputs(exported_project, label, change):
-    store, context = exported_project
+@pytest.mark.parametrize("change", ["node_x", "node_text", "style_digest", "page_width"])
+def test_preview_metadata_must_match_the_rendered_inputs(typography_project, label, change):
+    store, context = typography_project
     built = build(store, save(store, context, [image_node(), label]))
     record = built["page_build"]
     original_files = files(record)
@@ -227,6 +237,8 @@ def test_preview_metadata_must_match_the_rendered_inputs(exported_project, label
         altered["nodes"][0]["x"] += 1
     elif change == "node_text":
         altered["nodes"][1]["text"] = "A A A"
+    elif change == "style_digest":
+        altered["nodes"][1]["text_style_sha256"] = "0" * 64
     else:
         altered["width"] += 1
     path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")

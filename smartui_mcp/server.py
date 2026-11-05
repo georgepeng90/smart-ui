@@ -209,6 +209,19 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
                                                         description, rules, parameters, reference_ids))
 
     @server.tool()
+    async def project_update_typography(project_root: str, expected_revision: str,
+                                        typography: dict[str, Any]) -> Any:
+        """保存固定字号档位及完整文字角色样式，返回引用节点和构建一致性。
+
+        typography 包含 description、design_size、size_scale、styles。角色包含 name、usage、size_id、
+        font_path、line_height、letter_spacing、fill、stroke、shadow、evidence；font_sha256 可用于拒绝字体变化。
+        fill={color,opacity}，stroke=null 或 {width,color,opacity}，shadow=null 或 {offset_x,offset_y,blur,color,opacity}。
+        字体必须在工程内持久目录；不允许逐节点覆盖样式，更新不自动重建页面。
+        """
+        return _project_summary(await asyncio.to_thread(projects.update_typography, project_root,
+                                                        expected_revision, typography))
+
+    @server.tool()
     async def project_define_component(project_root: str, expected_revision: str, component_id: str,
                                        name: str, spec: dict[str, Any]) -> Any:
         """创建或更新组件规格并生成组件文档，不伪造制作结果。
@@ -322,7 +335,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     async def project_save_layout(project_root: str, expected_revision: str, layout_id: StrictStr, name: StrictStr,
                                   width: StrictInt, height: StrictInt, background: StrictStr,
                                   nodes: list[dict[str, Any]]) -> Any:
-        """覆盖当前布局定义；图像通过 asset_id 绑定当前资产，文字独立排版。"""
+        """覆盖当前布局定义；图像引用 asset_id，文字引用 text_style_id 并独立指定文案与文本框。"""
         return await asyncio.to_thread(projects.save_layout, project_root, expected_revision, layout_id, name,
                                        width, height, background, nodes)
 
@@ -340,7 +353,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
 
     @server.tool(structured_output=False)
     async def project_get_page_build(project_root: str, build_id: StrictStr) -> list[Any]:
-        """校验并读取当前页面预览，检查布局和资产摘要是否匹配。"""
+        """校验并读取当前页面快照，分别检查布局、图像和文字样式是否符合当前定义。"""
         result = await asyncio.to_thread(projects.get_page_build, project_root, build_id)
         return [json.dumps(result, ensure_ascii=False),
                 await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]

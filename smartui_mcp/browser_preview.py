@@ -18,6 +18,58 @@ function setZoom(value) {
   host.style.height = `${data.height * value}px`;
 }
 zoom.addEventListener('change', () => setZoom(Number(zoom.value)));
+function effectColor({color, opacity}) {
+  const rgb = Number.parseInt(color.slice(1), 16);
+  return `rgb(${rgb >> 16} ${(rgb >> 8) & 255} ${rgb & 255} / ${opacity})`;
+}
+function effectInsets(stroke, shadow) {
+  const halfStroke = stroke ? stroke.width / 2 : 0;
+  if (!shadow) return {left: halfStroke, top: halfStroke, right: halfStroke, bottom: halfStroke};
+  // CSS 投影沿字形轮廓生成；按设计像素为模糊与栅格化预留空间。
+  const spread = shadow.blur > 0 ? Math.ceil(2 * shadow.blur) + 1 : 0;
+  return {
+    left: Math.max(halfStroke, spread - shadow.offset_x),
+    top: Math.max(halfStroke, spread - shadow.offset_y),
+    right: Math.max(halfStroke, spread + shadow.offset_x),
+    bottom: Math.max(halfStroke, spread + shadow.offset_y)
+  };
+}
+function textEffectBase(node, layout, range, content, context) {
+  const text = layout.firstChild;
+  const lineTops = [...new Set(Array.from(range.getClientRects(), rect => rect.top))];
+  const top = layout.getBoundingClientRect().top;
+  let left = content.left, right = content.right;
+  let inkTop = top, inkBottom = top + lineTops.length * node.line_height;
+  context.font = `${node.font_size}px ${node.font_family}`;
+  context.letterSpacing = `${node.letter_spacing}px`;
+  let start = 0;
+  for (let index = 0; index < lineTops.length; index++) {
+    // 由 DOM 确定实际断行位置，Canvas 只补充行框未反映的字形外伸。
+    let end = text.length;
+    if (index + 1 < lineTops.length) {
+      let low = start + 1, high = end;
+      while (low < high) {
+        const mid = Math.floor((low + high) / 2);
+        range.setStart(text, mid - 1);
+        range.setEnd(text, mid);
+        if (range.getBoundingClientRect().top >= lineTops[index + 1]) high = mid;
+        else low = mid + 1;
+      }
+      end = low - 1;
+    }
+    range.setStart(text, start);
+    range.setEnd(text, end);
+    const line = range.getBoundingClientRect();
+    const metrics = context.measureText(text.data.slice(start, end).replace(/\n$/, ''));
+    const baseline = line.top + metrics.fontBoundingBoxAscent;
+    left = Math.min(left, line.left - metrics.actualBoundingBoxLeft);
+    right = Math.max(right, line.left + metrics.actualBoundingBoxRight);
+    inkTop = Math.min(inkTop, baseline - metrics.actualBoundingBoxAscent);
+    inkBottom = Math.max(inkBottom, baseline + metrics.actualBoundingBoxDescent);
+    start = end;
+  }
+  return new DOMRect(left, inkTop, right - left, inkBottom - inkTop);
+}
 window.smartuiReady = (async () => {
   stage.style.width = `${data.width}px`;
   stage.style.height = `${data.height}px`;
@@ -41,6 +93,7 @@ window.smartuiReady = (async () => {
     element.style.top = `${node.y}px`;
     element.style.width = `${node.width}px`;
     element.style.height = `${node.height}px`;
+    let layout, insets;
     if (node.kind === 'image') {
       const plan = node.patch_plan;
       const canvas = document.createElement('canvas');
@@ -66,44 +119,58 @@ window.smartuiReady = (async () => {
         context.drawImage(piece, ...patch.target);
       }
     } else {
-      element.textContent = node.text;
-      Object.assign(element.style, {
-        // 描边沿字形边缘向两侧展开；内边距让左、右对齐也保留完整描边。
-        padding: `${node.stroke_width / 2}px`,
+      const stroke = node.stroke?.opacity > 0 && node.stroke.width > 0 ? node.stroke : null;
+      const shadow = node.shadow?.opacity > 0 ? node.shadow : null;
+      insets = effectInsets(stroke, shadow);
+      layout = document.createElement('div');
+      layout.textContent = node.text;
+      Object.assign(layout.style, {
+        position: 'absolute', left: `${insets.left}px`, top: `${insets.top}px`,
+        width: `${Math.max(0, node.width - insets.left - insets.right)}px`,
+        height: `${Math.max(0, node.height - insets.top - insets.bottom)}px`,
         fontFamily: node.font_family, fontSize: `${node.font_size}px`,
         lineHeight: `${node.line_height}px`, textAlign: node.align,
+        letterSpacing: `${node.letter_spacing}px`,
         whiteSpace: node.wrap ? 'pre-wrap' : 'pre', overflowWrap: node.wrap ? 'anywhere' : 'normal',
-        color: node.color, webkitTextStrokeWidth: `${node.stroke_width}px`,
-        webkitTextStrokeColor: node.stroke_color, paintOrder: 'stroke fill'
+        color: effectColor(node.fill), paintOrder: 'stroke fill'
       });
+      if (stroke) layout.style.webkitTextStroke = `${stroke.width}px ${effectColor(stroke)}`;
+      if (shadow) layout.style.textShadow = `${shadow.offset_x}px ${shadow.offset_y}px ${shadow.blur}px ${effectColor(shadow)}`;
+      element.appendChild(layout);
     }
     stage.appendChild(element);
-    elements.push([node, element]);
+    elements.push([node, element, layout, insets]);
   }
   await document.fonts.ready;
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const origin = stage.getBoundingClientRect();
   const rect = bounds => [bounds.x - origin.x, bounds.y - origin.y, bounds.width, bounds.height];
   const measurements = [];
-  for (const [node, element] of elements) {
+  const textMetrics = document.createElement('canvas').getContext('2d');
+  for (const [node, element, layout, insets] of elements) {
     const box = element.getBoundingClientRect();
-    let content = box;
-    let overflow = false;
+    const measurement = {id: node.id, box: rect(box), content_box: rect(box), overflow: false};
     if (node.kind === 'text') {
       const range = document.createRange();
-      range.selectNodeContents(element);
-      content = range.getBoundingClientRect();
-      const stroke = node.stroke_width / 2;
-      // scrollWidth/Height 包含末尾空行；Range 还能识别居中及右对齐的左侧溢出。
-      overflow = element.scrollWidth > element.clientWidth || element.scrollHeight > element.clientHeight ||
-        (node.text.length > 0 && (content.left - stroke < box.left - 0.02 ||
-          content.right + stroke > box.right + 0.02 || content.top - stroke < box.top - 0.02 ||
-          content.bottom + stroke > box.bottom + 0.02));
-      if (overflow && node.overflow === 'error') {
-        throw new Error(`文字节点 ${node.id} 超出文本框：框 ${JSON.stringify(rect(box))}，内容 ${JSON.stringify(rect(content))}`);
+      range.selectNodeContents(layout);
+      const content = range.getBoundingClientRect();
+      const effectBase = textEffectBase(node, layout, range, content, textMetrics);
+      const effects = new DOMRect(
+        effectBase.x - insets.left, effectBase.y - insets.top,
+        effectBase.width + insets.left + insets.right, effectBase.height + insets.top + insets.bottom
+      );
+      measurement.content_box = rect(content);
+      measurement.effects_bounds = rect(effects);
+      measurement.effect_insets = insets;
+      // 水平滚动尺寸补充 Range 的检查；垂直方向使用实际行高与字形度量。
+      measurement.overflow = layout.scrollWidth > layout.clientWidth ||
+        (effects.left < box.left - 0.02 || effects.right > box.right + 0.02 ||
+          effects.top < box.top - 0.02 || effects.bottom > box.bottom + 0.02);
+      if (measurement.overflow && node.overflow === 'error') {
+        throw new Error(`文字节点 ${node.id} 超出文本框：框 ${JSON.stringify(measurement.box)}，内容 ${JSON.stringify(measurement.content_box)}，含效果 ${JSON.stringify(measurement.effects_bounds)}`);
       }
     }
-    measurements.push({id: node.id, box: rect(box), content_box: rect(content), overflow});
+    measurements.push(measurement);
   }
   return {fonts, nodes: measurements};
 })();

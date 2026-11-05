@@ -60,7 +60,7 @@ class ProjectLayout:
 
     @property
     def documents(self):
-        paths = {name: self.directory("documents") / name for name in ("style.md", "components.md")}
+        paths = {name: self.directory("documents") / name for name in ("style.md", "components.md", "typography.md")}
         for path in paths.values():
             self._check_managed_path(path)
         return paths
@@ -145,10 +145,9 @@ def map_state_paths(state, transform):
         fields(export["manifest"], ("path",))
         for item in export["items"]:
             fields(item["record"], ("path",))
-    for page in result.get("layouts", {}).values():
-        for node in page["definition"]["nodes"]:
-            if node["kind"] == "text":
-                fields(node, ("font_path",))
+    if result.get("typography") is not None:
+        for style in result["typography"]["styles"].values():
+            fields(style, ("font_path",))
     for build in result.get("page_builds", {}).values():
         for node in build["nodes"]:
             fields(node, ("source", "font_path"))

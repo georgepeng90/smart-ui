@@ -1,6 +1,6 @@
 # PhotoCraft 制作接口与证据
 
-SmartUI PhotoCraft v0.10.0 使用正常安装的 PhotoCraft v0.20.1 CLI，要求 `--version` 的完整输出为 `photocraft-cli 0.20.1 (327c4cc82, 2026-11-03)`。版本号相同但构建不同也会拒绝执行。通过 `SMARTUI_PHOTOCRAFT_CLI` 指定绝对路径，或使用正常安装位置（例如 `%LOCALAPPDATA%/Programs/ArtCraft/PhotoCraft/photocraft-cli.exe`）和 PATH。执行前查询真实路径、完整版本与文件摘要；应用缺失、版本错误或操作失败明确报错，不自动下载或改用其他制作后端。
+SmartUI PhotoCraft v0.11.0 使用正常安装的 PhotoCraft v0.20.1 CLI，要求 `--version` 的完整输出为 `photocraft-cli 0.20.1 (327c4cc82, 2026-11-03)`。版本号相同但构建不同也会拒绝执行。通过 `SMARTUI_PHOTOCRAFT_CLI` 指定绝对路径，或使用正常安装位置（例如 `%LOCALAPPDATA%/Programs/ArtCraft/PhotoCraft/photocraft-cli.exe`）和 PATH。执行前查询真实路径、完整版本与文件摘要；应用缺失、版本错误或操作失败明确报错，不自动下载或改用其他制作后端。
 
 ## MCP 工具
 

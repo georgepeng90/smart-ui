@@ -8,6 +8,7 @@ import shutil
 
 import pytest
 
+from smartui_mcp import typography
 from smartui_mcp.page_layouts import resolve_definition, validate_definition
 from smartui_mcp.projects import ProjectError
 from test_compositions import text_node
@@ -23,13 +24,34 @@ def exported_project(project):
 
 
 @pytest.fixture
-def label(text_node, exported_project):
+def project_font(text_node, exported_project):
     _, context = exported_project
-    font = Path(context["project_root"]) / "smart-ui/sources/fonts/fixture.ttf"
+    font = Path(context["project_root"]) / "Assets/Fonts/fixture.ttf"
     font.parent.mkdir(parents=True)
     shutil.copyfile(text_node["font_path"], font)
-    return {**text_node, "font_path": str(font), "width": 48, "height": 30, "line_height": 24,
-            "align": "left", "wrap": True, "overflow": "error"}
+    return font
+
+
+@pytest.fixture
+def typography_spec(project_font):
+    return {"description": "测试页面中的操作文字", "design_size": {"width": 64, "height": 48},
+            "size_scale": {"standard": 20}, "styles": {
+                "button-label": {"name": "操作文字", "usage": "用于短按钮文案", "size_id": "standard",
+                                 "font_path": str(project_font), "line_height": 24, "letter_spacing": 0,
+                                 "fill": {"color": "#FF0000", "opacity": 1}, "stroke": None, "shadow": None,
+                                 "evidence": []}}}
+
+
+@pytest.fixture
+def typography_project(exported_project, typography_spec):
+    store, context = exported_project
+    return store, store.update_typography(context["project_root"], context["revision"], typography_spec)
+
+
+@pytest.fixture
+def label():
+    return {"id": "label", "kind": "text", "text": "A A", "text_style_id": "button-label",
+            "x": 2, "y": 2, "width": 48, "height": 30, "align": "center", "wrap": True, "overflow": "error"}
 
 
 def image_node(identifier="button-instance", **changes):
@@ -66,21 +88,37 @@ def test_instances_resolve_the_current_asset_without_mutating_the_layout(exporte
     assert store.get_layout(root, "screen")["layout"]["definition"] == original
 
 
-def test_font_digest_roundtrip_allows_editing_and_resaving_the_returned_definition(exported_project, label):
-    store, context = exported_project
+def test_style_reference_roundtrip_allows_editing_and_resaving_the_returned_definition(typography_project, label):
+    store, context = typography_project
     saved = save(store, context, [image_node(), label])
     fetched = store.get_layout(context["project_root"], "screen")
     definition = fetched["layout"]["definition"]
-    font = definition["nodes"][1]
-    digest = hashlib.sha256(Path(label["font_path"]).read_bytes()).hexdigest()
-    assert font["font_sha256"] == digest
+    text = definition["nodes"][1]
+    assert text == label
     assert definition == saved["layout"]["definition"]
-    font["text"] = "A\nA"
+    text["text"] = "A\nA"
     updated = store.save_layout(context["project_root"], fetched["revision"], "screen", "测试页面", **definition)
     assert updated["layout"]["sha256"] != saved["layout"]["sha256"]
-    assert updated["layout"]["definition"]["nodes"][1]["font_sha256"] == digest
+    assert updated["layout"]["definition"]["nodes"][1]["text_style_id"] == "button-label"
     assert updated["layout"]["definition"]["nodes"][1]["text"] == "A\nA"
     assert store.get_layout(context["project_root"], "screen")["layout"] == updated["layout"]
+
+
+def test_pages_share_a_role_style_without_copying_its_appearance_into_the_layout(typography_project, label, project_font):
+    store, context = typography_project
+    first = save(store, context, [label])
+    second = save(store, first, [{**label, "text": "AA", "align": "right"}], layout_id="second")
+    state = store.context(context["project_root"])["data"]
+    style = typography.resolve_style(state["typography"], "button-label")
+    style_digest = typography.style_digest(state["typography"], "button-label")
+    for saved in (first, second):
+        definition = saved["layout"]["definition"]
+        original = deepcopy(definition)
+        resolved = resolve_definition(state, definition)["nodes"][0]
+        assert resolved == {**original["nodes"][0], **style, "text_style_sha256": style_digest}
+        assert definition == original
+        assert not style.keys() & original["nodes"][0].keys()
+        assert resolved["font_sha256"] == hashlib.sha256(project_font.read_bytes()).hexdigest()
 
 
 def test_moving_shared_instances_updates_the_layout_and_preserves_the_assets(exported_project):
@@ -101,8 +139,8 @@ def test_moving_shared_instances_updates_the_layout_and_preserves_the_assets(exp
     assert updated["layout"]["definition"]["nodes"] == changed
 
 
-def test_identical_save_reuses_project_revision(exported_project, label):
-    store, context = exported_project
+def test_identical_save_reuses_project_revision(typography_project, label):
+    store, context = typography_project
     saved = save(store, context, [image_node(), label])
     before = project_bytes(saved)
     definition = store.get_layout(context["project_root"], "screen")["layout"]["definition"]
@@ -149,9 +187,12 @@ def test_invalid_image_schema_never_saves_a_partial_layout(exported_project, cha
 
 @pytest.mark.parametrize("change,message", [
     ({"overflow": "shrink"}, "overflow"), ({"wrap": 1}, "wrap"),
-    ({"align": "justify"}, "align"), ({"line_height": 0}, "line_height"),
+    ({"align": "justify"}, "align"), ({"text_style_id": "../invalid"}, "text_style_id"),
     ({"text": ""}, "text"), ({"text": "A\tA"}, "控制字符"),
-    ({"unknown": 1}, "字段"), ({"color": "red"}, "color"),
+    ({"unknown": 1}, "字段"), ({"font_path": "fixture.ttf"}, "font_path"),
+    ({"font_size": 20}, "font_size"), ({"line_height": 24}, "line_height"),
+    ({"color": "#FF0000"}, "color"), ({"fill": {"color": "#FF0000", "opacity": 1}}, "fill"),
+    ({"stroke": None}, "stroke"), ({"shadow": None}, "shadow"),
 ])
 def test_invalid_text_policy_is_rejected(exported_project, label, change, message):
     store, context = exported_project
@@ -161,38 +202,44 @@ def test_invalid_text_policy_is_rejected(exported_project, label, change, messag
     assert project_bytes(context) == before
 
 
-@pytest.mark.parametrize("failure", ["missing", "relative", "wrong_extension", "invalid_font", "missing_character"])
-def test_font_errors_identify_the_source_instead_of_substituting_a_font(exported_project, label, failure):
+def test_text_layout_requires_a_project_typography_spec(exported_project, label):
     store, context = exported_project
-    path = Path(label["font_path"])
+    before = project_bytes(context)
+    with pytest.raises(ValueError, match="label.*button-label.*文字规范"):
+        save(store, context, [label])
+    assert project_bytes(context) == before
+
+
+def test_unknown_text_style_is_rejected(typography_project, label):
+    store, context = typography_project
+    before = project_bytes(context)
+    with pytest.raises(ValueError, match="label.*不存在的文字样式.*unknown"):
+        save(store, context, [{**label, "text_style_id": "unknown"}])
+    assert project_bytes(context) == before
+
+
+@pytest.mark.parametrize("failure", ["missing", "missing_character"])
+def test_font_errors_identify_the_node_and_source(typography_project, label, project_font, failure):
+    store, context = typography_project
     if failure == "missing":
-        path.unlink()
-    elif failure == "relative":
-        label["font_path"] = "fixture.ttf"
-    elif failure == "wrong_extension":
-        other = path.with_suffix(".png")
-        shutil.copyfile(path, other)
-        label["font_path"] = str(other)
-    elif failure == "invalid_font":
-        path.write_bytes(b"invalid font")
+        project_font.unlink()
     else:
         label["text"] = "B"
     before = project_bytes(context)
     with pytest.raises((ValueError, FileNotFoundError)) as error:
         save(store, context, [label])
+    assert "fixture.ttf" in str(error.value)
     if failure == "missing_character":
+        assert "label" in str(error.value)
         assert "U+0042" in str(error.value)
-    else:
-        assert "fixture" in str(error.value)
     assert project_bytes(context) == before
 
 
-def test_font_changed_since_saved_definition_cannot_be_accepted_silently(exported_project, label):
-    store, context = exported_project
+def test_font_changed_since_typography_update_cannot_be_accepted_silently(typography_project, label, project_font):
+    store, context = typography_project
     saved = save(store, context, [label])
     definition = deepcopy(saved["layout"]["definition"])
-    path = Path(label["font_path"])
-    path.write_bytes(path.read_bytes() + b"changed font bytes")
+    project_font.write_bytes(project_font.read_bytes() + b"changed font bytes")
     before = project_bytes(saved)
     with pytest.raises(ValueError, match="字体 SHA-256 不符"):
         store.save_layout(context["project_root"], saved["revision"], "screen", "测试页面", **definition)
@@ -232,27 +279,28 @@ def test_changed_asset_file_is_rejected_by_resolution_and_save(exported_project)
     assert project_bytes(saved) == before
 
 
-def test_project_move_preserves_relative_font_path_and_layout_digest(exported_project, label, tmp_path):
-    store, context = exported_project
+def test_project_move_preserves_relative_font_path_and_layout_digest(typography_project, label, tmp_path):
+    store, context = typography_project
     root = Path(context["project_root"])
-    font = root / "Assets/Fonts/fixture.ttf"
-    font.parent.mkdir(parents=True)
-    Path(label["font_path"]).rename(font)
-    label["font_path"] = str(font)
     saved = save(store, context, [image_node(), label])
     disk = json.loads(project_bytes(saved))
     path = root / disk["layouts"]["screen"]
     assert path == root / "smart-ui/layouts/screen.json"
     stored = json.loads(path.read_text(encoding="utf-8"))
-    assert stored["definition"]["nodes"][1]["font_path"] == "Assets/Fonts/fixture.ttf"
+    assert stored["definition"]["nodes"][1] == label
+    spec = json.loads((root / "smart-ui/typography.json").read_text(encoding="utf-8"))
+    assert spec["styles"]["button-label"]["font_path"] == "Assets/Fonts/fixture.ttf"
+    previous = resolve_definition(context["data"], saved["layout"]["definition"])
     moved = tmp_path / "移动后的布局工程"
     shutil.move(root, moved)
     restored = store.get_layout(str(moved), "screen")
-    assert Path(restored["layout"]["definition"]["nodes"][1]["font_path"]) == moved / "Assets/Fonts/fixture.ttf"
+    assert restored["layout"]["definition"]["nodes"][1] == label
     assert restored["layout"]["sha256"] == saved["layout"]["sha256"]
     current = store.context(str(moved))
     resolved = resolve_definition(current["data"], restored["layout"]["definition"])
     assert Path(resolved["nodes"][0]["source"]).is_relative_to(moved)
+    assert Path(resolved["nodes"][1]["font_path"]) == moved / "Assets/Fonts/fixture.ttf"
+    assert resolved["nodes"][1]["text_style_sha256"] == previous["nodes"][1]["text_style_sha256"]
     before = project_bytes(restored)
     repeat = store.save_layout(str(moved), restored["revision"], "screen", "测试页面", **restored["layout"]["definition"])
     assert repeat["layout"] == restored["layout"]
@@ -263,26 +311,24 @@ def test_project_move_preserves_relative_font_path_and_layout_digest(exported_pr
 @pytest.mark.parametrize(("location", "message"), [
     ("outside", "越出工程根目录"), ("local", r"不能依赖 \.smartui/"),
 ])
-def test_layout_and_composition_reject_nonpersistent_fonts(exported_project, label, text_node, location, message):
+def test_static_composition_rejects_nonpersistent_fonts(exported_project, text_node, location, message):
     store, context = exported_project
     root = Path(context["project_root"])
     parent = root.parent if location == "outside" else root / ".smartui"
     font = parent / "untracked.ttf"
-    shutil.copyfile(label["font_path"], font)
+    shutil.copyfile(text_node["font_path"], font)
     before = project_bytes(context)
-    with pytest.raises(ValueError, match=message):
-        save(store, context, [{**label, "font_path": str(font)}])
     with pytest.raises(ValueError, match=message):
         store.create_composition(str(root), context["revision"], "composition", 64, 48, "#123456",
                                  [{**text_node, "font_path": str(font)}])
     assert project_bytes(context) == before
 
 
-def test_layout_and_composition_reject_ids_that_differ_only_in_case(exported_project, label, text_node):
+def test_layout_and_composition_reject_ids_that_differ_only_in_case(exported_project, project_font, text_node):
     store, context = exported_project
     root = context["project_root"]
     saved = save(store, context, [image_node()])
-    node = {**text_node, "font_path": label["font_path"]}
+    node = {**text_node, "font_path": str(project_font)}
     composed = store.create_composition(root, saved["revision"], "composition", 64, 48, "#123456", [node])
     before = project_bytes(composed)
     with pytest.raises(ProjectError, match="layout_id"):
@@ -307,5 +353,5 @@ def test_validation_preserves_the_input_objects(label):
     before = deepcopy(nodes)
     definition = validate_definition(64, 48, "#123456", nodes)
     assert nodes == before
-    assert "font_sha256" in definition["nodes"][1]
-    assert "font_sha256" not in label
+    assert definition["nodes"] == before
+    assert definition["nodes"][1] is not label

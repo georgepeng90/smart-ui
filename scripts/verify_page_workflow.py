@@ -1,4 +1,4 @@
-"""用合成素材验证正式导出、当前资产复用和浏览器页面重建。"""
+"""用合成素材验证正式导出、资产复用、文字样式和浏览器页面重建。"""
 
 import argparse
 import hashlib
@@ -19,7 +19,7 @@ from smartui_mcp.projects import ProjectStore, spec_sha256, style_sha256
 
 SCOPE = ("本脚本用 Pillow 合成组件 PNG，并登记 status=drawn 的模拟运行。"
          "模拟 .pcraft 文件只是明确标记的占位文本，不能用 PhotoCraft 打开。"
-         "本次仅验证通用工具的正式导出、当前资产复用和浏览器页面重建，"
+         "本次仅验证通用工具的正式导出、资产复用、文字样式和浏览器页面重建，"
          "不验证 PhotoCraft 绘制、源文件重开或美术质量。")
 PROGRAM = '''def build(parameters, spec, component_id):
     # 这是工具链验证用的空绘制计划；合成 PNG 由验证脚本生成，不调用 PhotoCraft。
@@ -108,34 +108,57 @@ def _export_items():
                           "borders": {"left": 32, "top": 32, "right": 32, "bottom": 32}}}]
 
 
-def _nodes(font):
+def _typography(font):
+    def style(name, usage, size_id, line_height, color, *, letter_spacing=0, stroke=None, shadow=None):
+        return {"name": name, "usage": usage, "size_id": size_id, "font_path": str(font), "line_height": line_height,
+                "letter_spacing": letter_spacing, "fill": {"color": color, "opacity": 1}, "stroke": stroke,
+                "shadow": shadow, "evidence": []}
+
+    return {"description": "合成页面使用固定字号和内容角色验证文字渲染及构建依赖。",
+            "design_size": {"width": 760, "height": 700},
+            "size_scale": {"display": 32, "heading": 28, "action": 20, "reading": 18, "caption": 16, "note": 14},
+            "styles": {
+                "page-title": style("页面标题", "标识页面主题", "display", 42, "#F5F8FF", letter_spacing=0.5,
+                                    stroke={"width": 1.5, "color": "#182438", "opacity": 1},
+                                    shadow={"offset_x": -2, "offset_y": 2, "blur": 1.5, "color": "#000000", "opacity": 0.65}),
+                "subtitle": style("页面副标题", "简述本页验证内容", "caption", 24, "#ADC0DC"),
+                "panel-title": style("面板标题", "说明面板内的验证目标", "heading", 40, "#23364F"),
+                "body": style("正文", "说明操作和验证结果", "reading", 28, "#52647B"),
+                "caption": style("图像说明", "区分同一图像的不同实例", "caption", 24, "#52647B"),
+                "button-label": style("按钮文字", "标识短操作", "action", 28, "#FFFFFF"),
+                "scope-note": style("范围说明", "说明样例验证范围", "note", 22, "#9EB0CA"),
+            }}
+
+
+def _nodes():
     def image(identifier, asset, x, y, width, height):
         return {"id": identifier, "kind": "image", "asset_id": asset, "x": x, "y": y,
                 "width": width, "height": height}
 
-    def text(identifier, content, x, y, width, height, size, line_height, color):
-        return {"id": identifier, "kind": "text", "text": content, "font_path": str(font),
-                "x": x, "y": y, "width": width, "height": height, "font_size": size,
-                "line_height": line_height, "color": color, "align": "center", "wrap": True, "overflow": "error"}
+    def text(identifier, style_id, content, x, y, width, height):
+        return {"id": identifier, "kind": "text", "text": content, "text_style_id": style_id,
+                "x": x, "y": y, "width": width, "height": height,
+                "align": "center", "wrap": True, "overflow": "error"}
 
     return [image("panel-main", "panel", 56, 126, 648, 470),
-            text("title", "浏览器页面组合验证", 56, 44, 648, 52, 32, 46, "#F5F8FF"),
-            text("subtitle", "九宫格资产 · 中文文字 · 当前预览", 56, 96, 648, 28, 16, 24, "#ADC0DC"),
-            text("panel-title", "同一资产，两个实例", 88, 158, 584, 46, 28, 40, "#23364F"),
-            text("description", "两个按钮引用同一张图\n重新导出后，重建页面即可更新两个实例", 110, 222, 540, 92, 18, 28, "#52647B"),
-            text("first-caption", "第一个实例", 104, 328, 248, 28, 16, 24, "#52647B"),
-            text("second-caption", "第二个实例", 408, 328, 248, 28, 16, 24, "#52647B"),
+            text("title", "page-title", "浏览器页面组合验证", 56, 40, 648, 56),
+            text("subtitle", "subtitle", "九宫格资产 · 中文文字 · 当前预览", 56, 96, 648, 28),
+            text("panel-title", "panel-title", "同一资产，两个实例", 88, 158, 584, 46),
+            text("description", "body", "两个按钮引用同一张图\n重新导出后，重建页面即可更新两个实例", 110, 222, 540, 92),
+            text("first-caption", "caption", "第一个实例", 104, 328, 248, 28),
+            text("second-caption", "caption", "第二个实例", 408, 328, 248, 28),
             image("button-first", "button", 104, 364, 248, 88),
             image("button-second", "button", 408, 364, 248, 88),
-            text("first-label", "同一按钮", 120, 378, 216, 60, 20, 28, "#FFFFFF"),
-            text("second-label", "复用图像", 424, 378, 216, 60, 20, 28, "#FFFFFF"),
-            text("page-note", "HTML 与 PNG 来自同一个浏览器页面\n中文字体已嵌入，布局可离线打开", 88, 494, 584, 72, 18, 28, "#52647B"),
-            text("scope-note", "素材与绘制记录均为脚本合成，仅验证通用工具流程。\n本次不验证 PhotoCraft 绘制、源文件重开或美术质量。", 56, 628, 648, 52, 14, 22, "#9EB0CA")]
+            text("first-label", "button-label", "同一按钮", 120, 394, 216, 36),
+            text("second-label", "button-label", "复用图像", 424, 394, 216, 36),
+            text("page-note", "body", "HTML 与 PNG 来自同一个浏览器页面\n中文字体已嵌入，布局可离线打开", 88, 494, 584, 72),
+            text("scope-note", "scope-note", "素材与绘制记录均为脚本合成，仅验证通用工具流程。\n本次不验证 PhotoCraft 绘制、源文件重开或美术质量。", 56, 628, 648, 52)]
 
 
 def run(output_root, font_path):
     if not output_root.is_absolute():
         raise ValueError(f"--output-root 必须是绝对路径：{output_root}")
+    output_root = output_root.resolve()
     if output_root.exists():
         raise FileExistsError(f"验证脚本只创建新项目，不覆盖已有路径：{output_root}")
     font = font_path.resolve(strict=True)
@@ -158,8 +181,10 @@ def run(output_root, font_path):
         context = _record_simulated_run(store, context, "simulated-blue", False)
         exports = _export_items()
         exported = store.export_assets(root, context["revision"], "fixture-sheet", exports)
-        saved = store.save_layout(root, exported["revision"], "verification-screen", "浏览器页面验证",
-                                  760, 700, "#182438", _nodes(project_font))
+        typography = _typography(project_font)
+        context = store.update_typography(root, exported["revision"], typography)
+        saved = store.save_layout(root, context["revision"], "verification-screen", "浏览器页面验证",
+                                  760, 700, "#182438", _nodes())
         first = store.build_layout(root, saved["revision"], "verification-screen")
         first_build = first["page_build"]
         first_nodes = {node["id"]: node for node in first_build["nodes"]}
@@ -168,19 +193,29 @@ def run(output_root, font_path):
         _require(updated["export"]["manifest"]["path"] == exported["export"]["manifest"]["path"],
                  "再次导出应更新同一份当前清单")
         stale = store.get_page_build(root, first_build["id"])
-        _require(stale["matches_layout"] and not stale["matches_bindings"],
+        _require(stale["matches_layout"] and not stale["matches_images"] and stale["matches_typography"],
                  "重新导出按钮后，当前预览应提示资产已变化")
+        typography["styles"]["button-label"]["fill"]["color"] = "#E9FFEB"
+        context = store.update_typography(root, updated["revision"], typography)
+        stale = store.get_page_build(root, first_build["id"])
+        _require(stale["matches_layout"] and not stale["matches_typography"] and stale["page_build"] == first_build,
+                 "文字样式变化应将预览标为过期并保留旧快照")
         cache = output_root / ".smartui"
         ProjectLayout(output_root)._check_managed_path(cache)
         shutil.rmtree(cache)
-        _require(store.context(root)["revision"] == updated["revision"], "清空本机数据不应改变项目状态")
-        second = store.build_layout(root, updated["revision"], "verification-screen")
+        _require(store.context(root)["revision"] == context["revision"], "清空本机数据不应改变项目状态")
+        second = store.build_layout(root, context["revision"], "verification-screen")
         final_build = second["page_build"]
         final_nodes = {node["id"]: node for node in final_build["nodes"]}
         current = store.context(root)["data"]
         digest = current["images"]["button"]["sha256"]
         _require(all(final_nodes[key]["sha256"] == digest != first_nodes[key]["sha256"]
                      for key in ("button-first", "button-second")), "重建后的两个实例必须使用当前按钮图像")
+        first_label, second_label = (final_nodes[key] for key in ("first-label", "second-label"))
+        _require(first_label["text_style_sha256"] == second_label["text_style_sha256"] !=
+                 first_nodes["first-label"]["text_style_sha256"], "重建后的两个按钮必须使用当前文字样式")
+        _require(final_nodes["title"]["text_style_sha256"] == first_nodes["title"]["text_style_sha256"],
+                 "未改动的标题样式应保留原摘要")
         _require(final_build["layout_sha256"] == first_build["layout_sha256"], "重建不应改写布局定义")
         preview_parent = output_root / "smart-ui" / "previews" / "pages"
         preview_directory = preview_parent / first_build["id"]
@@ -188,11 +223,12 @@ def run(output_root, font_path):
                  "重建应只保留同一目录中的当前预览")
         _require(final_build["files"]["overview"]["sha256"] != first_build["files"]["overview"]["sha256"],
                  "当前页面的 PNG 应反映新按钮图像")
-        _require(second["matches_layout"] and second["matches_bindings"], "最终页面未匹配当前布局和资产")
+        _require(second["matches_layout"] and second["matches_bindings"], "最终页面未匹配当前布局、资产和文字样式")
         report.update(status="passed", final_build=final_build, export=updated["export"],
                       checks={"current_manifest_replaced": True, "current_preview_replaced": True,
                               "rebuilt_after_removing_local_data": True, "both_instances_updated": True,
-                              "layout_definition_unchanged": True, "final_bindings_match": True},
+                              "layout_definition_unchanged": True, "shared_text_style_updated": True,
+                              "unmodified_text_style_unchanged": True, "final_bindings_match": True},
                       overview=final_build["files"]["overview"]["path"], html=final_build["files"]["html"]["path"])
     except Exception as error:
         report.update(status="failed", error=str(error))

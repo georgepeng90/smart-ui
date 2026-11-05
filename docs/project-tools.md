@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.10.0 管理参考、风格规则、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.11.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -11,6 +11,7 @@ SmartUI PhotoCraft v0.10.0 管理参考、风格规则、Python 绘制程序、�
 | 建立和读取项目 | `project_create`、`project_context` | 建立项目或读取当前状态和 revision |
 | 登记并查看参考 | `project_add_reference`、`project_inspect_reference` | 保存原图并按需预览、裁切及取样 |
 | 保存风格 | `project_update_style` | 保存说明、规则、项目共用参数和参考引用 |
+| 保存文字规范 | `project_update_typography` | 保存固定字号和完整角色样式，返回使用位置及页面构建状态 |
 | 保存并读取程序 | `project_save_program`、`project_get_program` | 按程序 ID 保存和读取当前 Python 源码 |
 | 定义、预检及绘制组件 | `project_define_component`、`project_plan_component`、`project_draw_component` | 定义完整规格，按需预检，以全量或指定节点范围绘制 |
 | 参考对照 | `project_compare_component`、`project_get_comparison` | 对照当前组件预览与参考区域，保存及读取对照 |
@@ -28,7 +29,8 @@ SmartUI PhotoCraft v0.10.0 管理参考、风格规则、Python 绘制程序、�
 
 | 路径 | 内容 |
 | --- | --- |
-| `smart-ui/project.json` | schema 4 项目索引、当前风格及项目记录 |
+| `smart-ui/project.json` | schema 5 项目索引、当前风格及项目记录 |
+| `smart-ui/typography.json` | 已定义的文字规范、字号档位与角色样式；未定义时项目索引为 `null` |
 | `smart-ui/docs/` | 工具生成的项目文档 |
 | `smart-ui/references/` | 登记的参考原图 |
 | `smart-ui/programs/<program_id>.py` | 当前程序源码；同目录的 `<program_id>.json` 保存当前元数据 |
@@ -132,6 +134,55 @@ SmartUI PhotoCraft v0.10.0 管理参考、风格规则、Python 绘制程序、�
 
 `region` 相对来源预览，`geometry` 相对裁切后的 PNG，约束见[内容区域与伸缩几何](asset-geometry.md)。`output_path` 是 `smart-ui/exports/` 下的工程相对 PNG 路径，`manifests/` 保留给清单。已登记的正式资产需沿用对应输出路径。导出记录包括来源组件、区域、文件摘要、状态、用途和几何。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
 
+## 项目文字规范
+
+文字规范独立于组件绘制参数。`project_update_typography(project_root, expected_revision, typography)` 保存完整当前规范，并生成 `smart-ui/docs/typography.md`。`project_context` 返回规范、`typography_usage` 和 `page_status`。新项目可以暂不定义文字规范，但保存含文字的正式页面前必须定义所引用的角色样式。参考分析和样片校准方法见[文字设计规范](typography-plan.md)。
+
+项目索引使用 `typography_sha256` 校验独立规范内容，未定义规范时为 `null`。规范、文档与索引通过同一次发布更新；文件内容与登记摘要不符时明确失败。
+
+以下为字段示例，字号和颜色不构成通用默认值；字体路径须替换为工程内实际存在的绝对路径。
+
+```json
+{
+  "description": "竖屏页面的文字规范；以项目参考和目标尺寸样片校准",
+  "design_size": {"width": 720, "height": 1280},
+  "size_scale": {"body": 24, "title": 36},
+  "styles": {
+    "button-primary": {
+      "name": "主要按钮文字",
+      "usage": "主要操作的短文案；使用深色按钮背景",
+      "size_id": "body",
+      "font_path": "D:/Art/example/Assets/Fonts/UI-Bold.ttf",
+      "line_height": 32,
+      "letter_spacing": 0,
+      "fill": {"color": "#FFFFFF", "opacity": 1},
+      "stroke": {"width": 2, "color": "#25344A", "opacity": 1},
+      "shadow": {"offset_x": 0, "offset_y": 2, "blur": 1, "color": "#101824", "opacity": 0.6},
+      "evidence": []
+    }
+  }
+}
+```
+
+- `description` 说明适用语言、设备、背景和设计条件，允许空字符串。设计基准宽高、字号和行高为正整数像素；基准尺寸记录规范的使用条件，不自动缩放页面或文字。
+- `size_scale` 和 `styles` 使用稳定 ID。角色的 `name`、`usage` 为非空文字；`size_id` 必须引用已定义档位。同一档位可以被多个角色使用。当前不支持继承或节点外观覆盖。
+- `letter_spacing` 为有限的有符号像素值。填色、描边、投影各自具有独立 `color` 和 `opacity`，分别为 `#RRGGBB` 与 0 至 1。描边宽度和投影模糊值是非负有限数；投影偏移允许负数。`stroke` 或 `shadow` 为 `null` 表示不启用，透明度为 0 的效果不占用效果预留空间。
+- 字体使用工程内持久的 TTF/OTF，可复用现有字体目录，不能位于 `.smartui/`。保存时登记 `font_sha256`；传入该字段时要求文件与摘要一致。明确接受新字体内容时先核对文件，再省略对应角色的旧摘要并保存。未知字段、非法字体、缺字和摘要冲突明确报错，不替换字体。
+- `evidence` 可为空，补充设计写入用途和说明；有依据时每项必须包含 `reference_id`、`region:[x,y,width,height]`、`coordinate_size:[width,height]`、非空 `observation` 和 `decision`，分开记录观察及采用的设计决定。引用必须已登记，区域不得超出指定坐标尺寸。
+
+删除仍被角色引用的档位或被页面使用的角色会报错，并给出相关位置。旧构建快照不阻止删除已无当前页面引用的角色。`typography_usage` 按样式 ID 列出 `{layout_id,node_id}`；`page_status` 按已构建页面列出 `matches_layout`、`matches_images`、`matches_typography` 和 `matches_bindings`，最后一项为图像与文字样式均匹配。未构建页面仍可通过使用位置查询。字体和效果的实际值参与样式摘要，说明、参考记录、档位名称及未引用角色的变化不会使无关页面过期。文字变化不改变基础组件的风格摘要。
+
+### 已有工程采用文字规范
+
+当前项目接口只接受 schema 5。需要采用规范的 schema 4 工程使用独立转换脚本，先审查页面内容并准备完整文字规范及节点角色映射，不自动推断历史字号的用途。映射格式为 `{"home":{"title":"page-title","confirm-label":"button-primary"}}`，必须覆盖所有含文字的页面及其中每个文字节点，不包含多余页面或节点。
+
+```powershell
+uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example --typography D:/Art/typography.json --layout-styles D:/Art/layout-styles.json
+uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example --typography D:/Art/typography.json --layout-styles D:/Art/layout-styles.json --apply --expected-revision <预检返回的revision>
+```
+
+第一条命令只预检，返回 revision、转换页面、需重建页面和备份目录。应用前校验原受管文档、布局、原字体摘要、新规范与全部映射。应用一次发布新规范及引用，归档原索引、受影响布局、旧构建记录和含文字页面的独立 HTML/PNG，目录为 `smart-ui/adoptions/typography/<revision>/`。含文字的旧构建从当前索引移出，页面需重建；纯图像构建保留。已有备份或文字规范文件不会被覆盖。脚本不支持其他格式，也不为正常接口保留旧文字字段。
+
 ## 可更新的页面布局
 
 用 `project_save_layout` 保存画布、纯色背景和按叠放顺序排列的节点。用 `project_get_layout` 查看当前定义。同一资产的多个实例使用不同节点 ID，均可引用同一 `asset_id`。节点矩形以画布像素定义。
@@ -142,9 +193,17 @@ SmartUI PhotoCraft v0.10.0 管理参考、风格规则、Python 绘制程序、�
 
 图像节点在构建时按 `asset_id` 解析当前文件。正式资产遵循其伸缩几何；无几何声明的独立图像按完整原图等比居中。透明边和阴影可能延伸到目标内容框之外，按画布边界裁切。
 
-文字节点使用 `text`、`font_path`、`font_size`、`line_height`、`align`、`wrap`、`overflow`、`color`。字体必须是工程内包含所需字符的持久 TTF/OTF 文件，可直接复用工程现有字体，且不能位于 `.smartui/`。字号和行高为正整数像素，`align` 支持 `left`、`center`、`right`，`wrap` 为布尔值，`overflow` 支持 `error` 和 `clip`。可用 `stroke_width`、`stroke_color` 声明描边。保存时校验字形和字体摘要，构建时检查布局及溢出。更换字体内容后核对文件，再更新布局所用的摘要。
+文字节点使用 `text_style_id` 引用文字规范中的完整角色，另存文案、文本框和排版策略，不接受逐节点字体、字号、颜色或效果字段。
 
-`project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局或引用资产变化后重新构建；浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
+```json
+{"id":"confirm-label","kind":"text","text_style_id":"button-primary","text":"确认","x":40,"y":104,"width":224,"height":40,"align":"center","wrap":false,"overflow":"error"}
+```
+
+`align` 支持 `left`、`center`、`right`，`wrap` 为布尔值，`overflow` 必须为 `error` 或 `clip`。保存和构建均解析当前样式，校验字体摘要及文案字形；布局本身保存引用，不复制外观参数。浏览器将描边和投影的预留空间纳入换行与边界检查，超出时按策略报错或裁切，不自动缩字。构建记录实际角色 ID、`text_style_sha256`、解析值、字体快照和渲染边界。描边总宽度沿字形内外展开，投影使用自己的颜色和透明度；效果预留范围是明确的版式约束，不是跨渲染器通用的像素测量值。
+
+`effect_insets` 记录四边效果预留：可见描边占总宽度的一半；投影从字形产生，模糊值大于 0 时每侧预算为 `ceil(2 × blur) + 1` 像素，无模糊时为 0，再分别加减水平和垂直偏移。每侧取描边、投影和 0 的最大值。`effects_bounds` 联合实际断行宽度、CSS 行高及 Canvas 字形外伸，再扩展效果预算；负字距及字体负边距也参与检查。它是布局校验范围，精确像素以 PNG 为准，不能直接作为 Unity 的描边或投影参数。
+
+`project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像或实际使用的文字样式变化后显式重建。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时才校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
 
 ## 独立图像资产与静态组合预览
 

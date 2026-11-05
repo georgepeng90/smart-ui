@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import re
 from tempfile import TemporaryDirectory
 
 from .image_assets import _file_path, _replace_directory
@@ -76,6 +77,12 @@ def validate_build_record(record):
     for node in nodes:
         if not isinstance(node, dict) or node.get("kind") not in ("image", "text"):
             raise ValueError(f"页面构建节点无效：{label}")
+        if node["kind"] == "text":
+            node_label = f"页面构建 {label} 的文字节点 {node.get('id')}"
+            _identifier(node.get("text_style_id"), f"{node_label}.text_style_id")
+            digest = node.get("text_style_sha256")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError(f"{node_label} 缺少有效 text_style_sha256")
         key = node.get("snapshot_key")
         if not isinstance(key, str) or not key.startswith("input-") or Path(key).name != key:
             raise ValueError(f"页面构建节点缺少有效 snapshot_key：{label}")

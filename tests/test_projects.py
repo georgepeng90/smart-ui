@@ -58,15 +58,17 @@ def test_create_writes_readable_documents_and_content_revision(store, project):
     assert project["revision"] == spec_sha256(json.loads(payload))
     assert "中文项目" in payload.decode()
     assert project["data"]["style"]["user_confirmation"] is None
-    assert project["data"]["schema_version"] == 4
+    assert project["data"]["schema_version"] == 5
+    assert project["data"]["typography"] is None
     assert project["data"]["programs"] == {}
-    for filename in ("style.md", "components.md"):
+    for filename in ("style.md", "components.md", "typography.md"):
         assert "中文项目" in (root / "smart-ui/docs" / filename).read_text(encoding="utf-8")
         assert project["data"]["document_hashes"][filename] == hashlib.sha256((root / "smart-ui/docs" / filename).read_bytes()).hexdigest()
     assert store.context(str(root)) == project
 
 
-@pytest.mark.parametrize("existing", ["smart-ui/project.json", "smart-ui/docs/style.md", "smart-ui/docs/components.md"])
+@pytest.mark.parametrize("existing", ["smart-ui/project.json", "smart-ui/typography.json", "smart-ui/docs/style.md",
+                                      "smart-ui/docs/components.md", "smart-ui/docs/typography.md"])
 def test_create_refuses_existing_managed_files(store, tmp_path, existing):
     (tmp_path / existing).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / existing).write_text("用户原稿", encoding="utf-8")
@@ -82,7 +84,7 @@ def test_stale_revision_cannot_overwrite_new_component(store, project):
     assert store.context(project["project_root"]) == updated
 
 
-@pytest.mark.parametrize("filename", ["style.md", "components.md"])
+@pytest.mark.parametrize("filename", ["style.md", "components.md", "typography.md"])
 def test_manual_document_edits_are_detected_before_read_or_write(store, project, filename):
     root = Path(project["project_root"])
     before = (root / "smart-ui/project.json").read_bytes()
@@ -323,7 +325,7 @@ def test_schema_requires_explicit_program_collection(store, project, edit):
     state = json.loads(path.read_text(encoding="utf-8"))
     edit(state)
     path.write_text(json.dumps(state), encoding="utf-8")
-    with pytest.raises(ProjectError, match="schema_version=4|programs"):
+    with pytest.raises(ProjectError, match="schema_version=5|programs"):
         store.context(project["project_root"])
 
 

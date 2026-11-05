@@ -65,16 +65,16 @@ class ProjectStore:
             raise ProjectError(str(error)) from error
         root.mkdir(parents=True, exist_ok=True)
         with self._lock(root):
-            for path in (layout.project_file, *layout.documents.values()):
+            for path in (layout.project_file, root / "smart-ui/typography.json", *layout.documents.values()):
                 if path.exists():
                     raise ProjectError(f"创建项目不能覆盖已有文件：{path}")
             state = {
-                "schema_version": 4, "project_id": project_id, "name": name, "paths": layout.paths,
+                "schema_version": 5, "project_id": project_id, "name": name, "paths": layout.paths,
                 "references": {}, "programs": {},
                 "style": { "description": "", "rules": [], "parameters": {},
                           "reference_ids": [], "user_confirmation": None},
                 "components": {}, "comparisons": {}, "feedback": {}, "visual_checks": {},
-                "images": {}, "compositions": {},
+                "images": {}, "compositions": {}, "typography": None,
             }
             layout.ensure_gitignore()
             return self._write(root, state)
@@ -153,6 +153,26 @@ class ProjectStore:
             style = state["style"]
             style.update(description=description, rules=deepcopy(rules), parameters=deepcopy(parameters),
                          reference_ids=deepcopy(reference_ids), user_confirmation=None)
+        return self._update(project_root, expected_revision, change)
+
+    def update_typography(self, project_root: str, expected_revision: str, typography: dict) -> dict:
+        """保存当前文字规范，拒绝悬空引用；只使使用变化样式的页面构建过期。"""
+        from .typography import resolve_style, validate_font, validate_typography
+
+        root = self._root(project_root)
+        def change(state):
+            current = validate_typography(typography, root, state["references"])
+            for layout_id, page in state["layouts"].items():
+                for node in page["definition"]["nodes"]:
+                    if node["kind"] != "text":
+                        continue
+                    style_id = node["text_style_id"]
+                    if style_id not in current["styles"]:
+                        raise ProjectError(f"不能移除文字样式 {style_id}：页面 {layout_id} 的节点 {node['id']} 仍在引用")
+                    style = resolve_style(current, style_id)
+                    validate_font(style["font_path"], style["font_sha256"], text=node["text"],
+                                  label=f"页面 {layout_id} 节点 {node['id']} 的文字样式 {style_id}")
+            state["typography"] = current
         return self._update(project_root, expected_revision, change)
 
     def define_component(self, project_root: str, expected_revision: str,
@@ -502,7 +522,7 @@ class ProjectStore:
             return self._composition_result(updated, composition_id)
 
     def save_layout(self, project_root, expected_revision, layout_id, name, width, height, background, nodes):
-        from .page_layouts import validate_definition, resolve_definition, definition_for_storage
+        from .page_layouts import validate_definition, resolve_definition
         _identifier(layout_id, "layout_id")
         _text(name, "name")
         root = self._root(project_root)
@@ -510,13 +530,9 @@ class ProjectStore:
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
             self._check_id_collision(state["layouts"], layout_id, "layout_id")
-            layout = ProjectLayout(root)
             definition = validate_definition(width, height, background, nodes)
-            for node in definition["nodes"]:
-                if node["kind"] == "text":
-                    layout.require_persistent_input(node["font_path"], f"节点 {node['id']}.font_path")
             resolve_definition(state, definition)
-            digest = spec_sha256(definition_for_storage(definition, layout))
+            digest = spec_sha256(definition)
             state.setdefault("layouts", {})[layout_id] = {"id": layout_id, "name": name, "definition": definition, "sha256": digest}
             return self._layout_result(self._write(root, state), layout_id)
 
@@ -554,20 +570,32 @@ class ProjectStore:
 
     @staticmethod
     def _page_build_result(context, build_id):
-        from .page_layouts import image_geometry
-
         state = context["data"]
         record = state.get("page_builds", {}).get(build_id)
         if record is None:
             raise ProjectError(f"页面构建不存在：{build_id}")
+        return {"project_root": context["project_root"], "revision": context["revision"], "page_build": deepcopy(record),
+                **ProjectStore._page_status(state, record)}
+
+    @staticmethod
+    def _page_status(state, record):
+        from .page_layouts import image_geometry
+        from .typography import style_digest
+
         def matches_image(node):
             image = state["images"].get(node["asset_id"])
             return (image is not None and image["sha256"] == node["sha256"]
                     and image_geometry(image) == node["geometry"])
 
-        matches = all(matches_image(node) for node in record["nodes"] if node["kind"] == "image")
-        return {"project_root": context["project_root"], "revision": context["revision"], "page_build": deepcopy(record),
-                "matches_layout": state["layouts"][record["layout_id"]]["sha256"] == record["layout_sha256"], "matches_bindings": matches}
+        typography = state["typography"]
+        def matches_text(node):
+            return (typography is not None and node["text_style_id"] in typography["styles"] and
+                    style_digest(typography, node["text_style_id"]) == node["text_style_sha256"])
+
+        images = all(matches_image(node) for node in record["nodes"] if node["kind"] == "image")
+        text = all(matches_text(node) for node in record["nodes"] if node["kind"] == "text")
+        return {"matches_layout": state["layouts"][record["layout_id"]]["sha256"] == record["layout_sha256"],
+                "matches_images": images, "matches_typography": text, "matches_bindings": images and text}
 
     @staticmethod
     def _layout_result(context, layout_id):
@@ -742,8 +770,8 @@ class ProjectStore:
         layout = ProjectLayout(root)
         try:
             state = json.loads(layout.project_file.read_bytes())
-            if not isinstance(state, dict) or state.get("schema_version") != 4:
-                raise ProjectError(f"项目状态必须是 schema_version=4 的对象：{layout.project_file}")
+            if not isinstance(state, dict) or state.get("schema_version") != 5:
+                raise ProjectError(f"项目状态必须是 schema_version=5 的对象：{layout.project_file}；已有项目请先显式转换文字规范与页面样式引用")
             if state["paths"] != DEFAULT_PATHS:
                 raise ProjectError("项目目录必须使用 smart-ui/ 固定结构")
             for collection, directory in self._collections().items():
@@ -756,6 +784,13 @@ class ProjectStore:
                         raise ProjectError(f"{collection}.{key} 路径必须为 {expected}")
                     records[key] = json.loads(layout.resolve(relative).read_bytes())
                 state[collection] = records
+            if state["typography"] is not None:
+                if state["typography"] != "smart-ui/typography.json":
+                    raise ProjectError("typography 路径必须为 smart-ui/typography.json")
+                state["typography"] = json.loads(layout.resolve(state["typography"]).read_bytes())
+            expected_typography_sha = spec_sha256(state["typography"]) if state["typography"] is not None else None
+            if state["typography_sha256"] != expected_typography_sha:
+                raise ProjectError("文字规范摘要不一致：smart-ui/typography.json；请通过文字规范工具更新")
             for name, digest in state["document_hashes"].items():
                 if name not in layout.documents or _sha(layout.documents[name].read_bytes()) != digest:
                     raise ProjectError(f"受管文档已被修改或缺失：{name}")
@@ -769,7 +804,21 @@ class ProjectStore:
             for key, page in state["layouts"].items():
                 if page["sha256"] != spec_sha256(page["definition"]):
                     raise ProjectError(f"页面布局定义摘要不一致：{key}")
-            return map_state_paths(state, layout.resolve), spec_sha256(state)
+            resolved = map_state_paths(state, layout.resolve)
+            if resolved["typography"] is not None:
+                from .typography import validate_typography
+                validate_typography(resolved["typography"], root, resolved["references"], verify_fonts=False)
+            from .page_layouts import validate_definition
+            for key, page in resolved["layouts"].items():
+                validate_definition(**page["definition"])
+                for node in page["definition"]["nodes"]:
+                    if node["kind"] == "text" and (resolved["typography"] is None or
+                            node["text_style_id"] not in resolved["typography"]["styles"]):
+                        raise ProjectError(f"页面 {key} 节点 {node['id']} 引用不存在的文字样式：{node['text_style_id']}")
+            from .page_builds import validate_build_record
+            for record in resolved.get("page_builds", {}).values():
+                validate_build_record(record)
+            return resolved, spec_sha256(state)
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise ProjectError(f"无法读取项目状态：{root}；{error}") from error
 
@@ -885,6 +934,14 @@ class ProjectStore:
                 elif node["kind"] == "component":
                     node["is_current"] = matches_current_preview(node["component_id"], node["run"]["run_id"], node["sha256"])
             composition["is_current"] = all(node["is_current"] for node in composition["nodes"] if node["kind"] != "text")
+        usage = {key: [] for key in data["typography"]["styles"]} if data["typography"] is not None else {}
+        for layout_id, page in data.get("layouts", {}).items():
+            for node in page["definition"]["nodes"]:
+                if node["kind"] == "text":
+                    usage[node["text_style_id"]].append({"layout_id": layout_id, "node_id": node["id"]})
+        data["typography_usage"] = usage
+        data["page_status"] = {key: ProjectStore._page_status(state, record)
+                               for key, record in data.get("page_builds", {}).items()}
         return {"project_root": str(root), "revision": revision, "data": data}
 
     def _render_for_root(self, root, state):
@@ -895,6 +952,8 @@ class ProjectStore:
         return self._render(display)
 
     def _render(self, state):
+        from .typography import render_typography
+
         style = state["style"]
         lines = [f"# {state['name']}：当前风格规范", "", style["description"] or "尚未填写风格说明。", "",
                  "## 共用参数", "", "```json", _json(style["parameters"]), "```", "", "## 风格规则", ""]
@@ -917,7 +976,8 @@ class ProjectStore:
         for feedback in state.get("feedback", {}).values():
             components.extend(["", f"- 偏差 {feedback['id']}（{feedback['status']}）：{feedback['observation']}；{feedback['suggested_change']}"])
         return {"style.md": ("\n".join(lines) + "\n").encode("utf-8"),
-                "components.md": ("\n".join(components) + "\n").encode("utf-8")}
+                "components.md": ("\n".join(components) + "\n").encode("utf-8"),
+                "typography.md": render_typography(state["name"], state["typography"])}
 
     @staticmethod
     def _cell(value):
@@ -951,10 +1011,15 @@ class ProjectStore:
         except (ValueError, TypeError) as error:
             raise ProjectError(f"项目包含无法写入的 JSON 数据：{error}") from error
         stored = map_state_paths(state, layout.relative)
+        stored["typography_sha256"] = spec_sha256(stored["typography"]) if stored["typography"] is not None else None
         documents = self._render_for_root(root, state)
         stored["document_hashes"] = {name: _sha(payload) for name, payload in documents.items()}
         index = deepcopy(stored)
         files = dict(artifacts or {})
+        if stored["typography"] is not None:
+            relative = "smart-ui/typography.json"
+            index["typography"] = relative
+            files[root / relative] = (_json(stored["typography"]) + "\n").encode("utf-8")
         attributes = root / "smart-ui/.gitattributes"
         layout._check_managed_path(attributes)
         existing = attributes.read_bytes() if attributes.is_file() else b""
