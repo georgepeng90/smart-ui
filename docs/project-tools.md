@@ -79,7 +79,7 @@ SmartUI PhotoCraft v0.9.0 提供二十七个项目工具，与三个底层 `phot
 
 ## 保存程序与定义组件
 
-`project_save_program.source` 是完整 Python 源码。保存不执行源码，也不检查程序是否已定义可用的 build；用 `project_plan_component` 验证运行行为。程序作为可信本机代码运行，独立进程与 60 秒超时不是安全沙箱。
+`project_save_program.source` 是完整 Python 源码。保存不执行源码，也不检查程序是否已定义可用的 build；`project_plan_component` 和 `project_draw_component` 都会执行程序并严格预检计划。需要先查看或诊断计划时使用独立预检入口，已明确的参数调整不要求重复调用两个入口。程序作为可信本机代码运行，独立进程与 60 秒超时不是安全沙箱。
 
 组件规格最少包含已保存的程序标识，其余字段由程序解释。例如采用[最小矩形程序](drawing-programs.md#最小程序示例)：
 
@@ -128,6 +128,8 @@ SmartUI PhotoCraft v0.9.0 提供二十七个项目工具，与三个底层 `phot
 
 源文件默认位于 `art/ui/sources/<component_id>.pcraft`。每次运行在 `.smartui/runs/<run_id>/` 保存 `program.py`、`plan.json`、`style-snapshot.json`、`operations.json` 和 `result.json`。成功时另有 `before-reopen.png`、`preview.png`、`output/<component_id>.pcraft` 与 `reopened/<component_id>.pcraft`；更新已有文件时保留 `input.pcraft`。运行记录的 `backend` 包含实际 `name=photocraft`、`version`、CLI `sha256` 和 `cli_path`；`source_snapshot_path` 指向 `output/` 中的归档源文件，其摘要包含在 `artifact_hashes` 中。读取实际产物时使用记录的路径。运行记录还包含实际风格版本、规格摘要、程序版本、源码哈希、原生节点 ID、文件摘要及检查数据。
 
+`drawing_elapsed_ms` 统计后端检查、会话、原生执行、保存渲染、重开及候选技术验证，未覆盖前置程序执行、最终发布、对照、页面构建及模型判断。它不是完整制作或自审耗时；阶段记录及按需修正方法见[参考匹配流程](style-reproduction-validation.md#耗时与简短记录)。
+
 `drawn` 表示已绘制，`verified` 表示保存重开后的技术检查通过，`failed` 表示尝试失败。技术检查不证明视觉接近参考，也不代表用户确认；当前工具不代填 `user_confirmation`。
 
 预检错误直接报告。候选制作失败时保留现场并尝试登记 `failed`，不替换最近成功记录；登记仍受 `expected_revision` 约束，发生冲突时仅保留运行目录中的证据。发布前发现项目版本或原源文件摘要变化时，拒绝发布并保留候选产物，原源文件不被覆盖。发布后若项目持久化失败，错误会明确说明源文件已发布并给出结果路径，不自动回滚或重试。
@@ -166,6 +168,8 @@ SmartUI PhotoCraft v0.9.0 提供二十七个项目工具，与三个底层 `phot
 | `background` | 必填，使用 `#RRGGBB` 指定所有样片共用的纯色背景。 |
 | `columns` | 列数，取 1 至 16，默认 3，实际列数最多等于样片数。 |
 | `grayscale` | 是否另存灰度图，默认开启。 |
+
+常规目标尺寸检查只需彩色图时显式传 `grayscale=false`；灰度用于明暗诊断，不是每次自审的必做项。已有同条件检查用 `project_get_visual_check` 读取。
 
 创建和读取通过 MCP 返回 JSON 元数据、彩色总览和已请求的灰度图。图上序号对应元数据中的样片顺序和标签，标签可用中文。每项记录包含运行 ID、实际风格和程序版本、组件规格、规格和源码摘要、原图坐标、缩放倍率、显示尺寸及图片摘要。源图、单项裁切、缩放图和总览均限制为每边最多 8192 像素、每张最多 3200 万像素。
 
@@ -239,6 +243,8 @@ SmartUI PhotoCraft v0.9.0 提供二十七个项目工具，与三个底层 `phot
 - `matches_bindings`：此构建的所有选用绑定仍对应当前 `selected_version`；固定绑定不受选用变化影响。修改选用不会改写快照，需显式重建。
 
 `page_builds` 是 schema 3 的可选状态字段；`project_context` 返回布局和构建摘要。浏览器预览没有拖拽编辑、自动刷新或自动重建，不代表 Unity 的运行态渲染结果。
+
+页面参考检查复用现有 PNG，只有布局或引用资产变化时才为修正构建新快照。现有组件对照及反馈接口不接受页面构建 ID；页面观察与复查沿用业务项目非受管工作记录，保留参考、构建 ID 和实际资产版本，不改写项目状态或受管文档。操作方法见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
 
 ## 独立图像资产与静态组合预览
 
