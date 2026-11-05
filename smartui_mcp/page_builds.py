@@ -1,30 +1,31 @@
-"""以明确布局修订和资产版本构建可独立复查的浏览器快照。"""
+"""从当前布局和资产构建可离线打开的浏览器页面。"""
 
 from copy import deepcopy
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .image_assets import _file_path
+from .image_assets import _file_path, _replace_directory
 from .layout import ProjectLayout
-from .page_layouts import resolve_definition
-from .references import _sha256
+from .page_layouts import _identifier, resolve_definition
+from .references import _sha256, _temporary_directory
 
 
-def build_page(project_root, build_id, layout_id, layout_version, definition, state):
+def build_page(project_root, build_id, layout_id, layout_sha256, definition, state, *, commit=None):
     """从解析后的输入创建可独立读取的 HTML、PNG、字体及图像证据。"""
     from .browser_preview import render_page
 
-    root = Path(project_root)
+    _identifier(layout_id, "layout_id")
+    if build_id != layout_id:
+        raise ValueError("build_id 必须与 layout_id 一致")
+    root = _file_path(str(project_root), "project_root")
     layout = ProjectLayout(root, state["paths"])
     resolved = resolve_definition(state, definition)
-    destination = root / ".smartui" / "page-builds" / build_id
+    destination = root / "smart-ui" / "previews" / "pages" / layout_id
     layout._check_managed_path(destination)
-    if destination.exists():
-        raise FileExistsError(f"页面构建已存在：{destination}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(dir=destination.parent) as temporary:
-        staging = Path(temporary)
+    with TemporaryDirectory(dir=_temporary_directory(layout.root)) as temporary:
+        staging = Path(temporary) / "current"
+        staging.mkdir()
         files, copies = {}, {}
         for index, node in enumerate(resolved["nodes"]):
             field = "source" if node["kind"] == "image" else "font_path"
@@ -58,12 +59,11 @@ def build_page(project_root, build_id, layout_id, layout_version, definition, st
         files["inputs"] = {"path": str(destination / inputs.name), "sha256": _sha256(inputs)}
         for node in resolved["nodes"]:
             node["source" if node["kind"] == "image" else "font_path"] = str(destination / node["snapshot_key"])
-        record = {"id": build_id, "layout_id": layout_id, "layout_version": layout_version,
+        record = {"id": build_id, "layout_id": layout_id, "layout_sha256": layout_sha256,
                   "width": definition["width"], "height": definition["height"], "background": definition["background"],
                   "nodes": resolved["nodes"], "files": files, "renderer": rendered["renderer"]}
-        layout._check_managed_path(destination)
-        staging.rename(destination)
-    return record
+        return _replace_directory(layout, staging, destination,
+                                  lambda: commit(record) if commit is not None else record)
 
 
 def validate_build_record(record):

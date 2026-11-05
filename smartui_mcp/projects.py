@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from .layout import DEFAULT_PATHS, ProjectLayout, map_state_paths
@@ -27,6 +29,15 @@ def spec_sha256(spec: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def style_sha256(style: dict) -> str:
+    """计算风格规则、共用参数及参考引用的稳定摘要。"""
+    try:
+        inputs = {field: style[field] for field in ("rules", "parameters", "reference_ids")}
+    except KeyError as error:
+        raise ProjectError(f"风格缺少绘制依据字段：{error.args[0]}") from error
+    return spec_sha256(inputs)
+
+
 def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -42,12 +53,12 @@ def _text(value, field):
 
 
 class ProjectStore:
-    def create(self, project_root: str, project_id: str, name: str, paths: dict | None = None) -> dict:
+    def create(self, project_root: str, project_id: str, name: str) -> dict:
         root = self._root(project_root)
         _identifier(project_id, "project_id")
         _text(name, "name")
         try:
-            layout = ProjectLayout(root, paths)
+            layout = ProjectLayout(root)
             for key in layout.paths:
                 layout.directory(key)
         except ValueError as error:
@@ -58,9 +69,9 @@ class ProjectStore:
                 if path.exists():
                     raise ProjectError(f"创建项目不能覆盖已有文件：{path}")
             state = {
-                "schema_version": 3, "project_id": project_id, "name": name, "paths": layout.paths,
+                "schema_version": 4, "project_id": project_id, "name": name, "paths": layout.paths,
                 "references": {}, "programs": {},
-                "style": {"version": 0, "description": "", "rules": [], "parameters": {},
+                "style": { "description": "", "rules": [], "parameters": {},
                           "reference_ids": [], "user_confirmation": None},
                 "components": {}, "comparisons": {}, "feedback": {}, "visual_checks": {},
                 "images": {}, "compositions": {},
@@ -80,52 +91,36 @@ class ProjectStore:
                 raise ProjectError("reference 必须是 JSON 对象")
             reference_id = reference.get("id")
             _identifier(reference_id, "reference.id")
+            self._check_id_collision(state["references"], reference_id, "reference_id")
             if reference_id in state["references"]:
                 raise ProjectError(f"参考标识已存在：{reference_id}")
             state["references"][reference_id] = deepcopy(reference)
         return self._update(project_root, expected_revision, change)
 
-    def save_program(self, project_root: str, expected_revision: str, program_id: str,
-                     name: str, description: str, source: str) -> dict:
-        """保存程序源码及不可变版本历史；只检查语法，不执行程序。"""
+    def save_program(self, project_root, expected_revision, program_id, name, description, source):
+        """更新唯一的当前程序；Git 负责保存历史。"""
+        from .programs import validate_source
         _identifier(program_id, "program_id")
         _text(name, "name")
         if not isinstance(description, str):
             raise ProjectError("description 必须是字符串")
-        _text(source, "source")
         try:
-            compile(source, f"{program_id}.py", "exec")
-        except (SyntaxError, ValueError) as error:
-            raise ProjectError(f"程序 {program_id} 的 Python 源码语法无效：{error}") from error
+            validate_source(source)
+        except ValueError as error:
+            raise ProjectError(f"程序 {program_id} 源码无效：{error}") from error
         root = self._root(project_root)
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            current = state["programs"].get(program_id)
+            self._check_id_collision(state["programs"], program_id, "program_id")
+            relative = f"smart-ui/programs/{program_id}.py"
+            path = self._program_path(root, relative, state["paths"])
+            if program_id not in state["programs"] and path.exists():
+                raise ProjectError(f"未登记的程序文件已存在，不能覆盖：{path}")
             payload = source.encode("utf-8")
-            digest = _sha(payload)
-            if current and current["sha256"] == digest:
-                current.update(name=name, description=description)
-            else:
-                version = current["version"] + 1 if current else 1
-                relative = f"{state['paths']['programs']}/{program_id}/{version}.py"
-                path = self._program_path(root, relative, state["paths"])
-                try:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path = self._program_path(root, relative, state["paths"])
-                    with path.open("xb") as stream:
-                        stream.write(payload)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                except OSError as error:
-                    raise ProjectError(f"程序源码写入失败，已有版本不能覆盖：{path}；{error}") from error
-                history = deepcopy(current["history"]) if current else []
-                history.append({"version": version, "sha256": digest, "source_path": relative})
-                state["programs"][program_id] = {
-                    "id": program_id, "name": name, "description": description,
-                    "version": version, "sha256": digest, "source_path": relative, "history": history,
-                }
-            return self._write(root, state)
+            state["programs"][program_id] = {"id": program_id, "name": name, "description": description,
+                                            "sha256": _sha(payload), "source_path": relative}
+            return self._write(root, state, {path: payload})
 
     def get_program(self, project_root: str, program_id: str) -> dict:
         _identifier(program_id, "program_id")
@@ -156,13 +151,8 @@ class ProjectStore:
             self._references(state, reference_ids, "style.reference_ids")
             self._rule_references(state, rules)
             style = state["style"]
-            changed = style["rules"] != rules or style["parameters"] != parameters
             style.update(description=description, rules=deepcopy(rules), parameters=deepcopy(parameters),
                          reference_ids=deepcopy(reference_ids), user_confirmation=None)
-            if changed:
-                style["version"] += 1
-                for component in state["components"].values():
-                    component["target_style_version"] = style["version"]
         return self._update(project_root, expected_revision, change)
 
     def define_component(self, project_root: str, expected_revision: str,
@@ -173,8 +163,9 @@ class ProjectStore:
             raise ProjectError("spec 必须是 JSON 对象")
         def change(state):
             self._component_program(state, spec)
-            component = state["components"].setdefault(component_id, {"latest_run": None, "runs": []})
-            component.update(name=name, spec=deepcopy(spec), target_style_version=state["style"]["version"],
+            self._check_id_collision(state["components"], component_id, "component_id")
+            component = state["components"].setdefault(component_id, {"latest_run": None})
+            component.update(name=name, spec=deepcopy(spec),
                              user_confirmation=None)
         return self._update(project_root, expected_revision, change)
 
@@ -190,179 +181,168 @@ class ProjectStore:
         record = deepcopy(run)
         _identifier(record.get("run_id"), "run.run_id")
         component = state["components"][component_id]
-        if any(item["run_id"] == record["run_id"] for item in component["runs"]):
-            raise ProjectError(f"绘制记录标识已存在：{record['run_id']}")
         status = record.get("status")
-        if status not in ("drawn", "verified", "failed"):
-            raise ProjectError("run.status 必须是 drawn、verified 或 failed")
-        if status == "failed":
-            _text(record.get("error"), "失败记录的 error")
-        else:
-            if type(record.get("style_version")) is not int or record["style_version"] != state["style"]["version"]:
-                raise ProjectError("run.style_version 必须等于当前风格版本")
-            if record.get("spec_sha256") != spec_sha256(component["spec"]):
-                raise ProjectError("run.spec_sha256 与当前组件规格不一致")
-            program = self._component_program(state, component["spec"])
-            backend = record.get("backend")
-            if not isinstance(backend, dict) or backend.get("name") != "photocraft":
-                raise ProjectError("成功运行必须记录 PhotoCraft backend")
-            _text(backend.get("version"), "run.backend.version")
-            if not isinstance(backend.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", backend["sha256"]):
-                raise ProjectError("run.backend.sha256 必须是实际可执行文件的 SHA-256")
-            if not isinstance(backend.get("cli_path"), str) or not Path(backend["cli_path"]).is_absolute():
-                raise ProjectError("run.backend.cli_path 必须是实际 CLI 的绝对路径")
-            for field, expected in (("program_id", program["id"]), ("program_version", program["version"]),
-                                    ("program_sha256", program["sha256"])):
-                if record.get(field) != expected or (field == "program_version" and type(record.get(field)) is not int):
-                    raise ProjectError(f"run.{field} 与当前组件使用的程序不一致")
-            if status == "verified":
-                verification = record.get("verification")
-                checks = ("reopened", "stable_node_ids", "stable_pixels", "stable_properties")
-                if not isinstance(verification, dict) or any(verification.get(key) is not True for key in checks):
-                    raise ProjectError("verified 记录必须提供 verification 对象，且重新打开及稳定性检查均为 true")
-                inspection = record.get("inspection")
-                if not isinstance(inspection, dict) or any(
-                    not isinstance(inspection.get(key), dict) or not inspection[key]
-                    for key in ("before", "reopened")
-                ):
-                    raise ProjectError("verified 记录必须包含 inspection.before 和 inspection.reopened 的实际检查数据")
-            record["artifact_hashes"] = {}
-            for field, suffix in (("document", ".pcraft"), ("preview", ".png"),
-                                  ("operations_path", None), ("style_snapshot_path", None),
-                                  ("program_snapshot_path", ".py"), ("plan_path", ".json"),
-                                  ("source_snapshot_path", ".pcraft")):
-                path_value = record.get(field)
-                _text(path_value, f"run.{field}")
-                path = Path(document_artifact if field == "document" and document_artifact is not None else path_value)
-                if not path.is_absolute() or not path.is_file():
-                    raise ProjectError(f"run.{field} 必须是现存文件的绝对路径：{path_value}")
-                if suffix and path.suffix.lower() != suffix:
-                    raise ProjectError(f"run.{field} 文件必须使用 {suffix} 扩展名：{path}")
-                record["artifact_hashes"][field] = _sha(path.read_bytes())
-            if record["artifact_hashes"]["program_snapshot_path"] != program["sha256"]:
-                raise ProjectError("run.program_snapshot_path 源码摘要与当前程序不一致")
-            if record["artifact_hashes"]["source_snapshot_path"] != record["artifact_hashes"]["document"]:
-                raise ProjectError("源文件与本次归档的 source_snapshot_path 摘要不一致")
-            record["user_confirmation"] = None
-            component["latest_run"] = record
-            component["user_confirmation"] = None
-        component["runs"].append(record)
+        if status not in ("drawn", "verified"):
+            raise ProjectError("持久组件记录只接受 drawn 或 verified 成功产物")
+        if record.get("style_sha256") != style_sha256(state["style"]):
+            raise ProjectError("run.style_sha256 必须等于当前风格摘要")
+        if record.get("spec_sha256") != spec_sha256(component["spec"]):
+            raise ProjectError("run.spec_sha256 与当前组件规格不一致")
+        program = self._component_program(state, component["spec"])
+        backend = record.get("backend")
+        if not isinstance(backend, dict) or backend.get("name") != "photocraft":
+            raise ProjectError("成功运行必须记录 PhotoCraft backend")
+        _text(backend.get("version"), "run.backend.version")
+        if not isinstance(backend.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", backend["sha256"]):
+            raise ProjectError("run.backend.sha256 必须是实际可执行文件的 SHA-256")
+        if not isinstance(backend.get("cli_path"), str) or not Path(backend["cli_path"]).is_absolute():
+            raise ProjectError("run.backend.cli_path 必须是实际 CLI 的绝对路径")
+        for field, expected in (("program_id", program["id"]),
+                                ("program_sha256", program["sha256"])):
+            if record.get(field) != expected:
+                raise ProjectError(f"run.{field} 与当前组件使用的程序不一致")
+        if status == "verified":
+            verification = record.get("verification")
+            checks = ("reopened", "stable_node_ids", "stable_pixels", "stable_properties")
+            if not isinstance(verification, dict) or any(verification.get(key) is not True for key in checks):
+                raise ProjectError("verified 记录必须提供 verification 对象，且重新打开及稳定性检查均为 true")
+            inspection = record.get("inspection")
+            if not isinstance(inspection, dict) or any(
+                not isinstance(inspection.get(key), dict) or not inspection[key]
+                for key in ("before", "reopened")
+            ):
+                raise ProjectError("verified 记录必须包含 inspection.before 和 inspection.reopened 的实际检查数据")
+        record["artifact_hashes"] = {}
+        for field, suffix in (("document", ".pcraft"), ("preview", ".png"),
+                              ("style_snapshot_path", ".json"), ("plan_path", ".json")):
+            path_value = record.get(field)
+            _text(path_value, f"run.{field}")
+            path = Path(document_artifact if field == "document" and document_artifact is not None else path_value)
+            if not path.is_absolute() or not path.is_file():
+                raise ProjectError(f"run.{field} 必须是现存文件的绝对路径：{path_value}")
+            if suffix and path.suffix.lower() != suffix:
+                raise ProjectError(f"run.{field} 文件必须使用 {suffix} 扩展名：{path}")
+            record["artifact_hashes"][field] = _sha(path.read_bytes())
+        record["user_confirmation"] = None
+        component["latest_run"] = record
+        component["user_confirmation"] = None
 
-    def publish_run(self, project_root: str, expected_revision: str, component_id: str, run: dict) -> dict:
-        """在同一项目锁内检查输入、发布候选源文件并登记成功运行。"""
+    def publish_run(self, project_root, expected_revision, component_id, run):
+        """在项目锁内校验候选并覆盖当前源文件和配套制作数据。"""
         _identifier(component_id, "component_id")
         root = self._root(project_root)
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            if component_id not in state["components"]:
-                raise ProjectError(f"组件不存在：{component_id}")
-            layout = ProjectLayout(root, state["paths"])
-            document = layout.directory("sources") / (component_id + ".pcraft")
-            layout._check_managed_path(document)
+            component = state["components"][component_id]
+            document = ProjectLayout(root).directory("sources") / (component_id + ".pcraft")
             if Path(run["document"]) != document:
-                raise ProjectError("运行源文件路径与组件路径不同：" + str(run["document"]))
-            latest = state["components"][component_id]["latest_run"]
+                raise ProjectError("运行源文件路径与组件路径不同")
+            latest = component["latest_run"]
             if latest:
                 if not document.is_file() or _sha(document.read_bytes()) != latest["artifact_hashes"]["document"]:
-                    raise ProjectError("制作期间源文件被外部修改；候选产物已保留，原源文件未覆盖")
+                    raise ProjectError("制作期间源文件被外部修改；原源文件未覆盖")
             elif document.exists():
-                raise ProjectError("制作期间目标源文件已被创建，不能覆盖：" + str(document))
+                raise ProjectError(f"未登记源文件已存在：{document}")
             candidate = Path(run["source_snapshot_path"])
-            # 发布前完成运行记录的全部校验；document 的摘要取本次候选文件。
-            self._record_run(state, component_id, run, document_artifact=candidate)
             if run["status"] != "verified":
-                raise ProjectError("只有通过实际保存重开核验的运行才能发布源文件")
-            temporary = document.with_name(f".{document.name}.{uuid4().hex}.tmp")
-            with temporary.open("xb") as stream:
-                stream.write(candidate.read_bytes())
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, document)
-            try:
-                return self._write(root, state)
-            except Exception as error:
-                raise ProjectError(f"源文件已发布，但项目记录未能保存；请核对候选文件与当前源文件：{candidate}；{error}") from error
+                raise ProjectError("只有通过保存重开核验的产物才能发布")
+            self._record_run(state, component_id, run, document_artifact=candidate)
+            current = component["latest_run"]
+            destinations = {"document": document,
+                "preview": root / f"smart-ui/previews/components/{component_id}.png",
+                "plan_path": root / f"smart-ui/components/{component_id}/plan.json",
+                "style_snapshot_path": root / f"smart-ui/components/{component_id}/inputs.json"}
+            artifacts = {}
+            for field, destination in destinations.items():
+                source = candidate if field == "document" else Path(run[field])
+                payload = source.read_bytes()
+                if _sha(payload) != current["artifact_hashes"][field]:
+                    raise ProjectError(f"候选产物在发布前发生变化：{source}")
+                artifacts[destination] = payload
+                current[field] = str(destination)
+            for field in ("operations_path", "program_snapshot_path", "source_snapshot_path"):
+                current.pop(field, None)
+            current["backend"].pop("cli_path")
+            return self._write(root, state, artifacts)
 
     def compare_component(self, project_root: str, expected_revision: str, component_id: str,
-                          run_id: str, reference_id: str, reference_region: list[int] | None = None,
+                          reference_id: str, reference_region: list[int] | None = None,
                           reference_coordinate_size: list[int] | None = None,
                           artifact_region: list[int] | None = None, reference_scale: float = 1.0,
                           artifact_scale: float = 1.0) -> dict:
         from .comparisons import build_comparison
 
         root = self._root(project_root)
-        for value, field in ((component_id, "component_id"), (run_id, "run_id"), (reference_id, "reference_id")):
+        for value, field in ((component_id, "component_id"), (reference_id, "reference_id")):
             _identifier(value, field)
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            component, run, plan, snapshot = self._review_run(state, component_id, run_id)
+            _, run, plan, snapshot = self._review_run(state, component_id)
             if reference_id not in state["references"]:
                 raise ProjectError(f"未登记参考：{reference_id}")
             nodes, rules = plan["nodes"], snapshot["style"]["rules"]
-            comparison_id = uuid4().hex
-            record = build_comparison(str(root), comparison_id, state["references"][reference_id], run,
-                                      reference_region=reference_region,
-                                      reference_coordinate_size=reference_coordinate_size,
-                                      artifact_region=artifact_region, reference_scale=reference_scale,
-                                      artifact_scale=artifact_scale)
-            record.update(component_id=component_id, run_index=component["runs"].index(run),
-                          created_at=datetime.now(timezone.utc).isoformat(),
-                          project_revision=revision,
-                          run={key: run[key] for key in ("run_id", "status", "style_version", "spec_sha256",
-                                                        "program_id", "program_version", "program_sha256")},
-                          node_keys=[node["key"] for node in nodes],
-                          rule_ids=[rule["id"] for rule in rules if isinstance(rule.get("id"), str)])
-            state.setdefault("comparisons", {})[comparison_id] = record
-            try:
-                updated = self._write(root, state)
-            except ProjectError as error:
-                raise ProjectError(f"对照图片已保留，但项目记录写入失败：{record['images']['comparison']['path']}；{error}") from error
+            comparison_id = "comparison-" + spec_sha256([component_id, reference_id])
+            def commit(record):
+                record.update(component_id=component_id,
+                              created_at=datetime.now(timezone.utc).isoformat(),
+                              project_revision=revision,
+                              run={key: run[key] for key in ("run_id", "status", "style_sha256", "spec_sha256",
+                                                            "program_id", "program_sha256")},
+                              node_keys=[node["key"] for node in nodes],
+                              rule_ids=[rule["id"] for rule in rules if isinstance(rule.get("id"), str)])
+                state["comparisons"][comparison_id] = record
+                return self._write(root, state)
+
+            updated = build_comparison(str(root), comparison_id, state["references"][reference_id], run,
+                                       reference_region=reference_region,
+                                       reference_coordinate_size=reference_coordinate_size,
+                                       artifact_region=artifact_region, reference_scale=reference_scale,
+                                       artifact_scale=artifact_scale, commit=commit)
             return self._comparison_result(updated, comparison_id)
 
-    def create_visual_check(self, project_root: str, expected_revision: str, items: list[dict],
+    def create_visual_check(self, project_root: str, expected_revision: str, check_id: str, items: list[dict],
                             background: str, columns: int = 3, grayscale: bool = True) -> dict:
-        """用明确的成功运行版本保存多产物检查图，不改变视觉确认状态。"""
+        """用当前成功产物保存检查图。"""
         from .visual_checks import MAX_ITEMS, build_visual_check
 
         root = self._root(project_root)
         if not isinstance(items, list) or not 1 <= len(items) <= MAX_ITEMS:
             raise ProjectError(f"items 必须包含 1 到 {MAX_ITEMS} 项")
+        _identifier(check_id, "check_id")
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
+            self._check_id_collision(state["visual_checks"], check_id, "check_id")
             resolved, specs = [], []
             for index, item in enumerate(items):
-                required = {"component_id", "run_id", "label"}
+                required = {"component_id", "label"}
                 if (not isinstance(item, dict) or not required <= item.keys()
                         or item.keys() - (required | {"region", "scale"})):
-                    raise ProjectError(f"items[{index}] 必须包含 component_id、run_id、label；仅可附加 region、scale")
+                    raise ProjectError(f"items[{index}] 必须包含 component_id、label；仅可附加 region、scale")
                 _identifier(item["component_id"], f"items[{index}].component_id")
-                _identifier(item["run_id"], f"items[{index}].run_id")
                 _text(item["label"], f"items[{index}].label")
-                _, run, _, snapshot = self._review_run(state, item["component_id"], item["run_id"])
+                _, run, _, snapshot = self._review_run(state, item["component_id"])
                 resolved.append({"component_id": item["component_id"], "run": run, "label": item["label"],
                                  "region": item.get("region"), "scale": item.get("scale", 1.0)})
                 specs.append(snapshot["spec"])
-            check_id = uuid4().hex
-            record = build_visual_check(str(root), check_id, resolved, background=background,
-                                        columns=columns, grayscale=grayscale)
-            for entry, spec in zip(record["items"], specs, strict=True):
-                entry["spec"] = spec
-            record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
-            state.setdefault("visual_checks", {})[check_id] = record
-            try:
-                updated = self._write(root, state)
-            except ProjectError as error:
-                raise ProjectError(f"视觉检查图片已保留，但项目记录写入失败：{record['images']['overview']['path']}；{error}") from error
+            def commit(record):
+                for entry, spec in zip(record["items"], specs, strict=True):
+                    entry["spec"] = spec
+                record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
+                state["visual_checks"][check_id] = record
+                return self._write(root, state)
+
+            updated = build_visual_check(str(root), check_id, resolved, background=background,
+                                         columns=columns, grayscale=grayscale, commit=commit)
             return self._visual_check_result(updated, check_id)
 
     def get_visual_check(self, project_root: str, check_id: str) -> dict:
         _identifier(check_id, "check_id")
         context = self.context(project_root)
         result = self._visual_check_result(context, check_id)
-        # 历史检查读取保存的快照，不要求原始预览图仍然存在。
+        # 校验当前检查图。
         for item in result["visual_check"]["images"].values():
             path = Path(item["path"])
             if not path.is_absolute():
@@ -382,80 +362,56 @@ class ProjectStore:
             raise ProjectError(f"视觉检查记录不存在：{check_id}")
         return {"project_root": context["project_root"], "revision": context["revision"], "visual_check": record}
 
-    def register_image(self, project_root: str, expected_revision: str, asset_id: str,
-                       name: str, source_path: str, provenance: dict) -> dict:
-        """登记不可变图像版本；生成候选不自动改变选用版本。"""
-        from .image_assets import register_image_file
-
+    def register_image(self, project_root, expected_revision, asset_id, name, source_path, provenance):
+        from .image_assets import register_image_file, verify_image_record
         root = self._root(project_root)
         _identifier(asset_id, "asset_id")
         _text(name, "name")
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            assets = state.setdefault("images", {})
-            asset = assets.get(asset_id)
-            version = len(asset["versions"]) + 1 if asset else 1
-            record = register_image_file(str(root), state["paths"], asset_id, version, source_path, provenance)
-            record["created_at"] = datetime.now(timezone.utc).isoformat()
-            if asset is None:
-                asset = {"id": asset_id, "name": name, "selected_version": None, "versions": []}
-                assets[asset_id] = asset
-            asset["name"] = name
-            asset["versions"].append(record)
-            try:
-                updated = self._write(root, state)
-            except ProjectError as error:
-                raise ProjectError(f"图像文件已保留，但项目记录写入失败：{record['path']}；{error}") from error
-            return {"project_root": str(root), "revision": updated["revision"],
-                    "image": updated["data"]["images"][asset_id], "registered_version": version}
+            self._check_id_collision(state["images"], asset_id, "asset_id")
+            previous = state["images"].get(asset_id)
+            if previous:
+                verify_image_record(previous)
+                if previous["provenance"]["kind"] == "component_export":
+                    raise ProjectError("正式导出资产应通过导出工具更新")
+            def commit(record):
+                state["images"][asset_id] = record
+                return self._write(root, state)
 
-    def select_image(self, project_root: str, expected_revision: str, asset_id: str, version: int) -> dict:
-        """明确选用已登记版本，不生成图像或重建已有组合。"""
-        from .image_assets import verify_image_version
+            context = register_image_file(str(root), state["paths"], asset_id, name, source_path, provenance, commit=commit)
+            return {"project_root": str(root), "revision": context["revision"], "image": context["data"]["images"][asset_id]}
 
-        _identifier(asset_id, "asset_id")
-        def change(state):
-            record = self._image_version(state, asset_id, version)
-            verify_image_version(record)
-            state["images"][asset_id]["selected_version"] = version
-        updated = self._update(project_root, expected_revision, change)
-        return {"project_root": updated["project_root"], "revision": updated["revision"],
-                "image": updated["data"]["images"][asset_id]}
 
-    def export_assets(self, project_root: str, expected_revision: str, component_id: str,
-                      run_id: str, exports: list[dict]) -> dict:
-        """从明确组件运行导出正式 PNG，保持资产身份及独立选用状态。"""
+
+    def export_assets(self, project_root, expected_revision, component_id, exports):
         from .exports import prepare_exports, publish_exports
-
         _identifier(component_id, "component_id")
-        _identifier(run_id, "run_id")
         root = self._root(project_root)
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            self._review_run(state, component_id, run_id)
-            plan = prepare_exports(str(root), state["paths"], state, component_id, run_id, exports)
-            record = publish_exports(plan)
-            record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
-            assets = state.setdefault("images", {})
-            for item in record["items"]:
-                asset = assets.setdefault(item["asset_id"], {"id": item["asset_id"], "name": item["name"],
-                                          "selected_version": None, "versions": []})
-                asset["name"] = item["name"]
-                if not item["reused"]:
-                    asset["versions"].append(deepcopy(item["record"]))
-            state.setdefault("exports", {})[record["id"]] = record
-            try:
-                updated = self._write(root, state)
-            except ProjectError as error:
-                raise ProjectError(f"正式资产已发布，但项目记录未更新：{record['manifest']['path']}；{error}") from error
-            return {"project_root": str(root), "revision": updated["revision"],
-                    "export": updated["data"]["exports"][record["id"]]}
+            self._review_run(state, component_id)
+            plan = prepare_exports(str(root), state["paths"], state, component_id, exports)
+            asset_ids = set(state["images"])
+            for item in plan["items"]:
+                asset_id = item["asset_id"]
+                self._check_id_collision(asset_ids, asset_id, "asset_id")
+                asset_ids.add(asset_id)
+            def commit(record):
+                record.update(created_at=datetime.now(timezone.utc).isoformat())
+                for item in record["items"]:
+                    state["images"][item["asset_id"]] = deepcopy(item["record"])
+                state.setdefault("exports", {})[component_id] = record
+                return self._write(root, state)
+
+            context = publish_exports(plan, commit=commit)
+            return {"project_root": str(root), "revision": context["revision"], "export": context["data"]["exports"][component_id]}
 
     def get_export(self, project_root: str, export_id: str) -> dict:
-        """读取原始导出清单和归档资产，生产路径的后续更新不改变历史结果。"""
-        from .image_assets import verify_image_version
+        """校验当前导出清单和资产。"""
+        from .image_assets import verify_image_record
 
         _identifier(export_id, "export_id")
         context = self.context(project_root)
@@ -467,45 +423,35 @@ class ProjectStore:
         if _sha(path.read_bytes()) != manifest["sha256"]:
             raise ProjectError(f"导出清单 SHA-256 不符：{path}")
         for item in record["items"]:
-            verify_image_version(item["record"])
+            verify_image_record(item["record"])
         return {"project_root": context["project_root"], "revision": context["revision"], "export": record}
 
-    def get_image(self, project_root: str, asset_id: str, version: int) -> dict:
-        from .image_assets import verify_image_version
-
+    def get_image(self, project_root, asset_id):
+        from .image_assets import verify_image_record
         _identifier(asset_id, "asset_id")
         context = self.context(project_root)
-        record = self._image_version(context["data"], asset_id, version)
-        verify_image_version(record)
-        return {"project_root": context["project_root"], "revision": context["revision"],
-                "asset_id": asset_id, "selected_version": context["data"]["images"][asset_id]["selected_version"],
-                "image_version": record}
-
-    @staticmethod
-    def _image_version(state, asset_id, version):
-        if type(version) is not int or version < 1:
-            raise ProjectError("version 必须是正整数")
-        asset = state.get("images", {}).get(asset_id)
-        if asset is None:
-            raise ProjectError(f"图像资产不存在：{asset_id}")
-        record = next((item for item in asset["versions"] if item["version"] == version), None)
+        record = context["data"]["images"].get(asset_id)
         if record is None:
-            raise ProjectError(f"图像版本不存在：{asset_id}/{version}")
-        return record
+            raise ProjectError(f"图像资产不存在：{asset_id}")
+        verify_image_record(record)
+        return {"project_root": context["project_root"], "revision": context["revision"], "asset_id": asset_id, "image": record}
 
-    def create_composition(self, project_root: str, expected_revision: str, width: int,
+    def create_composition(self, project_root: str, expected_revision: str, composition_id: str, width: int,
                            height: int, background: str, nodes: list[dict]) -> dict:
-        """以明确的资产版本和坐标生成组合快照，不调用生图或重画源组件。"""
+        """以当前资产和明确坐标更新组合预览。"""
         from .compositions import build_composition
-        from .image_assets import verify_image_version
+        from .image_assets import verify_image_record
         from .visual_checks import RUN_FIELDS
 
         root = self._root(project_root)
+        layout = ProjectLayout(root)
         if not isinstance(nodes, list) or not 1 <= len(nodes) <= 64:
             raise ProjectError("nodes 必须包含 1 到 64 项")
+        _identifier(composition_id, "composition_id")
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
+            self._check_id_collision(state["compositions"], composition_id, "composition_id")
             resolved = []
             for index, node in enumerate(nodes):
                 if not isinstance(node, dict):
@@ -513,10 +459,10 @@ class ProjectStore:
                 kind = node.get("kind")
                 common = {"id", "kind", "x", "y"}
                 if kind == "component":
-                    required = common | {"component_id", "run_id", "width", "height"}
+                    required = common | {"component_id", "width", "height"}
                     optional = {"region"}
                 elif kind == "image":
-                    required = common | {"asset_id", "version", "width", "height"}
+                    required = common | {"asset_id", "width", "height"}
                     optional = {"region"}
                 elif kind == "text":
                     required = common | {"text", "font_path", "font_size", "color"}
@@ -528,85 +474,71 @@ class ProjectStore:
                 entry = dict(node)
                 if kind == "component":
                     _identifier(node["component_id"], f"nodes[{index}].component_id")
-                    _identifier(node["run_id"], f"nodes[{index}].run_id")
-                    _, run, _, snapshot = self._review_run(state, node["component_id"], node["run_id"])
+                    _, run, _, snapshot = self._review_run(state, node["component_id"])
                     missing = set(RUN_FIELDS) - run.keys()
                     if missing:
-                        raise ProjectError(f"组件运行 {node['component_id']}/{node['run_id']} 缺少字段：{', '.join(sorted(missing))}")
+                        raise ProjectError(f"组件运行 {node['component_id']} 缺少字段：{', '.join(sorted(missing))}")
                     self._run_artifact(run, "preview")
-                    entry.pop("run_id")
                     entry.update(source=run["preview"], sha256=run["artifact_hashes"]["preview"],
                                  run={key: run[key] for key in RUN_FIELDS}, spec=snapshot["spec"])
                 elif kind == "image":
                     _identifier(node["asset_id"], f"nodes[{index}].asset_id")
-                    record = self._image_version(state, node["asset_id"], node["version"])
-                    verify_image_version(record)
+                    record = state["images"].get(node["asset_id"])
+                    if record is None:
+                        raise ProjectError(f"nodes[{index}] 引用不存在的图像资产：{node['asset_id']}")
+                    verify_image_record(record)
                     entry.update(source=record["path"], sha256=record["sha256"])
+                else:
+                    layout.require_persistent_input(node["font_path"], f"nodes[{index}].font_path")
                 if kind in ("component", "image"):
                     entry.setdefault("region", None)
                 resolved.append(entry)
-            composition_id = uuid4().hex
-            record = build_composition(str(root), composition_id, width, height, background, resolved)
-            record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
-            state.setdefault("compositions", {})[composition_id] = record
-            try:
-                updated = self._write(root, state)
-            except ProjectError as error:
-                raise ProjectError(f"组合图片已保留，但项目记录写入失败：{record['images']['overview']['path']}；{error}") from error
+            def commit(record):
+                record.update(created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
+                state.setdefault("compositions", {})[composition_id] = record
+                return self._write(root, state)
+
+            updated = build_composition(str(root), composition_id, width, height, background, resolved, commit=commit)
             return self._composition_result(updated, composition_id)
 
-    def save_layout(self, project_root: str, expected_revision: str, layout_id: str, name: str,
-                    width: int, height: int, background: str, nodes: list[dict]) -> dict:
-        """保存可更新页面定义；不生成图像、不改变资产选用或既有快照。"""
+    def save_layout(self, project_root, expected_revision, layout_id, name, width, height, background, nodes):
         from .page_layouts import validate_definition, resolve_definition, definition_for_storage
-
         _identifier(layout_id, "layout_id")
         _text(name, "name")
         root = self._root(project_root)
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
+            self._check_id_collision(state["layouts"], layout_id, "layout_id")
+            layout = ProjectLayout(root)
             definition = validate_definition(width, height, background, nodes)
+            for node in definition["nodes"]:
+                if node["kind"] == "text":
+                    layout.require_persistent_input(node["font_path"], f"节点 {node['id']}.font_path")
             resolve_definition(state, definition)
-            digest = spec_sha256(definition_for_storage(definition, ProjectLayout(root, state["paths"])))
-            layouts = state.setdefault("layouts", {})
-            layout = layouts.get(layout_id)
-            if layout and layout["name"] == name and layout["versions"][-1]["definition_sha256"] == digest:
-                return self._layout_result(self._context(root, state, revision), layout_id, None)
-            if layout is None:
-                layout = {"id": layout_id, "name": name, "current_version": 0, "versions": []}
-                layouts[layout_id] = layout
-            version = layout["current_version"] + 1
-            layout.update(name=name, current_version=version)
-            layout["versions"].append({"version": version, "name": name, "definition": definition, "definition_sha256": digest,
-                                       "created_at": datetime.now(timezone.utc).isoformat()})
-            return self._layout_result(self._write(root, state), layout_id, version)
+            digest = spec_sha256(definition_for_storage(definition, layout))
+            state.setdefault("layouts", {})[layout_id] = {"id": layout_id, "name": name, "definition": definition, "sha256": digest}
+            return self._layout_result(self._write(root, state), layout_id)
 
-    def get_layout(self, project_root: str, layout_id: str, version: int | None = None) -> dict:
+    def get_layout(self, project_root, layout_id):
         _identifier(layout_id, "layout_id")
-        return self._layout_result(self.context(project_root), layout_id, version)
+        return self._layout_result(self.context(project_root), layout_id)
 
-    def build_layout(self, project_root: str, expected_revision: str, layout_id: str,
-                     version: int | None = None) -> dict:
-        """用明确布局修订构建新的浏览器快照，不覆盖历史构建。"""
+    def build_layout(self, project_root, expected_revision, layout_id):
         from .page_builds import build_page
-
         _identifier(layout_id, "layout_id")
         root = self._root(project_root)
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            page = self._layout_result(self._context(root, state, revision), layout_id, version)["layout"]
-            build_id = f"page-{uuid4().hex[:12]}"
-            record = build_page(root, build_id, layout_id, page["version"], page["definition"], state)
-            record.update(layout_definition_sha256=page["definition_sha256"],
-                          created_at=datetime.now(timezone.utc).isoformat(), project_revision=revision)
-            state.setdefault("page_builds", {})[build_id] = record
-            try:
-                updated = self._write(root, state)
-            except ProjectError as error:
-                raise ProjectError(f"页面快照已保留，但项目记录写入失败：{record['files']['html']['path']}；{error}") from error
-            return self._page_build_result(updated, build_id)
+            page = state["layouts"][layout_id]
+            def commit(record):
+                record.update(created_at=datetime.now(timezone.utc).isoformat())
+                state.setdefault("page_builds", {})[layout_id] = record
+                return self._write(root, state)
+
+            context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state, commit=commit)
+            return self._page_build_result(context, layout_id)
 
     def get_page_build(self, project_root: str, build_id: str) -> dict:
         """读取已保存构建，只依赖快照，不要求原始图像和字体继续存在。"""
@@ -622,36 +554,32 @@ class ProjectStore:
 
     @staticmethod
     def _page_build_result(context, build_id):
+        from .page_layouts import image_geometry
+
         state = context["data"]
         record = state.get("page_builds", {}).get(build_id)
         if record is None:
             raise ProjectError(f"页面构建不存在：{build_id}")
-        layout = state["layouts"][record["layout_id"]]
-        matches_bindings = all(
-            node["binding"]["kind"] == "fixed" or
-            state["images"][node["asset_id"]]["selected_version"] == node["version"]
-            for node in record["nodes"] if node["kind"] == "image")
-        return {"project_root": context["project_root"], "revision": context["revision"],
-                "page_build": deepcopy(record), "matches_layout": layout["current_version"] == record["layout_version"],
-                "matches_bindings": matches_bindings}
+        def matches_image(node):
+            image = state["images"].get(node["asset_id"])
+            return (image is not None and image["sha256"] == node["sha256"]
+                    and image_geometry(image) == node["geometry"])
+
+        matches = all(matches_image(node) for node in record["nodes"] if node["kind"] == "image")
+        return {"project_root": context["project_root"], "revision": context["revision"], "page_build": deepcopy(record),
+                "matches_layout": state["layouts"][record["layout_id"]]["sha256"] == record["layout_sha256"], "matches_bindings": matches}
 
     @staticmethod
-    def _layout_result(context, layout_id, version):
-        layout = context["data"].get("layouts", {}).get(layout_id)
-        if layout is None:
+    def _layout_result(context, layout_id):
+        page = context["data"].get("layouts", {}).get(layout_id)
+        if page is None:
             raise ProjectError(f"页面布局不存在：{layout_id}")
-        selected = layout["current_version"] if version is None else version
-        if type(selected) is not int or not 1 <= selected <= len(layout["versions"]):
-            raise ProjectError(f"页面布局版本不存在：{layout_id}/{selected}")
-        record = layout["versions"][selected - 1]
-        return {"project_root": context["project_root"], "revision": context["revision"],
-                "layout": {"id": layout_id, "current_version": layout["current_version"],
-                           **deepcopy(record)}}
+        return {"project_root": context["project_root"], "revision": context["revision"], "layout": deepcopy(page)}
 
     def get_composition(self, project_root: str, composition_id: str) -> dict:
         _identifier(composition_id, "composition_id")
         result = self._composition_result(self.context(project_root), composition_id)
-        # 历史记录使用保存的图片和字体，不依赖原图仍然存在。
+        # 校验当前组合图及其输入。
         record = result["composition"]
         for item in [*record["images"].values(), *record["fonts"].values()]:
             path = Path(item["path"])
@@ -670,28 +598,28 @@ class ProjectStore:
             raise ProjectError(f"组合预览不存在：{composition_id}")
         return {"project_root": context["project_root"], "revision": context["revision"], "composition": record}
 
-    def _review_run(self, state, component_id, run_id):
+    def _review_run(self, state, component_id):
         component = state["components"].get(component_id)
         if component is None:
             raise ProjectError(f"组件不存在：{component_id}")
-        run = next((item for item in component["runs"] if item["run_id"] == run_id), None)
+        run = component["latest_run"]
         if run is None or run["status"] not in ("drawn", "verified"):
-            raise ProjectError(f"run_id 必须对应此组件已保存的成功产物：{component_id}/{run_id}")
+            raise ProjectError(f"组件必须有已保存的当前成功产物：{component_id}")
         try:
             plan = json.loads(self._run_artifact(run, "plan_path"))
             snapshot = json.loads(self._run_artifact(run, "style_snapshot_path"))
         except (ValueError, UnicodeError) as error:
-            raise ProjectError(f"运行计划或风格快照不是有效 JSON：{run_id}；{error}") from error
+            raise ProjectError(f"运行计划或风格快照不是有效 JSON：{component_id}；{error}") from error
         if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("style"), dict)
                 or snapshot.get("component_id") != component_id
-                or snapshot["style"].get("version") != run["style_version"]
+                or style_sha256(snapshot["style"]) != run["style_sha256"]
                 or spec_sha256(snapshot.get("spec")) != run["spec_sha256"]):
-            raise ProjectError(f"运行风格快照与记录的风格版本或组件规格不一致：{run_id}")
+            raise ProjectError(f"运行风格快照与记录的风格摘要或组件规格不一致：{component_id}")
         nodes = plan.get("nodes") if isinstance(plan, dict) else None
         rules = snapshot["style"].get("rules")
         if (not isinstance(nodes, list) or any(not isinstance(node, dict) or not isinstance(node.get("key"), str) for node in nodes)
                 or not isinstance(rules, list) or any(not isinstance(rule, dict) for rule in rules)):
-            raise ProjectError(f"运行快照缺少有效的节点或风格规则：{run_id}")
+            raise ProjectError(f"运行快照缺少有效的节点或风格规则：{component_id}")
         return component, run, plan, snapshot
 
     def get_comparison(self, project_root: str, comparison_id: str) -> dict:
@@ -708,6 +636,7 @@ class ProjectStore:
         feedback_id = uuid4().hex
         def change(state):
             self._check_comparison_images(state, comparison_id)
+            self._require_current_comparison(state, comparison_id)
             add_feedback(state, feedback_id, comparison_id, observation, suggested_change,
                          [] if target_nodes is None else target_nodes, [] if rule_ids is None else rule_ids, source)
         context = self._update(project_root, expected_revision, change)
@@ -720,10 +649,27 @@ class ProjectStore:
 
         def change(state):
             self._check_comparison_images(state, comparison_id)
+            self._require_current_comparison(state, comparison_id)
             update_feedback(state, feedback_id, status, comment, comparison_id, source)
         context = self._update(project_root, expected_revision, change)
         return {"project_root": context["project_root"], "revision": context["revision"],
                 "feedback": context["data"]["feedback"][feedback_id]}
+
+    def _require_current_comparison(self, state, comparison_id):
+        from .references import _sha256
+
+        comparison = self._context(Path("."), state, "")["data"]["comparisons"][comparison_id]
+        if not comparison["is_current"]:
+            raise ProjectError("对照已不匹配当前组件或参考，请重新对照后记录反馈")
+        self._run_artifact(state["components"][comparison["component_id"]]["latest_run"], "preview")
+        reference = state["references"][comparison["reference"]["id"]]
+        source = Path(reference["source"])
+        try:
+            digest = _sha256(source)
+        except OSError as error:
+            raise ProjectError(f"无法读取当前参考图：{source}；{error}") from error
+        if digest != reference["sha256"]:
+            raise ProjectError(f"当前参考图 SHA-256 不符：{source}")
 
     @staticmethod
     def _run_artifact(run, field):
@@ -762,8 +708,7 @@ class ProjectStore:
     def _comparison_result(context, comparison_id):
         data = context["data"]
         feedback = {key: value for key, value in data.get("feedback", {}).items()
-                    if value["comparison_id"] == comparison_id or
-                    any(item["comparison_id"] == comparison_id for item in value["history"])}
+                    if value["comparison_id"] == comparison_id}
         return {"project_root": context["project_root"], "revision": context["revision"],
                 "comparison": data["comparisons"][comparison_id], "feedback": feedback}
 
@@ -794,75 +739,39 @@ class ProjectStore:
             path.unlink()
 
     def _read(self, root):
-        path = ProjectLayout(root).project_file
+        layout = ProjectLayout(root)
         try:
-            payload = path.read_bytes()
-            def reject_constant(value):
-                raise ValueError(f"非法 JSON 数值：{value}")
-            state = json.loads(payload, parse_constant=reject_constant)
-            if not isinstance(state, dict) or state.get("schema_version") != 3:
-                raise ProjectError(f"不支持的项目结构，请先显式迁移旧项目：{path}")
-            for field in ("project_id", "name", "references", "style", "components", "programs", "paths"):
-                if field not in state:
-                    raise ProjectError(f"项目缺少 {field}：{path}")
-            if not isinstance(state["paths"], dict) or set(state["paths"]) != set(DEFAULT_PATHS):
-                raise ProjectError(f"项目 paths 必须完整声明 documents、references、programs、sources：{path}")
-            layout = ProjectLayout(root, state["paths"])
-            for key in layout.paths:
-                layout.directory(key)
-            for field in ("comparisons", "feedback", "visual_checks", "images", "compositions", "exports", "layouts", "page_builds"):
-                if field in state and not isinstance(state[field], dict):
-                    raise ProjectError(f"项目 {field} 必须是 JSON 对象：{path}")
-            for asset_id, asset in state.get("images", {}).items():
-                _identifier(asset_id, "images 标识")
-                if (not isinstance(asset, dict) or asset.get("id") != asset_id
-                        or not isinstance(asset.get("versions"), list) or not asset["versions"]):
-                    raise ProjectError(f"图像资产记录无效：{asset_id}")
-                _text(asset.get("name"), f"images.{asset_id}.name")
-                for index, record in enumerate(asset["versions"], 1):
-                    if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != index:
-                        raise ProjectError(f"图像版本必须从 1 起连续记录：{asset_id}")
-                selected = asset["selected_version"]
-                if selected is not None and (type(selected) is not int or not 1 <= selected <= len(asset["versions"])):
-                    raise ProjectError(f"图像选用版本无效：{asset_id}/{selected}")
-            for layout_id, page in state.get("layouts", {}).items():
-                _identifier(layout_id, "layouts 标识")
-                if (not isinstance(page, dict) or page.get("id") != layout_id or
-                        not isinstance(page.get("versions"), list) or not page["versions"] or
-                        type(page.get("current_version")) is not int or page["current_version"] != len(page["versions"])):
-                    raise ProjectError(f"页面布局记录无效：{layout_id}")
-                _text(page.get("name"), f"layouts.{layout_id}.name")
-                for index, record in enumerate(page["versions"], 1):
-                    if (not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] != index
-                            or record.get("definition_sha256") != spec_sha256(record.get("definition"))):
-                        raise ProjectError(f"页面布局版本或定义摘要无效：{layout_id}/{index}")
-                    _text(record.get("name"), f"layouts.{layout_id}.versions[{index}].name")
-            for build_id, build in state.get("page_builds", {}).items():
-                _identifier(build_id, "page_builds 标识")
-                if not isinstance(build, dict) or build.get("id") != build_id:
-                    raise ProjectError(f"页面构建记录无效：{build_id}")
-                page = state.get("layouts", {}).get(build.get("layout_id"))
-                version = build.get("layout_version")
-                if (page is None or type(version) is not int or not 1 <= version <= len(page["versions"]) or
-                        build.get("layout_definition_sha256") != page["versions"][version - 1]["definition_sha256"]):
-                    raise ProjectError(f"页面构建引用的布局修订或摘要无效：{build_id}")
-                from .page_builds import validate_build_record
-                validate_build_record(build)
-            hashes = state.get("document_hashes")
-            if not isinstance(hashes, dict) or set(hashes) != {"style.md", "components.md"}:
-                raise ProjectError(f"项目缺少受管文档摘要：{path}")
-            for filename, expected in hashes.items():
-                document = layout.documents[filename]
-                if _sha(document.read_bytes()) != expected:
-                    raise ProjectError(f"受管文档已被手动修改，请先处理差异：{document}")
+            state = json.loads(layout.project_file.read_bytes())
+            if not isinstance(state, dict) or state.get("schema_version") != 4:
+                raise ProjectError(f"项目状态必须是 schema_version=4 的对象：{layout.project_file}")
+            if state["paths"] != DEFAULT_PATHS:
+                raise ProjectError("项目目录必须使用 smart-ui/ 固定结构")
+            for collection, directory in self._collections().items():
+                records = {}
+                for key, relative in state[collection].items():
+                    _identifier(key, collection)
+                    self._check_id_collision(records, key, collection)
+                    expected = f"smart-ui/{directory}/{key}.json"
+                    if relative != expected:
+                        raise ProjectError(f"{collection}.{key} 路径必须为 {expected}")
+                    records[key] = json.loads(layout.resolve(relative).read_bytes())
+                state[collection] = records
+            for name, digest in state["document_hashes"].items():
+                if name not in layout.documents or _sha(layout.documents[name].read_bytes()) != digest:
+                    raise ProjectError(f"受管文档已被修改或缺失：{name}")
+            if set(state["document_hashes"]) != set(layout.documents):
+                raise ProjectError("项目缺少受管文档摘要")
             self._references(state, state["style"]["reference_ids"], "style.reference_ids")
             self._rule_references(state, state["style"]["rules"])
             self._validate_programs(root, state["programs"], state["paths"])
             for component in state["components"].values():
                 self._component_program(state, component["spec"])
-            return map_state_paths(state, layout.resolve), _sha(payload)
+            for key, page in state["layouts"].items():
+                if page["sha256"] != spec_sha256(page["definition"]):
+                    raise ProjectError(f"页面布局定义摘要不一致：{key}")
+            return map_state_paths(state, layout.resolve), spec_sha256(state)
         except (OSError, ValueError, KeyError, TypeError) as error:
-            raise ProjectError(f"无法读取项目状态或受管文档：{root}；{error}") from error
+            raise ProjectError(f"无法读取项目状态：{root}；{error}") from error
 
     def _update(self, project_root, expected_revision, change):
         root = self._root(project_root)
@@ -891,31 +800,13 @@ class ProjectStore:
             raise ProjectError(str(error)) from error
 
     def _validate_programs(self, root, programs, paths):
-        if not isinstance(programs, dict):
-            raise ProjectError("programs 必须是 JSON 对象")
-        for program_id, program in programs.items():
-            _identifier(program_id, "program_id")
-            if not isinstance(program, dict):
-                raise ProjectError(f"程序元数据必须是 JSON 对象：{program_id}")
-            _text(program.get("name"), f"programs.{program_id}.name")
-            if program.get("id") != program_id or not isinstance(program.get("description"), str):
-                raise ProjectError(f"程序标识或说明无效：{program_id}")
-            version = program.get("version")
-            history = program.get("history")
-            if type(version) is not int or version < 1 or not isinstance(history, list) or len(history) != version:
-                raise ProjectError(f"程序版本或历史无效：{program_id}")
-            for index, item in enumerate(history, 1):
-                expected_path = f"{paths['programs']}/{program_id}/{index}.py"
-                if (not isinstance(item, dict) or type(item.get("version")) is not int or
-                        item["version"] != index or item.get("source_path") != expected_path):
-                    raise ProjectError(f"程序历史路径或版本无效：{program_id} 第 {index} 版")
-                if not isinstance(item.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]):
-                    raise ProjectError(f"程序源码摘要无效：{expected_path}")
-                path = self._program_path(root, expected_path, paths)
-                if _sha(path.read_bytes()) != item["sha256"]:
-                    raise ProjectError(f"程序源码已被手动修改，摘要不一致：{path}")
-            if any(program.get(field) != history[-1][field] for field in ("version", "sha256", "source_path")):
-                raise ProjectError(f"当前程序元数据与最新历史不一致：{program_id}")
+        for key, program in programs.items():
+            _identifier(key, "program_id")
+            expected = f"smart-ui/programs/{key}.py"
+            if program.get("id") != key or program.get("source_path") != expected:
+                raise ProjectError(f"程序路径或标识不一致：{key}")
+            if _sha(self._program_path(root, expected, paths).read_bytes()) != program["sha256"]:
+                raise ProjectError(f"程序源码已被手动修改，摘要不一致：{expected}")
 
     @staticmethod
     def _component_program(state, spec):
@@ -951,45 +842,48 @@ class ProjectStore:
     @staticmethod
     def _context(root, state, revision):
         data = deepcopy(state)
+        current_style_sha256 = style_sha256(data["style"])
+
+        def matches_current_preview(component_id, run_id, sha256):
+            component = data["components"][component_id]
+            latest = component["latest_run"]
+            return bool(latest and not component["needs_review"] and latest["run_id"] == run_id
+                        and latest["artifact_hashes"].get("preview") == sha256)
+
         for component_id, component in data["components"].items():
             latest = component["latest_run"]
             program = data["programs"][component["spec"]["program_id"]]
             component["needs_review"] = (latest is None or
-                bool(component["runs"] and component["runs"][-1]["status"] == "failed") or
-                latest["style_version"] != data["style"]["version"] or
+                latest["style_sha256"] != current_style_sha256 or
                 latest["spec_sha256"] != spec_sha256(component["spec"]) or
                 latest.get("program_id") != program["id"] or
-                latest.get("program_version") != program["version"] or
                 latest.get("program_sha256") != program["sha256"])
             component["open_feedback_count"] = sum(
-                item["status"] == "open" and item["component_id"] == component_id
+                item["status"] == "open" and data["comparisons"][item["comparison_id"]]["component_id"] == component_id
                 for item in data.get("feedback", {}).values())
         for comparison in data.get("comparisons", {}).values():
-            component = data["components"][comparison["component_id"]]
-            latest = component["latest_run"]
-            comparison["is_current"] = bool(latest and not component["needs_review"]
-                                             and latest["run_id"] == comparison["run"]["run_id"])
+            reference, artifact = comparison["reference"], comparison["artifact"]
+            current_reference = data["references"].get(reference["id"])
+            comparison["is_current"] = bool(current_reference and current_reference["sha256"] == reference["sha256"]
+                and matches_current_preview(comparison["component_id"], artifact["run_id"], artifact["sha256"]))
         for check in data.get("visual_checks", {}).values():
             for item in check["items"]:
-                component = data["components"][item["component_id"]]
-                latest = component["latest_run"]
-                item["is_current"] = bool(latest and not component["needs_review"]
-                                          and latest["run_id"] == item["run"]["run_id"])
+                item["is_current"] = matches_current_preview(item["component_id"], item["run"]["run_id"], item["sha256"])
             check["is_current"] = all(item["is_current"] for item in check["items"])
         for feedback in data.get("feedback", {}).values():
-            reviewed = feedback["history"][-1]["comparison_id"] if feedback["history"] else feedback["comparison_id"]
-            feedback["reviewed_comparison_id"] = reviewed
-            feedback["applies_to_current_run"] = data["comparisons"][reviewed]["is_current"]
+            comparison = data["comparisons"][feedback["comparison_id"]]
+            reference = comparison["reference"]
+            feedback["applies_to_current_run"] = (
+                comparison["is_current"] and feedback["reviewed_artifact_sha256"] == comparison["artifact"]["sha256"]
+                and feedback["reference_sha256"] == reference["sha256"]
+                and feedback["reference_region_source_xywh"] == reference["region_source_xywh"])
         for composition in data.get("compositions", {}).values():
             for node in composition["nodes"]:
                 if node["kind"] == "image":
                     asset = data["images"][node["asset_id"]]
-                    node["is_current"] = node["version"] == asset["selected_version"]
+                    node["is_current"] = node["sha256"] == asset["sha256"]
                 elif node["kind"] == "component":
-                    component = data["components"][node["component_id"]]
-                    latest = component["latest_run"]
-                    node["is_current"] = bool(latest and not component["needs_review"]
-                                              and latest["run_id"] == node["run"]["run_id"])
+                    node["is_current"] = matches_current_preview(node["component_id"], node["run"]["run_id"], node["sha256"])
             composition["is_current"] = all(node["is_current"] for node in composition["nodes"] if node["kind"] != "text")
         return {"project_root": str(root), "revision": revision, "data": data}
 
@@ -1002,183 +896,28 @@ class ProjectStore:
 
     def _render(self, state):
         style = state["style"]
-        style_lines = [f"# {state['name']}：项目风格规范", "", f"风格版本：{style['version']}", "",
-                       "用户确认：尚未确认。", "", "## 风格说明", "", style["description"] or "尚未填写。", "",
-                       "## 通用参数", "", "```json", _json(style["parameters"]), "```", "",
-                       "## 风格规则", ""]
-        for index, rule in enumerate(style["rules"], 1):
-            style_lines.extend([f"### {rule.get('id', f'规则 {index}')}：{rule.get('description', '尚未填写说明')}", ""])
-            evidence = {field: rule[field] for field in ("evidence", "evidence_reference_ids", "reference_ids") if field in rule}
-            if evidence:
-                for field, value in evidence.items():
-                    label = "证据" if field == "evidence" else "参考标识"
-                    style_lines.append(f"- {label}：{self._describe(value)}")
-            else:
-                style_lines.append("证据：尚未填写。")
-            style_lines.append("")
-        if not style["rules"]:
-            style_lines.extend(["尚未定义风格规则。", ""])
-        style_lines.extend(["## 参考资料", "", "| 参考标识 | 文件名 | 尺寸 | 源文件路径 |", "| --- | --- | --- | --- |"])
-        for reference_id, reference in state["references"].items():
-            source = reference.get("source", "")
-            filename = Path(source).name if source else "未登记源文件"
-            size = f"{reference['width']} × {reference['height']}" if "width" in reference and "height" in reference else "未登记"
-            style_lines.append("| " + " | ".join(self._cell(value) for value in (
-                reference_id, filename, size, self._link("查看源文件", source) if source else "未登记")) + " |")
-        style_lines.extend(["", "当前风格引用：" + (", ".join(style["reference_ids"]) or "尚未选择参考资料"), "",
-                            "完整结构化记录保存在工程根目录的 .smartui/project.json；本文档由工具生成。", ""])
-        component_lines = [f"# {state['name']}：组件规格与绘制记录", "",
-                           "用户确认：所有生成组件均尚未确认。", "", "## 绘制程序", "",
-                           "| 程序标识 | 名称 | 当前版本 | 源码路径 | SHA-256 摘要 |",
-                           "| --- | --- | --- | --- | --- |"]
-        for program_id, program in state["programs"].items():
-            component_lines.append("| " + " | ".join(self._cell(value) for value in (
-                program_id, program["name"], program["version"],
-                self._link("查看程序源码", program["source_path"]), program["sha256"])) + " |")
-        if not state["programs"]:
-            component_lines.append("| 尚未登记程序 | — | — | — | — |")
-        component_lines.append("")
-        context = self._context(Path("."), state, "")["data"]
-        for component_id, component in context["components"].items():
-            latest = component["latest_run"]
-            program = state["programs"][component["spec"]["program_id"]]
-            attempt = component["runs"][-1] if component["runs"] else None
-            if attempt and attempt["status"] == "failed":
-                status = "最近尝试失败，需要重新检查"
-            elif latest is None:
-                status = "已定义规格，尚未生成"
-            elif component["needs_review"]:
-                status = "已有历史产物，当前规格、风格或程序需要重新检查"
-            elif latest["status"] == "verified":
-                status = "工具检查通过，等待用户确认"
-            else:
-                status = "已生成，等待工具检查和用户确认"
-            component_lines.extend([f"## {component['name']}（{component_id}）", "",
-                f"状态：{status}。", "", f"目标风格版本：{component['target_style_version']}", "",
-                "实际产物风格版本：" + (str(latest["style_version"]) if latest else "尚无产物"), "",
-                f"目标程序：{program['name']}（{program['id']}），版本 {program['version']}", "",
-                "实际产物程序版本：" + (f"{latest.get('program_id', '未记录程序')}，版本 {latest.get('program_version', '未记录')}"
-                                        if latest else "尚无产物"), "",
-                "需要重新检查：" + ("是" if component["needs_review"] else "否"), "",
-                "用户确认：尚未确认。", "", "### 组件规格", "", "```json", _json(component["spec"]),
-                "```", "", "### 最近成功产物记录", ""])
-            if attempt and attempt["status"] == "failed":
-                component_lines.extend([f"最近尝试 `{attempt['run_id']}` 失败：{attempt['error']}", "",
-                    "下列成功记录仅代表历史结果，不能据此确认当前磁盘文件仍然有效；请重新检查文件及其摘要。", ""])
-            if latest:
-                for field, label in (("program_snapshot_path", "本次执行源码"), ("plan_path", "本次执行计划")):
-                    component_lines.append(f"- {label}：" + (self._link("查看" + label, latest[field])
-                                                            if field in latest else "历史记录未保存"))
-                component_lines.extend([
-                    "- 可编辑源文件：" + self._link(Path(latest["document"]).name, latest["document"]),
-                    "- PNG 预览：" + self._link(Path(latest["preview"]).name, latest["preview"]),
-                    "- 绘制操作记录：" + self._link("查看操作记录", latest["operations_path"]),
-                    "- 本次风格快照：" + self._link("查看风格快照", latest["style_snapshot_path"]), "",
-                    "### 图层名称与 UUID", "", "| 图层 | UUID |", "| --- | --- |"])
-                for name, layer_id in latest.get("layer_ids", {}).items():
-                    component_lines.append(f"| {self._cell(name)} | {self._cell(layer_id)} |")
-                if not latest.get("layer_ids"):
-                    component_lines.append("| 尚未登记 | — |")
-                component_lines.extend(["", "### 工具检查结果", ""])
-                verification = latest.get("verification", {})
-                checks = {"reopened": "重新打开文档", "stable_node_ids": "图层 UUID 保持一致",
-                          "stable_pixels": "像素保持一致", "stable_properties": "图层属性保持一致"}
-                for field, label in checks.items():
-                    result = "通过" if verification.get(field) is True else "未通过" if verification.get(field) is False else "尚未检查"
-                    component_lines.append(f"- {label}：{result}")
-                component_lines.append("")
-            else:
-                component_lines.extend(["尚无成功产物。", ""])
-            component_lines.extend(["### 执行历史", "", "| 执行标识 | 结果 | 风格版本 | 错误说明 |", "| --- | --- | --- | --- |"])
-            for run in component["runs"]:
-                result = {"drawn": "已绘制", "verified": "工具检查通过", "failed": "失败"}[run["status"]]
-                component_lines.append("| " + " | ".join(self._cell(value) for value in (
-                    run["run_id"], result, run.get("style_version", "未记录"), run.get("error") or "—")) + " |")
-            component_lines.append("")
-            comparisons = {key: value for key, value in context.get("comparisons", {}).items()
-                           if value["component_id"] == component_id}
-            if comparisons:
-                component_lines.extend(["### 参考与产物对照", "",
-                    "对照保留当次裁切和运行版本；当前状态只根据项目记录判断，不表示视觉通过。", "",
-                    "| 对照标识 | 参考与原图区域 | 运行标识 | 风格 / 程序版本 | 对应当前记录 | 图片 |",
-                    "| --- | --- | --- | --- | --- | --- |"])
-                for key, comparison in comparisons.items():
-                    run = comparison["run"]
-                    component_lines.append("| " + " | ".join(self._cell(value) for value in (
-                        key, f"{comparison['reference']['id']} {comparison['reference']['region_source_xywh']}",
-                        run["run_id"], f"{run['style_version']} / {run['program_id']} v{run['program_version']}",
-                        "是" if comparison["is_current"] else "否",
-                        self._link("查看对照图片", comparison["images"]["comparison"]["path"]))) + " |")
-                component_lines.append("")
-            feedback_items = [value for value in context.get("feedback", {}).values()
-                              if value["component_id"] == component_id]
-            if feedback_items:
-                component_lines.extend(["### 视觉偏差与复查记录", "",
-                    f"待处理偏差：{component['open_feedback_count']} 项。复查结论仅针对所关联的产物，不代表用户风格确认。", ""])
-                for feedback in feedback_items:
-                    status_text = {"open": "待处理", "resolved": "已解决", "dismissed": "不处理"}[feedback["status"]]
-                    component_lines.extend([
-                        f"#### {feedback['id']}：{status_text}", "",
-                        f"- 原始对照：{feedback['comparison_id']}",
-                        f"- 观察：{feedback['observation']}",
-                        f"- 修改建议：{feedback['suggested_change']}",
-                        f"- 来源声明：{feedback['source']}",
-                        f"- 目标节点：{', '.join(feedback['target_nodes']) or '未指定'}",
-                        f"- 风格规则：{', '.join(feedback['rule_ids']) or '未指定'}",
-                        f"- 复查结论对应当前运行：{'是' if feedback['applies_to_current_run'] else '否'}", ""])
-                    for item in feedback["history"]:
-                        component_lines.append(f"- {item['status']} / {item['comparison_id']} / {item['source']}：{item['comment']}")
-                    component_lines.append("")
-        if not context["components"]:
-            component_lines.extend(["尚未定义组件。", ""])
-        if context.get("visual_checks"):
-            component_lines.extend(["## 多产物视觉检查", "",
-                "检查图保留明确运行版本、裁切和显示参数。是否对应当前记录不表示视觉质量或用户确认。", ""])
-            for check in context["visual_checks"].values():
-                display = check["display"]
-                component_lines.extend([f"### 检查 {check['id']}", "",
-                    f"背景：{display['background']}；列数：{display['columns']}；未做 ICC 色彩转换。", "",
-                    self._link("查看彩色总览", check["images"]["overview"]["path"]), ""])
-                if display["grayscale"]:
-                    component_lines.extend([self._link("查看背景合成后的灰度图", check["images"]["grayscale"]["path"]), ""])
-                component_lines.extend(["| 序号 | 说明 | 组件 | 运行 | 风格 / 程序版本 | 原图区域 | 显示倍率 | 对应当前记录 |",
-                    "| --- | --- | --- | --- | --- | --- | --- | --- |"])
-                for index, item in enumerate(check["items"], 1):
-                    run = item["run"]
-                    component_lines.append("| " + " | ".join(self._cell(value) for value in (
-                        index, item["label"], item["component_id"], run["run_id"],
-                        f"{run['style_version']} / {run['program_id']} v{run['program_version']}",
-                        item["region_source_xywh"], item["scale"], "是" if item["is_current"] else "否")) + " |")
-                component_lines.append("")
-        if context.get("images"):
-            component_lines.extend(["## 独立图像资产", "",
-                "登记与选用分开；选用版本不表示用户美术确认。", "",
-                "| 资产 | 名称 | 选用版本 | 已登记版本与文件 |",
-                "| --- | --- | --- | --- |"])
-            for asset in context["images"].values():
-                versions = "、".join(self._link(f"v{item['version']}（{item['width']}×{item['height']}）", item["path"])
-                                     for item in asset["versions"])
-                component_lines.append("| " + " | ".join(self._cell(value) for value in (
-                    asset["id"], asset["name"], asset["selected_version"] if asset["selected_version"] is not None else "尚未选用", versions)) + " |")
-            component_lines.append("")
-        if context.get("compositions"):
-            component_lines.extend(["## UI 组合预览", "",
-                "预览保存组件、图像和字体的实际快照；引用版本匹配不表示视觉确认或运行态验证。", ""])
-            for composition in context["compositions"].values():
-                component_lines.extend([f"### 组合 {composition['id']}", "",
-                    f"画布：{composition['width']} × {composition['height']}；背景：{composition['background']}。", "",
-                    self._link("查看组合预览", composition["images"]["overview"]["path"]), "",
-                    f"引用是否对应当前选用及组件运行：{'是' if composition['is_current'] else '否'}。", "",
-                    "| 节点 | 类型 | 来源 | 实际显示区域 |", "| --- | --- | --- | --- |"])
-                for node in composition["nodes"]:
-                    source = (f"{node['asset_id']} v{node['version']}" if node["kind"] == "image" else
-                              f"{node['component_id']} / {node['run']['run_id']}" if node["kind"] == "component" else node["text"])
-                    component_lines.append("| " + " | ".join(self._cell(value) for value in (
-                        node["id"], node["kind"], source, node["display_rect"])) + " |")
-                component_lines.append("")
-        component_lines.extend(["完整规格、产物摘要和检查数据保存在工程根目录的 .smartui/project.json；本文档由工具生成。", ""])
-        return {"style.md": "\n".join(style_lines).encode("utf-8"),
-                "components.md": "\n".join(component_lines).encode("utf-8")}
+        lines = [f"# {state['name']}：当前风格规范", "", style["description"] or "尚未填写风格说明。", "",
+                 "## 共用参数", "", "```json", _json(style["parameters"]), "```", "", "## 风格规则", ""]
+        for rule in style["rules"]:
+            lines.extend([f"### {rule.get('id', '规则')}", "", self._describe(rule), ""])
+        lines.extend(["## 参考", ""])
+        for key, reference in state["references"].items():
+            lines.extend([f"- {key}：{self._link('原图', reference['source'])}"])
+        lines.extend(["", "本文由当前项目状态生成；技术检查不表示用户美术确认。", ""])
+        components = [f"# {state['name']}：当前组件与资产", "", "历史由 Git 管理。本文由工具生成。", ""]
+        for key, component in self._context(Path('.'), state, '')["data"]["components"].items():
+            components.extend([f"## {component['name']}（{key}）", "",
+                "需要复查：" + ("是" if component["needs_review"] else "否") + "。用户美术确认按项目记录处理。", "",
+                "```json", _json(component["spec"]), "```", ""])
+            if component["latest_run"]:
+                run = component["latest_run"]
+                components.extend([self._link("可编辑源文件", run["document"]), "", self._link("当前预览", run["preview"]), ""])
+        for key, program in state["programs"].items():
+            components.extend([f"- 程序 {key}：{self._link(program['name'], program['source_path'])}"])
+        for feedback in state.get("feedback", {}).values():
+            components.extend(["", f"- 偏差 {feedback['id']}（{feedback['status']}）：{feedback['observation']}；{feedback['suggested_change']}"])
+        return {"style.md": ("\n".join(lines) + "\n").encode("utf-8"),
+                "components.md": ("\n".join(components) + "\n").encode("utf-8")}
 
     @staticmethod
     def _cell(value):
@@ -1199,30 +938,120 @@ class ProjectStore:
             return "；".join(cls._describe(child) for child in value)
         return str(value)
 
-    def _write(self, root, state):
+    @staticmethod
+    def _check_id_collision(records, identifier, field):
+        for existing in records:
+            if existing != identifier and existing.casefold() == identifier.casefold():
+                raise ProjectError(f"{field} {identifier} 与已有标识 {existing} 仅大小写不同")
+
+    def _write(self, root, state, artifacts=None):
+        layout = ProjectLayout(root)
         try:
-            layout = ProjectLayout(root, state["paths"])
-            documents = self._render_for_root(root, state)
-            state["document_hashes"] = {filename: _sha(payload) for filename, payload in documents.items()}
-            stored = map_state_paths(state, layout.relative)
-            payload = (_json(stored) + "\n").encode("utf-8")
+            _json(state)
         except (ValueError, TypeError) as error:
             raise ProjectError(f"项目包含无法写入的 JSON 数据：{error}") from error
-        # 先生成完整临时文件；最后替换项目状态，作为本次多文件写入的提交记录。
-        pending = []
+        stored = map_state_paths(state, layout.relative)
+        documents = self._render_for_root(root, state)
+        stored["document_hashes"] = {name: _sha(payload) for name, payload in documents.items()}
+        index = deepcopy(stored)
+        files = dict(artifacts or {})
+        attributes = root / "smart-ui/.gitattributes"
+        layout._check_managed_path(attributes)
+        existing = attributes.read_bytes() if attributes.is_file() else b""
+        if existing.rstrip().splitlines()[-1:] != [b"* -text"]:
+            separator = b"" if not existing or existing.endswith(b"\n") else b"\n"
+            rule = "# 保留 SmartUI 校验摘要所使用的文件字节\n* -text\n".encode("utf-8")
+            files[attributes] = existing + separator + rule
+        for collection, directory in self._collections().items():
+            index[collection] = {}
+            for key, record in stored.get(collection, {}).items():
+                relative = f"smart-ui/{directory}/{key}.json"
+                index[collection][key] = relative
+                files[root / relative] = (_json(record) + "\n").encode("utf-8")
+            stored.setdefault(collection, {})
+        for name, payload in documents.items():
+            files[layout.documents[name]] = payload
+        files[layout.project_file] = (_json(index) + "\n").encode("utf-8")
+        context = self._context(root, map_state_paths(stored, layout.resolve), spec_sha256(stored))
+        self._publish_batch(layout, files)
+        return context
+
+    @staticmethod
+    def _collections():
+        return {"components": "components", "layouts": "layouts", "images": "sources/images", "programs": "programs"}
+
+    @staticmethod
+    def _publish_batch(layout, files):
+        """先校验并备齐整批文件，发布失败后恢复已替换的文件。"""
+        root = layout.root
+        persistent = root / "smart-ui"
+        temporary = root / ".smartui/temp"
+        pending = {}
         try:
-            files = [(layout.documents[name], content) for name, content in documents.items()]
-            files.append((layout.project_file, payload))
-            for destination, content in files:
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
-                with temporary.open("xb") as stream:
-                    stream.write(content)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                pending.append((temporary, destination))
-            for temporary, destination in pending:
-                os.replace(temporary, destination)
-        except OSError as error:
-            raise ProjectError(f"项目写入失败，请检查磁盘及项目文件；未自动覆盖或修复：{root}；{error}") from error
-        return self._context(root, map_state_paths(stored, layout.resolve), _sha(payload))
+            for destination, content in files.items():
+                layout._check_managed_path(destination)
+                if not destination.is_relative_to(persistent) or destination == persistent:
+                    raise ProjectError(f"项目发布路径必须位于 smart-ui/：{destination}")
+                if destination.exists() and not destination.is_file():
+                    raise ProjectError(f"项目发布路径已存在但不是文件：{destination}")
+                for parent in destination.parents:
+                    if parent == root:
+                        break
+                    if parent.exists() and not parent.is_dir():
+                        raise ProjectError(f"项目发布目录被文件占用：{parent}")
+                if not destination.is_file() or destination.read_bytes() != content:
+                    pending[destination] = content
+            if not pending:
+                return
+            layout._check_managed_path(temporary)
+            temporary.mkdir(parents=True, exist_ok=True)
+            with TemporaryDirectory(dir=temporary) as transaction:
+                staged = {}
+                for index, (destination, content) in enumerate(pending.items()):
+                    prepared = Path(transaction) / f"{index}.new"
+                    backup = None
+                    if destination.is_file():
+                        backup = Path(transaction) / f"{index}.old"
+                        shutil.copyfile(destination, backup)
+                    with prepared.open("xb") as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    staged[destination] = (prepared, backup)
+
+                published = []
+                directories = []
+                try:
+                    for destination, (prepared, _) in staged.items():
+                        missing = []
+                        parent = destination.parent
+                        while not parent.exists():
+                            missing.append(parent)
+                            parent = parent.parent
+                        for directory in reversed(missing):
+                            directory.mkdir()
+                            directories.append(directory)
+                        os.replace(prepared, destination)
+                        published.append(destination)
+                except OSError as error:
+                    failures = []
+                    for target in reversed(published):
+                        _, backup = staged[target]
+                        try:
+                            if backup is None:
+                                target.unlink()
+                            else:
+                                os.replace(backup, target)
+                        except OSError as recovery_error:
+                            failures.append(f"{target}：{recovery_error}")
+                    for directory in reversed(directories):
+                        try:
+                            directory.rmdir()
+                        except OSError as recovery_error:
+                            failures.append(f"{directory}：{recovery_error}")
+                    if failures:
+                        details = "；".join(failures)
+                        raise ProjectError(f"项目文件写入失败：{destination}；{error}。恢复失败：{details}") from error
+                    raise ProjectError(f"项目文件写入失败：{destination}；{error}。已恢复先前状态") from error
+        except (OSError, ValueError) as error:
+            raise ProjectError(f"项目文件写入失败：{error}") from error

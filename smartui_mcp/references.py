@@ -6,8 +6,10 @@ import math
 from pathlib import Path
 import re
 import shutil
+from tempfile import TemporaryDirectory
 from threading import Lock
-from uuid import uuid4
+from io import BytesIO
+import os
 
 from PIL import Image
 
@@ -62,52 +64,65 @@ def _open_image(source: Path):
 
 def _preview(project_root: Path, image: Image.Image, filename: str) -> str:
     cache = project_root / ".smartui" / "cache" / "references"
+    ProjectLayout(project_root)._check_managed_path(cache)
     cache.mkdir(parents=True, exist_ok=True)
-    path = cache / filename
     image.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
     # 调色板与灰度图转为可预览的 RGBA，保留透明度，不叠加背景。
     with image.convert("RGBA") as preview:
-        with path.open("xb") as stream:
+        with BytesIO() as stream:
             preview.save(stream, format="PNG")
+            payload = stream.getvalue()
+    path = cache / f"{filename}-{hashlib.sha256(payload).hexdigest()}.png"
+    if not path.is_file() or path.read_bytes() != payload:
+        with TemporaryDirectory(dir=_temporary_directory(project_root)) as temporary:
+            prepared = Path(temporary) / "preview.png"
+            prepared.write_bytes(payload)
+            os.replace(prepared, path)
     return str(path)
 
 
-def register_reference(project_root: str, reference_id: str, source_path: str, *, paths: dict | None = None) -> dict:
-    """登记参考图，工程外原图按原始字节归档；原输入保持只读，预览写入项目缓存。"""
+def _temporary_directory(root: Path) -> Path:
+    directory = root / ".smartui" / "temp"
+    ProjectLayout(root)._check_managed_path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def register_reference(project_root: str, reference_id: str, source_path: str) -> dict:
+    """登记工程内外的参考图，按原始字节复制到项目受管目录。"""
     root = _absolute_path(project_root, "project_root")
     if not root.is_dir():
         raise ValueError(f"project_root 必须是目录：{root}")
     identifier = _reference_id(reference_id)
     source = _absolute_path(source_path, "source_path")
-    layout = ProjectLayout(root, paths)
-    archived = source
-    if not source.is_relative_to(root):
-        archived = layout.directory("references") / identifier / source.name
-        layout._check_managed_path(archived)
-        if archived.exists():
-            raise ValueError("参考归档目标已存在，不能覆盖：" + str(archived))
-    digest = _sha256(source)
-    with _open_image(source) as image:
-        result = {
-            "id": identifier,
-            "source": str(archived),
-            "sha256": digest,
-            "width": image.width,
-            "height": image.height,
-            "mode": image.mode,
-            "color_metadata": {
-                "has_icc_profile": bool(image.info.get("icc_profile")),
-                "gamma": image.info.get("gamma"),
-                "srgb": image.info.get("srgb"),
-            },
-        }
-        result["preview"] = _preview(root, image, f"{identifier}-{digest[:12]}-{uuid4().hex}.png")
-    if archived != source:
-        archived.parent.mkdir(parents=True, exist_ok=True)
-        with source.open("rb") as original, archived.open("xb") as destination:
-            shutil.copyfileobj(original, destination)
-        if _sha256(archived) != digest:
-            raise ValueError("参考原图在归档过程中发生变化，请检查原图与归档文件：" + str(archived))
+    destination = root / "smart-ui" / "references" / identifier
+    archived = destination / source.name
+    ProjectLayout(root)._check_managed_path(archived)
+    if destination.exists():
+        raise ValueError(f"参考图目录已存在，不能覆盖：{destination}")
+    with TemporaryDirectory(dir=_temporary_directory(root)) as temp:
+        staging = Path(temp) / "reference"
+        staging.mkdir()
+        snapshot = staging / source.name
+        shutil.copyfile(source, snapshot)
+        digest = _sha256(snapshot)
+        with _open_image(snapshot) as image:
+            image.load()
+            result = {
+                "id": identifier,
+                "source": str(archived),
+                "sha256": digest,
+                "width": image.width,
+                "height": image.height,
+                "mode": image.mode,
+                "color_metadata": {
+                    "has_icc_profile": bool(image.info.get("icc_profile")),
+                    "gamma": image.info.get("gamma"),
+                    "srgb": image.info.get("srgb"),
+                },
+            }
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging.rename(destination)
     return result
 
 
@@ -185,7 +200,7 @@ def inspect_reference(
     source = _absolute_path(reference["source"], "reference.source")
     digest = _sha256(source)
     if digest != reference["sha256"]:
-        raise ValueError(f"参考图源文件 SHA-256 与登记记录不一致，请重新登记：{source}")
+        raise ValueError(f"参考图源文件 SHA-256 与登记记录不一致，请恢复原始文件：{source}")
     with _open_image(source) as image:
         source_size = [image.width, image.height]
         if source_size != [reference["width"], reference["height"]]:
@@ -202,7 +217,7 @@ def inspect_reference(
                 raise ValueError("每个 patch 必须包含非空字符串 id 和 rect")
             mapped_patches.append((patch["id"], _source_rect(patch.get("rect"), coordinates, source_size, f"patch[{patch['id']}].rect")))
         samples = [_sample(image, patch_id, rect) for patch_id, rect in mapped_patches]
-        filename = f"{identifier}-{digest[:12]}-{uuid4().hex}.png"
+        filename = identifier
         if region is None:
             preview = _preview(root, image, filename)
         else:

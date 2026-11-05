@@ -6,17 +6,16 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
 DEFAULT_PATHS = {
-    "documents": "docs/ui",
-    "references": "docs/ui/references",
-    "programs": "art/ui/programs",
-    "sources": "art/ui/sources",
+    "documents": "smart-ui/docs",
+    "references": "smart-ui/references",
+    "programs": "smart-ui/programs",
+    "sources": "smart-ui/sources",
 }
 
-IGNORE_RULES = "# SmartUI 可重建缓存和本机锁\ncache/\nproject.lock\n.*.tmp\n"
+IGNORE_RULES = "# SmartUI 本机缓存、临时文件和诊断\n/.smartui/\n"
 
 RUN_PATH_FIELDS = (
-    "document", "preview", "operations_path", "style_snapshot_path",
-    "program_snapshot_path", "plan_path", "source_snapshot_path",
+    "document", "preview", "style_snapshot_path", "plan_path",
 )
 
 
@@ -26,17 +25,8 @@ class ProjectLayout:
         if paths is not None and (not isinstance(paths, dict) or paths.keys() - DEFAULT_PATHS.keys()):
             raise ValueError("paths 必须是对象，且只能配置 documents、references、programs、sources")
         self.paths = {**DEFAULT_PATHS, **(paths if paths is not None else {})}
-        for key, value in self.paths.items():
-            self.paths[key] = self._relative_directory(value, f"paths.{key}")
-        directories = {key: self.root / value for key, value in self.paths.items()}
-        for key, path in directories.items():
-            if path.is_relative_to(self.root / ".smartui"):
-                raise ValueError(f"paths.{key} 不能放在工具记录目录 .smartui 中：{path}")
-            for other, other_path in directories.items():
-                if key == other or (key == "references" and other == "documents"):
-                    continue
-                if path.is_relative_to(other_path):
-                    raise ValueError(f"paths.{key} 与 paths.{other} 的目录重叠：{path}")
+        if self.paths != DEFAULT_PATHS:
+            raise ValueError("制作目录固定在 smart-ui/ 中，不支持自定义目录")
 
     @staticmethod
     def _relative_directory(value, field):
@@ -64,7 +54,7 @@ class ProjectLayout:
 
     @property
     def project_file(self):
-        path = self.root / ".smartui/project.json"
+        path = self.root / "smart-ui/project.json"
         self._check_managed_path(path)
         return path
 
@@ -90,6 +80,19 @@ class ProjectLayout:
         path = self.resolve(str(value))
         return path.relative_to(self.root).as_posix() if path.is_relative_to(self.root) else str(path)
 
+    def require_persistent_input(self, value, field):
+        """校验工程内可在清理本机数据后继续读取的输入文件。"""
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise ValueError(f"{field} 必须是工程内文件的绝对路径：{value!r}")
+        path = Path(value)
+        if not path.is_relative_to(self.root):
+            raise ValueError(f"{field} 越出工程根目录：{path}")
+        self._check_managed_path(path)
+        if path.resolve().is_relative_to(self.root / ".smartui"):
+            raise ValueError(f"{field} 不能依赖 .smartui/ 中的本机文件：{path}")
+        if not path.is_file():
+            raise ValueError(f"{field} 必须是现存文件：{path}")
+
     def document_link(self, value):
         path = self.resolve(str(value))
         if path.is_relative_to(self.root):
@@ -97,7 +100,7 @@ class ProjectLayout:
         return path.as_posix()
 
     def ensure_gitignore(self):
-        path = self.project_file.parent / ".gitignore"
+        path = self.root / ".gitignore"
         self._check_managed_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -116,24 +119,11 @@ def map_state_paths(state, transform):
             if name in record and record[name] is not None:
                 record[name] = str(transform(record[name]))
 
-    mapped_runs = set()
-
-    def run_paths(run):
-        if id(run) in mapped_runs:
-            return
-        mapped_runs.add(id(run))
-        fields(run, RUN_PATH_FIELDS)
-        for inspection in run.get("inspection", {}).values():
-            if isinstance(inspection, dict):
-                fields(inspection, ("path",))
-
     for reference in result["references"].values():
-        fields(reference, ("source", "preview"))
+        fields(reference, ("source",))
     for component in result["components"].values():
-        for run in component["runs"]:
-            run_paths(run)
         if component["latest_run"] is not None:
-            run_paths(component["latest_run"])
+            fields(component["latest_run"], RUN_PATH_FIELDS)
     for comparison in result.get("comparisons", {}).values():
         fields(comparison["reference"], ("source",))
         fields(comparison["artifact"], ("source",))
@@ -145,8 +135,7 @@ def map_state_paths(state, transform):
         for image in check["images"].values():
             fields(image, ("path",))
     for asset in result.get("images", {}).values():
-        for version in asset["versions"]:
-            fields(version, ("path",))
+        fields(asset, ("path",))
     for composition in result.get("compositions", {}).values():
         for node in composition["nodes"]:
             fields(node, ("source", "font_path"))
@@ -157,10 +146,9 @@ def map_state_paths(state, transform):
         for item in export["items"]:
             fields(item["record"], ("path",))
     for page in result.get("layouts", {}).values():
-        for version in page["versions"]:
-            for node in version["definition"]["nodes"]:
-                if node["kind"] == "text":
-                    fields(node, ("font_path",))
+        for node in page["definition"]["nodes"]:
+            if node["kind"] == "text":
+                fields(node, ("font_path",))
     for build in result.get("page_builds", {}).values():
         for node in build["nodes"]:
             fields(node, ("source", "font_path"))

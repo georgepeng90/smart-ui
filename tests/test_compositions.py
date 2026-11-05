@@ -22,7 +22,7 @@ def image_node(tmp_path):
         image.putpixel((2, 0), (0, 255, 0, 255))
         image.save(source)
     return {"id": "icon", "kind": "image", "source": str(source), "sha256": _sha(source),
-            "x": 0, "y": 0, "width": 4, "height": 2, "region": None, "asset_id": "coin", "version": 1}
+            "x": 0, "y": 0, "width": 4, "height": 2, "region": None, "asset_id": "coin"}
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ def test_real_pixels_composite_once_and_layer_order_is_preserved(tmp_path, image
     assert result["color_processing"]["icc_conversion"] is False
     assert result["nodes"][0]["sha256"] == image_node["sha256"]
     assert result["nodes"][1]["snapshot_key"] == "node-2"
-    assert not list((tmp_path / ".smartui/compositions/example").glob("*.json"))
+    assert not list((tmp_path / "smart-ui/previews/compositions/example").glob("*.json"))
     for info in result["images"].values():
         assert Path(info["path"]).is_absolute()
         assert _sha(Path(info["path"])) == info["sha256"]
@@ -114,17 +114,16 @@ def test_font_bytes_snapshot_and_text_anchor_are_recorded(tmp_path, text_node):
     with Image.open(result["images"]["overview"]["path"]) as image:
         assert image.getpixel((2, 2)) == (255, 0, 0, 255)
     assert (source.read_bytes(), source.stat().st_mtime_ns) == before
-    # 历史记录所需的所有像素和字体均在输出目录中，不依赖源文件存活。
+    # 当前预览的字体可直接从输出目录读取。
     source.unlink()
     assert Path(info["path"]).read_bytes() == before[0]
 
 
-@pytest.mark.parametrize("style_version", [0, 1])
-def test_component_keeps_run_and_spec_evidence_without_mutating_input(tmp_path, image_node, style_version):
-    node = {key: value for key, value in image_node.items() if key not in ("asset_id", "version")}
+def test_component_keeps_run_and_spec_evidence_without_mutating_input(tmp_path, image_node):
+    node = {key: value for key, value in image_node.items() if key != "asset_id"}
     node.update(kind="component", component_id="panel", spec={"width": 4, "height": 2}, run={
-        "run_id": "run-1", "status": "drawn", "style_version": style_version, "spec_sha256": "1" * 64,
-        "program_id": "panel-program", "program_version": 2, "program_sha256": "2" * 64})
+        "run_id": "run-1", "style_sha256": "3" * 64, "spec_sha256": "1" * 64,
+        "program_id": "panel-program", "program_sha256": "2" * 64})
     before = deepcopy(node)
     result = _build(tmp_path, [node])
     assert result["nodes"][0]["run"] == node["run"]
@@ -163,7 +162,7 @@ def test_large_stroke_is_allowed_when_actual_text_bounds_fit_canvas(tmp_path, te
 def test_bad_image_nodes_are_rejected_without_publishing(tmp_path, image_node, updates, message):
     with pytest.raises(ValueError, match=message):
         _build(tmp_path, [{**image_node, **updates}])
-    assert not (tmp_path / ".smartui/compositions/example").exists()
+    assert not (tmp_path / "smart-ui/previews/compositions/example").exists()
 
 
 @pytest.mark.parametrize("updates, message", [
@@ -175,7 +174,7 @@ def test_bad_image_nodes_are_rejected_without_publishing(tmp_path, image_node, u
 def test_bad_text_nodes_fail_clearly(tmp_path, text_node, updates, message):
     with pytest.raises(ValueError, match=message):
         _build(tmp_path, [{**text_node, **updates}])
-    assert not (tmp_path / ".smartui/compositions/example").exists()
+    assert not (tmp_path / "smart-ui/previews/compositions/example").exists()
 
 
 def test_missing_or_invalid_font_never_uses_default(tmp_path, text_node):
@@ -192,7 +191,8 @@ def test_tampered_source_discards_all_staging_files(tmp_path, image_node, text_n
     Path(image_node["source"]).write_bytes(b"modified")
     with pytest.raises(ValueError, match="SHA-256 与记录不一致"):
         _build(tmp_path, [text_node, image_node])
-    assert list((tmp_path / ".smartui/compositions").iterdir()) == []
+    assert not (tmp_path / "smart-ui/previews/compositions").exists()
+    assert list((tmp_path / ".smartui/temp").iterdir()) == []
 
 
 @pytest.mark.parametrize("options, message", [
@@ -202,7 +202,7 @@ def test_tampered_source_discards_all_staging_files(tmp_path, image_node, text_n
 def test_bad_canvas_options_are_rejected_before_output(tmp_path, image_node, options, message):
     with pytest.raises(ValueError, match=message):
         _build(tmp_path, [image_node], **options)
-    assert not (tmp_path / ".smartui/compositions").exists()
+    assert not (tmp_path / "smart-ui/previews/compositions").exists()
 
 
 def test_duplicate_node_ids_and_excess_node_count_rejected(tmp_path, image_node):
@@ -212,13 +212,17 @@ def test_duplicate_node_ids_and_excess_node_count_rejected(tmp_path, image_node)
         _build(tmp_path, [image_node] * 65)
 
 
-def test_existing_output_is_never_overwritten(tmp_path, image_node):
-    result = _build(tmp_path, [image_node])
-    path = Path(result["images"]["overview"]["path"])
+def test_rebuild_replaces_the_current_composition_and_removes_old_inputs(tmp_path, image_node, text_node):
+    first = _build(tmp_path, [image_node, text_node, text_node | {"id": "second-text", "y": 20}])
+    path = Path(first["images"]["overview"]["path"])
     original = path.read_bytes()
-    with pytest.raises(FileExistsError, match="不能覆盖"):
-        _build(tmp_path, [{**image_node, "x": 5}])
-    assert path.read_bytes() == original
+    assert len(first["fonts"]) == 1
+    second = _build(tmp_path, [{**image_node, "x": 5}])
+    assert second["id"] == first["id"]
+    assert Path(second["images"]["overview"]["path"]) == path
+    assert path.read_bytes() != original
+    assert {entry.name for entry in path.parent.iterdir()} == {"overview.png", "node-1.png"}
+    assert list(path.parent.parent.iterdir()) == [path.parent]
 
 
 def test_output_write_error_does_not_publish_partial_result(tmp_path, image_node, monkeypatch):
@@ -232,7 +236,8 @@ def test_output_write_error_does_not_publish_partial_result(tmp_path, image_node
     monkeypatch.setattr(Image.Image, "save", fail_overview)
     with pytest.raises(OSError, match="组合图写入失败"):
         _build(tmp_path, [image_node])
-    assert list((tmp_path / ".smartui/compositions").iterdir()) == []
+    assert not (tmp_path / "smart-ui/previews/compositions").exists()
+    assert list((tmp_path / ".smartui/temp").iterdir()) == []
 
 
 def test_managed_output_rejects_directory_links(tmp_path, image_node, monkeypatch):

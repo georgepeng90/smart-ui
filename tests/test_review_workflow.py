@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 
 from mcp import ClientSession, StdioServerParameters
@@ -15,7 +16,7 @@ from PIL import Image
 import pytest
 
 from smartui_mcp.pipeline import plan_component
-from smartui_mcp.projects import ProjectError, ProjectStore, spec_sha256
+from smartui_mcp.projects import ProjectError, ProjectStore, spec_sha256, style_sha256
 from smartui_mcp.references import register_reference
 from smartui_mcp.server import create_server
 
@@ -37,32 +38,29 @@ def write_json(path, value):
 
 
 def record_sample_run(store, context, run_id, color):
-    """登记合成图和实际程序快照，仅用于验证项目记录。"""
+    """用合成文件替代 PhotoCraft，按当前产物路径登记绘制结果。"""
     root = context["project_root"]
-    directory = Path(root) / ".smartui" / "runs" / run_id
-    directory.mkdir(parents=True)
+    directory = Path(root) / "smart-ui/components/sample"
+    document = Path(root) / "smart-ui/sources/sample.pcraft"
+    preview = Path(root) / "smart-ui/previews/components/sample.png"
+    for folder in (directory, document.parent, preview.parent):
+        folder.mkdir(parents=True, exist_ok=True)
     data = context["data"]
     spec = data["components"]["sample"]["spec"]
     program = store.get_program(root, spec["program_id"])
     plan = plan_component(root, "sample", store=store)["plan"]
-    document, preview, snapshot = (directory / name for name in ("sample.pcraft", "preview.png", "program.py"))
     document.write_bytes(b"synthetic draw record")
     with Image.new("RGBA", (spec["width"], spec["height"]), color) as image:
         image.save(preview)
-    snapshot.write_bytes(program["source"].encode("utf-8"))
     run = {
-        "run_id": run_id, "status": "drawn", "style_version": data["style"]["version"], "spec_sha256": spec_sha256(spec),
+        "run_id": run_id, "status": "drawn", "style_sha256": style_sha256(data["style"]), "spec_sha256": spec_sha256(spec),
         "document": str(document), "preview": str(preview), "program_id": program["id"],
-        "program_version": program["version"], "program_sha256": program["sha256"], "program_snapshot_path": str(snapshot),
-        "operations_path": write_json(directory / "operations.json", []),
+        "program_sha256": program["sha256"],
         "plan_path": write_json(directory / "plan.json", plan),
-        "style_snapshot_path": write_json(directory / "style.json", {
+        "style_snapshot_path": write_json(directory / "inputs.json", {
             "style": data["style"], "spec": spec, "component_id": "sample",
         }),
     }
-    saved = directory / "output.pcraft"
-    saved.write_bytes(document.read_bytes())
-    run["source_snapshot_path"] = str(saved)
     run["backend"] = {"name": "photocraft", "version": "synthetic bookkeeping fixture", "sha256": "0" * 64,
                       "cli_path": str(directory / "photocraft-cli")}
     return store.record_run(root, context["revision"], "sample", run)
@@ -86,9 +84,9 @@ def project(tmp_path):
     return store, record_sample_run(store, context, "first", (150, 20, 20, 255))
 
 
-def compare(store, context, run_id="first"):
+def compare(store, context):
     return store.compare_component(
-        context["project_root"], context["revision"], "sample", run_id, "guide",
+        context["project_root"], context["revision"], "sample", "guide",
         reference_region=[1, 1, 3, 2], reference_coordinate_size=[6, 5],
         artifact_region=[1, 0, 4, 3], reference_scale=2.0,
     )
@@ -99,7 +97,8 @@ def give_feedback(store, result):
                                  OBSERVATION, SUGGESTION, ["outline"], [RULE["id"]])
 
 
-def test_project_saves_comparison_and_retrieves_its_original_images_after_redrawing(project):
+@pytest.mark.parametrize("redraw_id", ["first", "second"])
+def test_project_replaces_current_comparison_after_redrawing(project, redraw_id):
     store, context = project
     root = context["project_root"]
     first = compare(store, context)["comparison"]
@@ -110,7 +109,7 @@ def test_project_saves_comparison_and_retrieves_its_original_images_after_redraw
     assert first["artifact"]["display_size"] == [4, 3]
     assert first["node_keys"] == ["outline"]
     assert first["rule_ids"] == [RULE["id"]]
-    state = json.loads((Path(root) / ".smartui" / "project.json").read_text(encoding="utf-8"))
+    state = json.loads((Path(root) / "smart-ui" / "project.json").read_text(encoding="utf-8"))
     stored = state["comparisons"][first["id"]]
     assert stored["id"] == first["id"]
     for label, image in stored["images"].items():
@@ -126,34 +125,53 @@ def test_project_saves_comparison_and_retrieves_its_original_images_after_redraw
             with Image.open(path) as image:
                 assert list(image.size) == first["display"]["size"]
 
-    later = record_sample_run(store, store.context(root), "second", (20, 150, 20, 255))
-    second = compare(store, later, "second")["comparison"]
-    original_preview = Path(context["data"]["components"]["sample"]["latest_run"]["preview"])
-    original_preview.unlink()
-    fetched = store.get_comparison(root, first["id"])["comparison"]
-    assert fetched == first | {"is_current": False}
+    later = record_sample_run(store, store.context(root), redraw_id, (20, 150, 20, 255))
+    assert not store.get_comparison(root, first["id"])["comparison"]["is_current"]
+    second = compare(store, later)["comparison"]
+    assert second["id"] == first["id"] and second["is_current"]
+    assert second["images"]["comparison"]["path"] == first["images"]["comparison"]["path"]
     assert second["images"]["comparison"]["sha256"] != first["images"]["comparison"]["sha256"]
-    with Image.open(fetched["images"]["artifact"]["path"]) as image:
+    shutil.rmtree(Path(root) / ".smartui")
+    assert ProjectStore().get_comparison(root, second["id"])["comparison"] == second
+    with Image.open(second["images"]["artifact"]["path"]) as image:
         assert image.size == (4, 3)
-        assert image.getpixel((0, 0)) == (150, 20, 20, 255)
+        assert image.getpixel((0, 0)) == (20, 150, 20, 255)
 
 
 def test_stale_revision_cannot_create_comparisons_or_feedback(project):
     store, context = project
     first = compare(store, context)
     root = Path(context["project_root"])
-    before = (root / ".smartui" / "project.json").read_bytes()
-    outputs = sorted((root / ".smartui" / "comparisons").rglob("*.png"))
+    before = (root / "smart-ui" / "project.json").read_bytes()
+    outputs = sorted((root / "smart-ui" / "previews" / "comparisons").rglob("*.png"))
     with pytest.raises(ProjectError, match="revision"):
         compare(store, context)
     with pytest.raises(ProjectError, match="revision"):
         give_feedback(store, first | {"revision": context["revision"]})
-    assert (root / ".smartui" / "project.json").read_bytes() == before
-    assert sorted((root / ".smartui" / "comparisons").rglob("*.png")) == outputs
+    assert (root / "smart-ui" / "project.json").read_bytes() == before
+    assert sorted((root / "smart-ui" / "previews" / "comparisons").rglob("*.png")) == outputs
+
+
+def test_editing_style_description_preserves_the_current_artifact_and_comparison(project):
+    store, context = project
+    first = compare(store, context)
+    style = context["data"]["style"]
+    root = context["project_root"]
+    updated = store.update_style(root, first["revision"], "描边说明调整",
+                                 style["rules"], style["parameters"], style["reference_ids"])
+
+    component = updated["data"]["components"]["sample"]
+    assert updated["revision"] != first["revision"]
+    assert updated["data"]["style"]["description"] == "描边说明调整"
+    assert not component["needs_review"]
+    assert component["latest_run"] == context["data"]["components"]["sample"]["latest_run"]
+    comparison = store.get_comparison(root, first["comparison"]["id"])
+    assert comparison["comparison"]["is_current"]
+    assert give_feedback(store, comparison)["feedback"]["applies_to_current_run"]
 
 
 @pytest.mark.parametrize("changed", ["program", "style"])
-def test_feedback_stays_open_until_explicit_review_after_version_change(project, changed):
+def test_feedback_stays_open_until_explicit_review_after_current_inputs_change(project, changed):
     store, context = project
     first = compare(store, context)
     root, original_id = first["project_root"], first["comparison"]["id"]
@@ -170,9 +188,13 @@ def test_feedback_stays_open_until_explicit_review_after_version_change(project,
     later = record_sample_run(store, context, "second", (30, 90, 120, 255))
     assert not later["data"]["components"]["sample"]["needs_review"]
     assert later["data"]["components"]["sample"]["open_feedback_count"] == 1
-    assert later["data"]["feedback"][feedback["id"]]["history"] == []
-    second = compare(store, later, "second")
+    pending = later["data"]["feedback"][feedback["id"]]
+    assert pending == feedback | {"applies_to_current_run": False}
+    with pytest.raises(ProjectError, match="当前"):
+        store.update_feedback(root, later["revision"], feedback["id"], "resolved", "复查后描边一致", original_id)
+    second = compare(store, later)
     second_id = second["comparison"]["id"]
+    assert second_id == original_id
     assert second["comparison"]["is_current"]
     resolved = store.update_feedback(root, second["revision"], feedback["id"], "resolved", "复查后描边一致", second_id)
     assert store.context(root)["data"]["components"]["sample"]["open_feedback_count"] == 0
@@ -183,8 +205,8 @@ def test_feedback_stays_open_until_explicit_review_after_version_change(project,
     assert current["data"]["style"]["user_confirmation"] is None
     assert current["data"]["components"]["sample"]["latest_run"]["status"] == "drawn"
     assert store.get_comparison(root, second_id)["feedback"][feedback["id"]]["observation"] == OBSERVATION
-    document = (Path(root) / "docs" / "ui" / "components.md").read_text(encoding="utf-8")
-    for value in (original_id, second_id, OBSERVATION, SUGGESTION):
+    document = (Path(root) / "smart-ui" / "docs" / "components.md").read_text(encoding="utf-8")
+    for value in (OBSERVATION, SUGGESTION):
         assert value in document
 
 
@@ -197,25 +219,62 @@ def test_comparison_rejects_modified_run_artifacts_before_recording(project, fie
     store, context = project
     root = Path(context["project_root"])
     run = context["data"]["components"]["sample"]["latest_run"]
-    before = (root / ".smartui" / "project.json").read_bytes()
+    before = (root / "smart-ui" / "project.json").read_bytes()
     Path(run[field]).write_bytes(b"modified after recording")
     with pytest.raises(exception, match=message):
         compare(store, context)
-    assert (root / ".smartui" / "project.json").read_bytes() == before
-    assert not list((root / ".smartui" / "comparisons").rglob("*.png"))
+    assert (root / "smart-ui" / "project.json").read_bytes() == before
+    assert not list((root / "smart-ui" / "previews" / "comparisons").rglob("*.png"))
 
 
 def test_modified_comparison_image_cannot_be_read_or_used_for_feedback(project):
     store, context = project
     first = compare(store, context)
     root = Path(context["project_root"])
-    before = (root / ".smartui" / "project.json").read_bytes()
+    before = (root / "smart-ui" / "project.json").read_bytes()
     Path(first["comparison"]["images"]["comparison"]["path"]).write_bytes(b"modified after comparison")
     with pytest.raises(ProjectError, match="对照图片 SHA-256"):
         store.get_comparison(str(root), first["comparison"]["id"])
     with pytest.raises(ProjectError, match="对照图片 SHA-256"):
         give_feedback(store, first)
-    assert (root / ".smartui" / "project.json").read_bytes() == before
+    assert (root / "smart-ui" / "project.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("source", ["reference", "artifact"])
+def test_feedback_requires_the_current_source_bytes(project, source):
+    store, context = project
+    result = compare(store, context)
+    Path(result["comparison"][source]["source"]).write_bytes(b"modified after comparison")
+    with pytest.raises(ProjectError, match="SHA-256 不符"):
+        give_feedback(store, result)
+
+
+def test_feedback_does_not_apply_to_a_different_reference_crop(project):
+    store, context = project
+    first = compare(store, context)
+    added = give_feedback(store, first)
+    root = context["project_root"]
+    changed = store.compare_component(root, added["revision"], "sample", "guide", reference_region=[0, 0, 3, 2])
+    feedback_id = added["feedback"]["id"]
+    comparison_id = changed["comparison"]["id"]
+    assert changed["comparison"]["is_current"]
+    assert changed["comparison"]["artifact"]["sha256"] == first["comparison"]["artifact"]["sha256"]
+    assert not changed["feedback"][feedback_id]["applies_to_current_run"]
+    with pytest.raises(ProjectError, match="相同的参考图和源图区域"):
+        store.update_feedback(root, changed["revision"], feedback_id, "resolved", "已复查", comparison_id)
+
+
+def test_comparison_stops_matching_when_the_registered_reference_digest_changes(project):
+    store, context = project
+    first = compare(store, context)["comparison"]
+    root = Path(context["project_root"])
+    index = root / "smart-ui/project.json"
+    data = json.loads(index.read_bytes())
+    with Image.new("RGBA", (12, 10), (30, 90, 150, 255)) as image:
+        image.save(first["reference"]["source"])
+    data["references"]["guide"]["sha256"] = hashlib.sha256(Path(first["reference"]["source"]).read_bytes()).hexdigest()
+    write_json(index, data)
+    assert not store.get_comparison(str(root), first["id"])["comparison"]["is_current"]
 
 
 def test_mcp_validates_the_image_bytes_it_actually_returns(project, monkeypatch):
@@ -269,7 +328,7 @@ def test_stdio_review_tools_persist_feedback_across_processes(project, tmp_path)
         async with project_session(parameters) as session:
             tools = {tool.name: tool for tool in (await session.list_tools()).tools}
             required = {
-                "project_compare_component": {"project_root", "expected_revision", "component_id", "run_id", "reference_id"},
+                "project_compare_component": {"project_root", "expected_revision", "component_id", "reference_id"},
                 "project_get_comparison": {"project_root", "comparison_id"},
                 "project_record_feedback": {"project_root", "expected_revision", "comparison_id", "observation", "suggested_change"},
                 "project_update_feedback": {"project_root", "expected_revision", "feedback_id", "status", "comment", "comparison_id"},
@@ -284,18 +343,18 @@ def test_stdio_review_tools_persist_feedback_across_processes(project, tmp_path)
                             {"artifact_region": [False, "0", 2.0, 1]},
                             {"reference_coordinate_size": [6.0, 5]}, {"reference_region": [0, 0, True, 2]}):
                 failure = await session.call_tool("project_compare_component", {
-                    **arguments, "run_id": "first", "expected_revision": context["revision"], **invalid,
+                    **arguments, "expected_revision": context["revision"], **invalid,
                 })
                 assert failure.isError, invalid
                 assert store.context(root)["revision"] == context["revision"]
-                assert not list((Path(root) / ".smartui" / "comparisons").rglob("*.png"))
-            first = await call_tool(session, "project_compare_component", image=True, run_id="first",
+                assert not list((Path(root) / "smart-ui" / "previews" / "comparisons").rglob("*.png"))
+            first = await call_tool(session, "project_compare_component", image=True,
                                     expected_revision=context["revision"], **arguments)
             feedback = await call_tool(session, "project_record_feedback", project_root=root,
                                        expected_revision=first["revision"], comparison_id=first["comparison"]["id"],
                                        observation=OBSERVATION, suggested_change=SUGGESTION)
             later = record_sample_run(store, store.context(root), "second", (30, 90, 120, 255))
-            second = await call_tool(session, "project_compare_component", image=True, run_id="second",
+            second = await call_tool(session, "project_compare_component", image=True,
                                      expected_revision=later["revision"], **arguments)
             feedback_id = feedback["feedback"]["id"]
             comparison_id = second["comparison"]["id"]
@@ -307,7 +366,7 @@ def test_stdio_review_tools_persist_feedback_across_processes(project, tmp_path)
         async with project_session(parameters) as session:
             restored = await call_tool(session, "project_context", project_root=root)
             assert restored["revision"] == resolved["revision"]
-            assert restored["feedback"][feedback_id]["latest_update"]["comparison_id"] == comparison_id
+            assert restored["feedback"][feedback_id]["comparison_id"] == comparison_id
             assert restored["feedback"][feedback_id]["status"] == "resolved"
             assert restored["components"]["sample"]["open_feedback_count"] == 0
             fetched = await call_tool(session, "project_get_comparison", image=True, project_root=root, comparison_id=comparison_id)

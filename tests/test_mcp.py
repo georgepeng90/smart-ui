@@ -26,7 +26,7 @@ TOOL_NAMES = {
     "project_save_program", "project_get_program", "project_plan_component",
     "project_compare_component", "project_get_comparison", "project_create_visual_check", "project_get_visual_check",
     "project_record_feedback", "project_update_feedback",
-    "project_register_image", "project_select_image", "project_get_image",
+    "project_register_image", "project_get_image",
     "project_export_assets", "project_get_export",
     "project_save_layout", "project_get_layout",
     "project_build_layout", "project_get_page_build",
@@ -75,12 +75,13 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
         create = tools["project_create_visual_check"]
         self.assertIsNone(create.outputSchema)
         self.assertIsNone(tools["project_get_visual_check"].outputSchema)
-        self.assertEqual(set(create.inputSchema["required"]), {"project_root", "expected_revision", "items", "background"})
+        self.assertEqual(set(create.inputSchema["required"]), {"project_root", "expected_revision", "check_id", "items", "background"})
         item_schema = create.inputSchema["$defs"]["VisualCheckItem"]
-        self.assertEqual(set(item_schema["required"]), {"component_id", "run_id", "label"})
+        self.assertEqual(set(item_schema["required"]), {"component_id", "label"})
         self.assertFalse(item_schema["additionalProperties"])
-        item = {"component_id": "button", "run_id": "run-1", "label": "主按钮"}
-        arguments = {"project_root": "unused", "expected_revision": "rev", "items": [item], "background": "#FFFFFF"}
+        item = {"component_id": "button", "label": "主按钮"}
+        arguments = {"project_root": "unused", "expected_revision": "rev", "check_id": "check-1",
+                     "items": [item], "background": "#FFFFFF"}
         with patch.object(ProjectStore, "create_visual_check", create=True) as save:
             for invalid in (
                 {"items": [item | {"scale": True}]}, {"items": [item | {"scale": "1"}]},
@@ -102,15 +103,16 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                 with Image.new(mode, (1, 1)) as image:
                     image.save(path)
                 images[key] = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-            item = {"component_id": "button", "run_id": "run-1", "label": "主按钮", "scale": 2}
+            item = {"component_id": "button", "label": "主按钮", "scale": 2}
             record = {"id": "check-1", "images": images}
             result = {"project_root": str(root), "revision": "updated", "visual_check": record}
 
             with patch.object(ProjectStore, "create_visual_check", return_value=result, create=True) as save:
                 content = await server.call_tool("project_create_visual_check", {
-                    "project_root": str(root), "expected_revision": "initial", "items": [item], "background": "#FFFFFF",
+                    "project_root": str(root), "expected_revision": "initial", "check_id": "check-1",
+                    "items": [item], "background": "#FFFFFF",
                 })
-                save.assert_called_once_with(str(root), "initial", [item | {"region": None, "scale": 2.0}],
+                save.assert_called_once_with(str(root), "initial", "check-1", [item | {"region": None, "scale": 2.0}],
                                              background="#FFFFFF", columns=3, grayscale=True)
             self.assertEqual(json.loads(content[0].text), result)
             self.assertEqual(len(content), 3)
@@ -144,13 +146,17 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual({t.name for t in tools}, TOOL_NAMES)
             self.assertIsNone(next(t for t in tools if t.name == "photocraft_preview").outputSchema)
             document = str(root / "测试.pcraft")
+            Path(document).write_bytes(b"synthetic document")
             await server.call_tool("photocraft_status", {})
             with patch("smartui_mcp.server.read_document", return_value={"width": 1, "nodes": [], "manifest": {}}) as inspect:
                 await server.call_tool("photocraft_inspect_document", {"document": document})
                 inspect.assert_called_once_with(Path(document))
             preview = await server.call_tool("photocraft_preview", {"document": document})
-            self.assertEqual(fake.calls, [("status", {}), ("session", str(root)),
+            session_directory = Path(fake.calls[1][1])
+            self.assertEqual(session_directory.parent, root / ".smartui" / "temp")
+            self.assertEqual(fake.calls, [("status", {}), ("session", str(session_directory)),
                 ("doc.open", {"path": "测试.pcraft"}), ("doc.render", {"maxSide": 0})])
+            self.assertEqual(Path(document).read_bytes(), b"synthetic document")
             self.assertEqual(json.loads(preview[0].text), {"document": document, "width": 1, "height": 1})
             self.assertEqual(preview[1].mimeType, "image/png")
             self.assertEqual(base64.b64decode(preview[1].data), PNG)
@@ -213,22 +219,23 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                         return json.loads(result.content[0].text)
 
                     project = await call("project_create", project_root=str(project_root),
-                                         project_id="demo", name="色块按钮项目", paths={"references": "docs/ui/source-images"})
+                                         project_id="demo", name="色块按钮项目")
                     self.assertEqual(project["paths"], {
-                        "documents": "docs/ui", "references": "docs/ui/source-images",
-                        "programs": "art/ui/programs", "sources": "art/ui/sources",
+                        "documents": "smart-ui/docs", "references": "smart-ui/references",
+                        "programs": "smart-ui/programs", "sources": "smart-ui/sources",
                     })
                     first_revision = project["revision"]
                     for filename in ("style.md", "components.md"):
-                        self.assertTrue((project_root / "docs" / "ui" / filename).is_file())
+                        self.assertTrue((project_root / "smart-ui" / "docs" / filename).is_file())
                     project = await call("project_add_reference", project_root=str(project_root),
                                          expected_revision=project["revision"], reference_id="colors", source_path=str(source))
                     self.assertEqual(project["references"]["colors"]["sha256"], hashlib.sha256(original).hexdigest())
-                    archived = project_root / "docs" / "ui" / "source-images" / "colors" / source.name
+                    archived = project_root / "smart-ui" / "references" / "colors" / source.name
                     self.assertEqual(Path(project["references"]["colors"]["source"]), archived)
                     self.assertEqual(archived.read_bytes(), original)
-                    saved = json.loads((project_root / ".smartui" / "project.json").read_text(encoding="utf-8"))
-                    self.assertEqual(saved["references"]["colors"]["source"], "docs/ui/source-images/colors/参考色块.png")
+                    saved = json.loads((project_root / "smart-ui" / "project.json").read_text(encoding="utf-8"))
+                    self.assertEqual(saved["references"]["colors"]["source"], "smart-ui/references/colors/参考色块.png")
+                    self.assertNotIn("preview", saved["references"]["colors"])
                     inspection = await session.call_tool("project_inspect_reference", {
                         "project_root": str(project_root), "reference_id": "colors", "region": [2, 0, 2, 2],
                         "patches": [{"id": "left", "rect": [0, 0, 2, 2]}, {"id": "right", "rect": [2, 0, 2, 2]}],
@@ -256,10 +263,9 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(context, project)
                     self.assertEqual(context["components"]["primary"]["spec"], spec)
                     self.assertIsNone(context["components"]["primary"]["latest_run"])
-                    self.assertEqual(context["components"]["primary"]["attempts"], 0)
                     self.assertIsNone(context["style"]["user_confirmation"])
                     before_failure = {name: (project_root / name).read_bytes()
-                                      for name in (".smartui/project.json", "docs/ui/style.md", "docs/ui/components.md")}
+                                      for name in ("smart-ui/project.json", "smart-ui/docs/style.md", "smart-ui/docs/components.md")}
                     failure = await session.call_tool("project_update_style", {
                         "project_root": str(project_root), "expected_revision": first_revision,
                         "description": "过时写入", "rules": [], "parameters": {}, "reference_ids": [],
@@ -268,13 +274,13 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("revision", failure.content[0].text)
                     for name, content in before_failure.items():
                         self.assertEqual((project_root / name).read_bytes(), content)
-                    style_doc = (project_root / "docs" / "ui" / "style.md").read_text(encoding="utf-8")
-                    components_doc = (project_root / "docs" / "ui" / "components.md").read_text(encoding="utf-8")
+                    style_doc = (project_root / "smart-ui" / "docs" / "style.md").read_text(encoding="utf-8")
+                    components_doc = (project_root / "smart-ui" / "docs" / "components.md").read_text(encoding="utf-8")
                     self.assertIn("暖色亮面按钮，参数待测", style_doc)
                     self.assertIn("face-color", style_doc)
                     self.assertIn("参考色块.png", style_doc)
                     self.assertIn("主按钮", components_doc)
-                    self.assertIn("已定义规格，尚未生成", components_doc)
+                    self.assertIn("需要复查：是", components_doc)
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(source.stat().st_mtime_ns, original_mtime)
             self.assertFalse(missing_cli.exists())
@@ -310,7 +316,6 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(marker.exists(), "保存程序只能检查语法")
                     fetched = await call("project_get_program", project_root=str(project_root), program_id="lines")
                     self.assertEqual(fetched["source"], source)
-                    self.assertEqual(fetched["version"], 1)
                     self.assertEqual(fetched["sha256"], hashlib.sha256(source.encode()).hexdigest())
                     project = await call("project_define_component", project_root=str(project_root),
                                          expected_revision=project["revision"], component_id="stripes", name="条纹图案",
@@ -319,7 +324,6 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(marker.read_text(encoding="utf-8"), "已执行")
                     self.assertEqual(plan_result["revision"], project["revision"])
                     self.assertEqual(plan_result["program_id"], "lines")
-                    self.assertEqual(plan_result["program_version"], 1)
                     self.assertEqual(plan_result["program_sha256"], fetched["sha256"])
                     plan = plan_result["plan"]
                     self.assertEqual([plan["width"], plan["height"]], [120, 120])
@@ -335,15 +339,14 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     project = await call("project_save_program", project_root=str(project_root),
                                          expected_revision=project["revision"], program_id="lines", name="参数化线条",
                                          description="更新画布算法", source=modified)
-                    self.assertEqual(project["programs"]["lines"]["version"], 2)
                     self.assertTrue(project["components"]["stripes"]["needs_review"])
                     self.assertIsNone(project["components"]["stripes"]["latest_run"])
                     fetched = await call("project_get_program", project_root=str(project_root), program_id="lines")
                     self.assertEqual(fetched["source"], modified)
-                    self.assertEqual(len(fetched["history"]), 2)
+                    self.assertEqual((project_root / fetched["source_path"]).read_text(encoding="utf-8"), modified)
                     changed_plan = await call("project_plan_component", project_root=str(project_root), component_id="stripes")
                     self.assertEqual(changed_plan["plan"]["width"], 121)
-                    self.assertEqual(changed_plan["program_version"], 2)
+                    self.assertEqual(changed_plan["program_sha256"], hashlib.sha256(modified.encode()).hexdigest())
 
                     syntax_failure = await session.call_tool("project_save_program", {
                         "project_root": str(project_root), "expected_revision": project["revision"],
@@ -351,13 +354,13 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                         "source": "def build(:\n",
                     })
                     self.assertTrue(syntax_failure.isError)
-                    self.assertIn("语法无效", syntax_failure.content[0].text)
+                    self.assertIn("语法错误", syntax_failure.content[0].text)
                     self.assertEqual(await call("project_context", project_root=str(project_root)), project)
                     failing_source = "raise RuntimeError('程序执行阶段的实际错误')\n"
                     project = await call("project_save_program", project_root=str(project_root),
                                          expected_revision=project["revision"], program_id="lines", name="参数化线条",
                                          description="语法有效但执行失败", source=failing_source)
-                    self.assertEqual(project["programs"]["lines"]["version"], 3)
+                    self.assertEqual(project["programs"]["lines"]["sha256"], hashlib.sha256(failing_source.encode()).hexdigest())
                     runtime_failure = await session.call_tool("project_plan_component", {
                         "project_root": str(project_root), "component_id": "stripes",
                     })
@@ -365,7 +368,7 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("程序执行失败", runtime_failure.content[0].text)
                     self.assertIn("RuntimeError: 程序执行阶段的实际错误", runtime_failure.content[0].text)
                     self.assertEqual(await call("project_context", project_root=str(project_root)), project)
-                    self.assertEqual(project["components"]["stripes"]["attempts"], 0)
+                    self.assertIsNone(project["components"]["stripes"]["latest_run"])
             self.assertFalse(missing_cli.exists())
 
 

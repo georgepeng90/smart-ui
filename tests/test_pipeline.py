@@ -1,6 +1,7 @@
 """验证原生制作、局部修改范围和失败时保留已发布源文件。"""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,7 @@ class MissingClient:
 @pytest.fixture
 def project(tmp_path, request):
     store = ProjectStore()
-    context = store.create(str(tmp_path / "project"), "demo", "通用绘制项目", paths=getattr(request, "param", None))
+    context = store.create(str(tmp_path / "project"), "demo", "通用绘制项目")
     context = store.save_program(context["project_root"], context["revision"], "drawing", "组件程序", "", PROGRAM)
     context = store.update_style(context["project_root"], context["revision"], "项目参数", [], {"color": "#123456"}, [])
     context = store.define_component(context["project_root"], context["revision"], "sample", "示例组件",
@@ -105,31 +106,33 @@ def test_tampered_program_refuses_before_backend(project):
 
 def test_missing_backend_records_failure_with_reproducible_inputs(project):
     store, context = project
-    with pytest.raises(RuntimeError, match="制作失败，已写入组件记录.*未安装"):
+    with pytest.raises(RuntimeError, match="制作失败，已保留本机诊断.*未安装"):
         draw_component(context["project_root"], context["revision"], "sample", client=MissingClient(), store=store)
     updated = store.context(context["project_root"])
     component = updated["data"]["components"]["sample"]
-    assert updated["revision"] != context["revision"]
+    assert updated["revision"] == context["revision"]
     assert component["latest_run"] is None
     assert component["needs_review"]
-    failed = component["runs"][-1]
-    assert failed["status"] == "failed"
-    assert not Path(failed["document"]).exists()
-    assert Path(failed["program_snapshot_path"]).read_bytes() == PROGRAM.encode("utf-8")
-    assert json.loads(Path(failed["plan_path"]).read_text(encoding="utf-8"))["width"] == 96
-    result = json.loads((Path(failed["operations_path"]).parent / "result.json").read_text(encoding="utf-8"))
-    assert result["error"] == failed["error"]
+    diagnostic = Path(context["project_root"]) / ".smartui/diagnostics/sample"
+    assert (diagnostic / "program.py").read_bytes() == PROGRAM.encode("utf-8")
+    assert json.loads((diagnostic / "plan.json").read_text(encoding="utf-8"))["width"] == 96
+    assert "未安装" in json.loads((diagnostic / "result.json").read_text(encoding="utf-8"))["error"]
+    with pytest.raises(RuntimeError):
+        draw_component(context["project_root"], context["revision"], "sample", client=MissingClient(), store=store)
+    assert len(list(diagnostic.parent.iterdir())) == 1
 
 
-@pytest.mark.parametrize("project", [{"sources": "design/editable"}], indirect=True)
-def test_real_creation_uses_configured_directory_and_archives_source(project):
+def test_real_creation_keeps_only_current_artifact(project):
     store, context = project
     updated = record_source(store, context)
     run = updated["data"]["components"]["sample"]["latest_run"]
-    assert Path(run["document"]) == Path(context["project_root"]) / "design/editable/sample.pcraft"
-    assert Path(run["source_snapshot_path"]).read_bytes() == Path(run["document"]).read_bytes()
+    root = Path(context["project_root"])
+    assert Path(run["document"]) == root / "smart-ui/sources/sample.pcraft"
+    assert "source_snapshot_path" not in run
+    assert "operations_path" not in run
     assert run["backend"]["name"] == "photocraft"
     assert set(run["layer_ids"]) == {"assembly", "ink", "detail"}
+    assert not list((root / ".smartui/temp").iterdir())
 
 
 def test_local_update_after_project_move_preserves_ids_and_other_nodes(project):
@@ -139,13 +142,14 @@ def test_local_update_after_project_move_preserves_ids_and_other_nodes(project):
     original = Path(context["project_root"])
     moved = original.with_name("moved-project")
     original.rename(moved)
+    shutil.rmtree(moved / ".smartui")
     context = change_spec(store, store.context(str(moved)), {"radius": 10})
     result = draw_component(str(moved), context["revision"], "sample", ["ink"], store=store)
     assert result["verification"]["unchanged_other_nodes"]
     assert result["verification"]["target_content_changed"]
     latest = store.context(str(moved))["data"]["components"]["sample"]["latest_run"]
     assert latest["layer_ids"] == old["layer_ids"]
-    assert Path(latest["source_snapshot_path"]).is_relative_to(moved)
+    assert Path(latest["plan_path"]).is_relative_to(moved)
 
 
 @pytest.mark.parametrize("layers", [None, ["ink"]])
@@ -193,7 +197,7 @@ def test_tampered_plan_refuses_before_backend(project):
     store, context = project
     context = record_source(store, context)
     Path(context["data"]["components"]["sample"]["latest_run"]["plan_path"]).write_text("{}", encoding="utf-8")
-    assert_preflight_rejected(store, context, "历史绘制计划已被修改", ["ink"])
+    assert_preflight_rejected(store, context, "当前产物的绘制计划已被修改", ["ink"])
 
 
 def test_failed_update_preserves_source_and_latest_success(project):
@@ -207,4 +211,4 @@ def test_failed_update_preserves_source_and_latest_success(project):
     updated = store.context(context["project_root"])["data"]["components"]["sample"]
     assert updated["latest_run"] == old
     assert Path(old["document"]).read_bytes() == source
-    assert updated["runs"][-1]["status"] == "failed"
+    assert "runs" not in updated

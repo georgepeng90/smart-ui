@@ -20,10 +20,9 @@ def _item(path, *, label="默认状态", region=None, scale=1):
         "run": {
             "run_id": f"{path.stem}-run",
             "status": "drawn",
-            "style_version": 2,
+            "style_sha256": "3" * 64,
             "spec_sha256": "1" * 64,
             "program_id": "drawing-program",
-            "program_version": 3,
             "program_sha256": "2" * 64,
             "preview": str(path),
             "artifact_hashes": {"preview": _sha256(path)},
@@ -58,7 +57,7 @@ def test_visual_check_crops_scales_and_composites_before_grayscale(tmp_path, ite
     images = {key: Path(info["path"]) for key, info in result["images"].items()}
     assert set(images) == {"item-1", "item-2", "item-3", "overview", "grayscale"}
     for key, path in images.items():
-        assert path == tmp_path / ".smartui" / "visual-checks" / "example" / f"{key}.png"
+        assert path == tmp_path / "smart-ui" / "previews" / "checks" / "example" / f"{key}.png"
         assert result["images"][key]["sha256"] == _sha256(path)
     for entry, item, path in zip(entries, items, source_paths, strict=True):
         assert entry["label"] == item["label"]
@@ -96,14 +95,19 @@ def test_visual_check_crops_scales_and_composites_before_grayscale(tmp_path, ite
     assert [(path.read_bytes(), path.stat().st_mtime_ns) for path in source_paths] == before
 
 
-def test_grayscale_can_be_omitted(tmp_path, items):
+def test_updating_check_omits_grayscale_and_removed_items(tmp_path, items):
+    original = build_visual_check(str(tmp_path), "example", items, background="#123456")
     result = build_visual_check(str(tmp_path), "example", items[:1], background="#abcDef", grayscale=False)
 
     assert result["display"]["columns"] == 1
     assert result["display"]["background"] == "#ABCDEF"
     assert result["display"]["grayscale"] is None
     assert set(result["images"]) == {"item-1", "overview"}
-    assert not (tmp_path / ".smartui" / "visual-checks" / "example" / "grayscale.png").exists()
+    assert result["images"]["overview"]["path"] == original["images"]["overview"]["path"]
+    assert not Path(original["images"]["grayscale"]["path"]).exists()
+    assert not Path(original["images"]["item-2"]["path"]).exists()
+    assert not Path(original["images"]["item-3"]["path"]).exists()
+    assert not list((tmp_path / ".smartui" / "temp").iterdir())
 
 
 def test_changed_preview_hash_discards_all_staged_items(tmp_path, items):
@@ -113,7 +117,7 @@ def test_changed_preview_hash_discards_all_staged_items(tmp_path, items):
     with pytest.raises(ValueError, match="SHA-256 与记录不一致"):
         build_visual_check(str(tmp_path), "example", items, background="#123456")
 
-    assert not list((tmp_path / ".smartui" / "visual-checks").iterdir())
+    assert not (tmp_path / "smart-ui" / "previews" / "checks").exists()
 
 
 @pytest.mark.parametrize("field, value, message", [
@@ -134,7 +138,7 @@ def test_invalid_items_do_not_publish(tmp_path, items, field, value, message):
     with pytest.raises(ValueError, match=message):
         build_visual_check(str(tmp_path), "example", items, background="#123456")
 
-    assert not (tmp_path / ".smartui" / "visual-checks" / "example").exists()
+    assert not (tmp_path / "smart-ui" / "previews" / "checks" / "example").exists()
 
 
 @pytest.mark.parametrize("options, message", [
@@ -149,7 +153,7 @@ def test_invalid_display_options_do_not_publish(tmp_path, items, options, messag
     with pytest.raises(ValueError, match=message):
         build_visual_check(str(tmp_path), "example", items, **({"background": "#123456"} | options))
 
-    assert not (tmp_path / ".smartui" / "visual-checks").exists()
+    assert not (tmp_path / "smart-ui" / "previews" / "checks").exists()
 
 
 @pytest.mark.parametrize("count", [0, 17])
@@ -177,7 +181,7 @@ def test_size_limits_apply_to_items_and_grid_before_resizing(tmp_path, monkeypat
         build_visual_check(str(tmp_path), "example", [_item(path, scale=scale)] * count,
                            columns=columns, background="#123456")
 
-    assert not list((tmp_path / ".smartui" / "visual-checks").iterdir())
+    assert not (tmp_path / "smart-ui" / "previews" / "checks").exists()
 
 
 def test_source_size_limit_applies_before_decoding_even_for_a_small_crop(tmp_path, monkeypatch):
@@ -192,7 +196,7 @@ def test_source_size_limit_applies_before_decoding_even_for_a_small_crop(tmp_pat
     with pytest.raises(ValueError, match="源预览图的输出尺寸超过上限"):
         build_visual_check(str(tmp_path), "example", [_item(path, region=[0, 0, 1, 1])], background="#123456")
 
-    assert not list((tmp_path / ".smartui" / "visual-checks").iterdir())
+    assert not (tmp_path / "smart-ui" / "previews" / "checks").exists()
 
 
 def test_failed_grayscale_write_does_not_publish_partial_output(tmp_path, items, monkeypatch):
@@ -207,4 +211,4 @@ def test_failed_grayscale_write_does_not_publish_partial_output(tmp_path, items,
     with pytest.raises(OSError, match="无法写入灰度图"):
         build_visual_check(str(tmp_path), "example", items, background="#123456")
 
-    assert not list((tmp_path / ".smartui" / "visual-checks").iterdir())
+    assert not (tmp_path / "smart-ui" / "previews" / "checks").exists()

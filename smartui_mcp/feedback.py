@@ -1,6 +1,4 @@
-"""记录对照发现的偏差及其处理过程。"""
-
-from datetime import datetime, timezone
+"""保存对照发现的偏差和当前处理结论。"""
 
 from .projects import ProjectError, _identifier, _text
 
@@ -46,10 +44,12 @@ def add_feedback(state: dict, feedback_id: str, comparison_id: str, observation:
     _validate_targets(target_nodes, "target_nodes", comparison["node_keys"], comparison_id)
     _validate_targets(rule_ids, "rule_ids", comparison["rule_ids"], comparison_id)
     record = {
-        "id": feedback_id, "comparison_id": comparison_id, "component_id": comparison["component_id"],
+        "id": feedback_id, "comparison_id": comparison_id,
         "observation": observation, "suggested_change": suggested_change, "target_nodes": list(target_nodes),
         "rule_ids": list(rule_ids), "source": source, "status": "open",
-        "created_at": datetime.now(timezone.utc).isoformat(), "history": [],
+        "reviewed_artifact_sha256": comparison["artifact"]["sha256"],
+        "reference_sha256": comparison["reference"]["sha256"],
+        "reference_region_source_xywh": list(comparison["reference"]["region_source_xywh"]),
     }
     feedback[feedback_id] = record
     state["feedback"] = feedback
@@ -66,21 +66,14 @@ def update_feedback(state: dict, feedback_id: str, status: str, comment: str,
     if feedback_id not in feedback:
         raise ProjectError(f"反馈记录不存在：{feedback_id}")
     record = feedback[feedback_id]
-    comparisons = _collection(state, "comparisons")
-    original = _comparison(comparisons, record["comparison_id"])
-    comparison = _comparison(comparisons, comparison_id)
-    if comparison["component_id"] != original["component_id"]:
-        raise ProjectError(f"对照 {comparison_id} 与反馈 {feedback_id} 的原始对照必须使用同一组件")
-    if any(comparison["reference"][field] != original["reference"][field]
-           for field in ("id", "sha256", "region_source_xywh")):
-        raise ProjectError(f"对照 {comparison_id} 与反馈 {feedback_id} 的原始对照必须使用同一参考及源图区域")
-    if status == "resolved":
-        run = comparison["run"]
-        if (run["status"] not in ("drawn", "verified") or run["run_id"] == original["run"]["run_id"]
-                or comparison["run_index"] <= original["run_index"]):
-            raise ProjectError(f"解决反馈 {feedback_id} 需要关联原始运行之后成功绘制的产物对照")
-
-    entry = {"at": datetime.now(timezone.utc).isoformat(), "status": status, "comment": comment,
-             "comparison_id": comparison_id, "source": source}
-    record["history"].append(entry)
-    record["status"] = status
+    comparison = _comparison(_collection(state, "comparisons"), comparison_id)
+    if comparison_id != record["comparison_id"]:
+        raise ProjectError(f"复查反馈 {feedback_id} 必须使用原组件和参考的当前对照：{record['comparison_id']}")
+    reference = comparison["reference"]
+    if (reference["sha256"] != record["reference_sha256"]
+            or reference["region_source_xywh"] != record["reference_region_source_xywh"]):
+        raise ProjectError(f"复查反馈 {feedback_id} 必须使用相同的参考图和源图区域")
+    artifact_sha256 = comparison["artifact"]["sha256"]
+    if status == "resolved" and artifact_sha256 == record["reviewed_artifact_sha256"]:
+        raise ProjectError(f"解决反馈 {feedback_id} 需要复查预览图 SHA-256 已变化的当前产物")
+    record.update(status=status, source=source, comment=comment, reviewed_artifact_sha256=artifact_sha256)

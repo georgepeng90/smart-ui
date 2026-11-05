@@ -4,6 +4,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -21,7 +23,6 @@ class VisualCheckItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     component_id: StrictStr
-    run_id: StrictStr
     label: StrictStr
     region: list[StrictInt] | None = None
     scale: StrictFloat = 1.0
@@ -38,7 +39,6 @@ class CompositionNodeBase(BaseModel):
 class CompositionComponent(CompositionNodeBase):
     kind: Literal["component"]
     component_id: StrictStr
-    run_id: StrictStr
     width: StrictInt
     height: StrictInt
     region: list[StrictInt] | None = None
@@ -47,7 +47,6 @@ class CompositionComponent(CompositionNodeBase):
 class CompositionImage(CompositionNodeBase):
     kind: Literal["image"]
     asset_id: StrictStr
-    version: StrictInt
     width: StrictInt
     height: StrictInt
     region: list[StrictInt] | None = None
@@ -67,45 +66,13 @@ CompositionNode = Annotated[CompositionComponent | CompositionImage | Compositio
 
 
 def _project_summary(context):
-    """工具返回制作摘要；完整节点检查留在项目文件中，避免反复挤占对话。"""
-    data = context["data"]
-    components = {}
-    for key, value in data["components"].items():
-        latest = value["latest_run"]
-        components[key] = {"name": value["name"], "spec": value["spec"], "needs_review": value["needs_review"],
-                           "open_feedback_count": value["open_feedback_count"],
-                           "target_style_version": value["target_style_version"], "attempts": len(value["runs"]),
-                           "last_attempt": {k: v for k, v in value["runs"][-1].items() if k in ("run_id", "status", "error")} if value["runs"] else None,
-                           "latest_run": {k: v for k, v in latest.items() if k in ("run_id", "status", "style_version", "program_id", "program_version", "program_sha256", "document", "preview", "verification", "layer_ids", "backend")} if latest else None}
-    comparisons = {key: {field: value[field] for field in ("id", "component_id", "run", "is_current", "created_at")}
-                   for key, value in data.get("comparisons", {}).items()}
-    visual_checks = {
-        key: {field: value[field] for field in ("id", "is_current", "created_at")} | {
-            "items": [{"component_id": item["component_id"], "run_id": item["run"]["run_id"],
-                       "label": item["label"], "is_current": item["is_current"]} for item in value["items"]],
-        }
-        for key, value in data.get("visual_checks", {}).items()
-    }
-    feedback = {key: {field: value[field] for field in ("id", "comparison_id", "component_id", "observation",
-                                                       "suggested_change", "target_nodes", "rule_ids", "source", "status",
-                                                       "reviewed_comparison_id", "applies_to_current_run")}
-                | {"latest_update": value["history"][-1] if value["history"] else None}
-                for key, value in data.get("feedback", {}).items()}
-    return {"project_root": context["project_root"], "revision": context["revision"],
-            "project_id": data["project_id"], "name": data["name"], "paths": data["paths"], "style": data["style"],
-            "references": data["references"], "programs": data["programs"], "components": components,
-            "comparisons": comparisons, "visual_checks": visual_checks, "feedback": feedback,
-            "images": data.get("images", {}),
-            "exports": {key: {field: value[field] for field in ("id", "source", "manifest", "created_at")}
-                        for key, value in data.get("exports", {}).items()},
-            "layouts": {key: {field: value[field] for field in ("id", "name", "current_version")}
-                        for key, value in data.get("layouts", {}).items()},
-            "page_builds": {key: {field: value[field] for field in ("id", "layout_id", "layout_version", "created_at")}
-                            | {"html": value["files"]["html"], "overview": value["files"]["overview"]}
-                            for key, value in data.get("page_builds", {}).items()},
-            "compositions": {key: {field: value[field] for field in ("id", "width", "height", "background", "is_current", "created_at")}
-                             | {"overview": value["images"]["overview"]}
-                             for key, value in data.get("compositions", {}).items()}}
+    """返回当前制作定义和检查状态，省略冗长原生节点检查。"""
+    from copy import deepcopy
+    data = deepcopy(context["data"])
+    for component in data["components"].values():
+        if component["latest_run"]:
+            component["latest_run"].pop("inspection", None)
+    return {"project_root": context["project_root"], "revision": context["revision"], **data}
 
 
 def _document_path(document: str) -> str:
@@ -136,7 +103,7 @@ def _visual_check_content(result):
 
 
 def _image_content(result):
-    record = result["image_version"]
+    record = result["image"]
     path = Path(record["path"])
     payload = path.read_bytes()
     if hashlib.sha256(payload).hexdigest() != record["sha256"]:
@@ -178,9 +145,14 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         """在独立会话中打开 .pcraft 并返回原尺寸 PNG，不修改源文件。"""
         path = Path(_document_path(document))
         def render():
-            with renderer.session(path.parent) as session:
-                opened = session.call("doc.open", {"path": path.name})
-                result = session.call("doc.render", {"maxSide": 0})
+            project = next((parent.parent for parent in path.parents if parent.name == "smart-ui"), path.parent)
+            temporary_root = project / ".smartui/temp"
+            temporary_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=temporary_root) as temporary:
+                shutil.copyfile(path, Path(temporary) / path.name)
+                with renderer.session(Path(temporary)) as session:
+                    opened = session.call("doc.open", {"path": path.name})
+                    result = session.call("doc.render", {"maxSide": 0})
             if not isinstance(result, dict) or result.get("mime") != "image/png":
                 raise ValueError("PhotoCraft 未返回文档 PNG")
             payload = base64.b64decode(result["base64"], validate=True)
@@ -189,13 +161,9 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         return [json.dumps(info, ensure_ascii=False), Image(data=payload, format="png")]
 
     @server.tool()
-    async def project_create(project_root: str, project_id: str, name: str, paths: dict[str, str] | None = None) -> Any:
-        """在业务工程绝对根目录创建 .smartui/project.json 及自动维护的风格、组件文档。
-
-        paths 可局部指定 documents、references、programs、sources，均为工程内相对目录；
-        默认分别为 docs/ui、docs/ui/references、art/ui/programs、art/ui/sources。拒绝覆盖现有受管文档。
-        """
-        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name, paths=paths))
+    async def project_create(project_root: str, project_id: str, name: str) -> Any:
+        """在工程 smart-ui/ 创建当前项目状态及受管文档，.smartui/ 仅放可删除的本机数据。"""
+        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name))
 
     @server.tool()
     async def project_context(project_root: str) -> Any:
@@ -204,17 +172,17 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
 
     @server.tool()
     async def project_add_reference(project_root: str, expected_revision: str, reference_id: str, source_path: str) -> Any:
-        """登记 PNG/JPEG/WebP 参考，工程外原图归档到 references 目录，计算哈希并生成预览。
+        """登记 PNG/JPEG/WebP 参考，原图归档到 references 目录并计算摘要。
 
-        原输入保持只读；归档使用 reference_id/原文件名，不覆盖已有文件。项目风格文档自动更新。
+        原输入保持只读；归档使用 reference_id/原文件名，不覆盖已有文件。查看参考时生成预览。
         """
         current = await asyncio.to_thread(projects.context, project_root)
         if current["revision"] != expected_revision:
             raise ProjectError("项目版本已变化，请重新读取 project_context")
+        projects._check_id_collision(current["data"]["references"], reference_id, "reference_id")
         if reference_id in current["data"]["references"]:
             raise ProjectError("参考标识已存在：" + reference_id)
-        reference = await asyncio.to_thread(register_reference, project_root, reference_id, source_path,
-                                             paths=current["data"]["paths"])
+        reference = await asyncio.to_thread(register_reference, project_root, reference_id, source_path)
         return _project_summary(await asyncio.to_thread(projects.add_reference, project_root, expected_revision, reference))
 
     @server.tool(structured_output=False)
@@ -236,12 +204,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_update_style(project_root: str, expected_revision: str, description: str,
                                    rules: list[dict[str, Any]], parameters: dict[str, Any], reference_ids: list[str]) -> Any:
-        """保存模型从参考中归纳的风格说明、规则及执行参数，并自动生成风格文档。
-
-        rules 的证据用 evidence:[{reference_id,...}]。参数或规则变化提升风格版本，旧组件标记需复核。
-        parameters 是项目定义的共用参数，由项目绘制程序读取；允许保存待测草稿。
-        不会自动将模型判断登记为用户确认。
-        """
+        """更新当前风格规则和共用参数；内容摘要变化使相关产物需要复查，不代表用户确认。"""
         return _project_summary(await asyncio.to_thread(projects.update_style, project_root, expected_revision,
                                                         description, rules, parameters, reference_ids))
 
@@ -258,32 +221,20 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_draw_component(project_root: str, expected_revision: str, component_id: str,
                                      layers: list[str] | None = None) -> Any:
-        """将组件交给 PhotoCraft 制作候选源文件、保存重开和核验，成功后发布并更新文档。
-
-        执行 spec.program_id 引用的项目 Python 程序。省略 layers 完整绘制，或提供计划节点 key 列表作局部修改。
-        局部修改要求完整计划中的未选节点没有变化，实际执行后再次核对无关节点。
-        源文件位于配置的 sources 目录（默认 art/ui/sources），参数快照和完整调用记录位于 .smartui/runs。
-        PhotoCraft CLI 必须已安装；不要求桌面窗口正在运行。
-        工具通过代表技术检查通过，视觉效果及用户确认须另行查看。失败尝试会记录实际错误，不自动重试。
-        """
+        """执行当前项目程序，保存重开并校验源文件后覆盖当前产物。layers 指定局部节点，未选节点必须保持；失败不覆盖源文件，最近诊断留在 .smartui/。"""
         return await asyncio.to_thread(draw_component, project_root, expected_revision, component_id, layers,
                                         client=renderer, store=projects)
 
     @server.tool()
     async def project_save_program(project_root: str, expected_revision: str, program_id: str,
                                    name: str, description: str, source: str) -> Any:
-        """保存或更新项目 Python 绘制程序，维护不可变源码版本及依赖组件状态；只检查语法，不执行。
-
-        程序实现 build(parameters, spec, component_id) 并返回包含 schema_version/width/height/nodes 的计划。
-        节点、图层、蒙版及画法由项目定义。完整格式见 docs/drawing-programs.md。
-        plan/draw 会在本机独立 Python 进程执行该可信源码，不是安全沙箱。
-        """
+        """覆盖当前 Python 绘制程序，校验语法并更新摘要。程序实现 build(parameters, spec, component_id)，历史由 Git 管理。"""
         return _project_summary(await asyncio.to_thread(projects.save_program, project_root, expected_revision,
                                                         program_id, name, description, source))
 
     @server.tool()
     async def project_get_program(project_root: str, program_id: str) -> Any:
-        """读取项目绘制程序的完整源码、版本、摘要及版本历史，修改后通过 project_save_program 保存。"""
+        """读取当前程序源码、说明和内容摘要。"""
         return await asyncio.to_thread(projects.get_program, project_root, program_id)
 
     @server.tool()
@@ -296,109 +247,74 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
 
     @server.tool(structured_output=False)
     async def project_compare_component(project_root: str, expected_revision: str, component_id: str,
-                                        run_id: str, reference_id: str, reference_region: list[StrictInt] | None = None,
+                                        reference_id: str, reference_region: list[StrictInt] | None = None,
                                         reference_coordinate_size: list[StrictInt] | None = None,
                                         artifact_region: list[StrictInt] | None = None, reference_scale: StrictFloat = 1.0,
                                         artifact_scale: StrictFloat = 1.0) -> list[Any]:
-        """保存参考与指定成功运行产物的对照，返回 revision、版本证据和并排图片，无需启动绘图进程。
-
-        region 均为 [x,y,width,height]；参考按 reference_coordinate_size 映射（省略为原图），
-        artifact_region 使用完整产物 PNG 的原始像素坐标。两端 scale 默认 1，分别等比缩放，
-        不自动对齐宽高；裁切快照保留原始 RGBA，拼图使用棋盘背景。超限报错，不自动缩小。
-        校验源图和运行快照摘要，保存到项目 .smartui/comparisons；不打相似度分，不登记用户确认。
-        """
+        """对照当前组件产物与参考，按组件和参考的稳定标识覆盖当前检查图；region=[x,y,width,height]，倍率和参考坐标基准显式指定。"""
         result = await asyncio.to_thread(projects.compare_component, project_root, expected_revision, component_id,
-                                        run_id, reference_id, reference_region, reference_coordinate_size,
+                                        reference_id, reference_region, reference_coordinate_size,
                                         artifact_region, reference_scale, artifact_scale)
         return [json.dumps(result, ensure_ascii=False), await asyncio.to_thread(_comparison_image, result)]
 
     @server.tool(structured_output=False)
     async def project_get_comparison(project_root: str, comparison_id: str) -> list[Any]:
-        """读取既有对照快照、实际运行版本及关联反馈历史，校验图片摘要并返回并排图片。
-
-        is_current 只表示该运行与当前项目记录匹配，不表示视觉通过或磁盘源文件仍未改变。
-        历史对照保留原始内容，不使用当前新产物替换旧图。
-        """
+        """校验并读取当前对照图及反馈；is_current 表示检查依据是否仍匹配当前产物。"""
         result = await asyncio.to_thread(projects.get_comparison, project_root, comparison_id)
         return [json.dumps(result, ensure_ascii=False), await asyncio.to_thread(_comparison_image, result)]
 
     @server.tool(structured_output=False)
-    async def project_create_visual_check(project_root: str, expected_revision: str, items: list[VisualCheckItem],
+    async def project_create_visual_check(project_root: str, expected_revision: str, check_id: StrictStr, items: list[VisualCheckItem],
                                           background: StrictStr, columns: StrictInt = 3,
                                           grayscale: StrictBool = True) -> list[Any]:
-        """保存 1 到 16 项指定成功运行的视觉检查视图，返回彩色总览和可选灰度总览，无需启动绘图进程。
-
-        每项用 component_id 和 run_id 指定来源，label 对应图中序号。region 为完整预览图上的
-        [x,y,width,height]，省略时使用全图。scale 按原尺寸等比缩放，默认为 1。
-        background 使用 #RRGGBB 纯色，columns 指定最多 16 列。先缩放和合成背景，再转灰度。
-        返回原尺寸 RGBA 裁切文件、显示位置和运行版本。不自动打分或登记用户确认。
-        """
-        result = await asyncio.to_thread(projects.create_visual_check, project_root, expected_revision,
+        """以稳定 check_id 覆盖当前视觉检查。items 引用 component_id 和 label，可指定 region/scale；不自动判断美术质量。"""
+        result = await asyncio.to_thread(projects.create_visual_check, project_root, expected_revision, check_id,
                                          [item.model_dump() for item in items], background=background,
                                          columns=columns, grayscale=grayscale)
         return await asyncio.to_thread(_visual_check_content, result)
 
     @server.tool(structured_output=False)
     async def project_get_visual_check(project_root: str, check_id: str) -> list[Any]:
-        """读取已保存的视觉检查图和各项来源，校验文件摘要并返回总览图片。
-
-        is_current 表示引用的运行与当前项目记录匹配。历史检查仍使用保存时的快照。
-        """
+        """校验并读取当前视觉检查图和来源摘要。"""
         result = await asyncio.to_thread(projects.get_visual_check, project_root, check_id)
         return await asyncio.to_thread(_visual_check_content, result)
 
     @server.tool()
     async def project_register_image(project_root: str, expected_revision: str, asset_id: StrictStr,
                                      name: StrictStr, source_path: StrictStr, provenance: dict) -> Any:
-        """按原字节登记 PNG/JPEG/WebP 的新版本，不调用生图，不自动选用。
-
-        source_path 必须是绝对路径。provenance.kind 为 generated/edited 时必须有真实 tool、prompt；
-        imported 时必须有 description。其他实际生成信息可附加，不填造未知模型或种子。
-        """
+        """登记或覆盖同一 asset_id 的当前图像；保留真实来源。generated/edited 必须填写实际 tool/prompt，imported 必须填写 description。"""
         return await asyncio.to_thread(projects.register_image, project_root, expected_revision,
                                        asset_id, name, source_path, provenance)
 
     @server.tool()
     async def project_export_assets(project_root: str, expected_revision: str, component_id: StrictStr,
-                                    run_id: StrictStr, exports: list[dict[str, Any]]) -> Any:
-        """从成功组件运行的明确区域导出正式 PNG、几何元数据和清单；不改变选用版本。"""
-        return await asyncio.to_thread(projects.export_assets, project_root, expected_revision, component_id, run_id, exports)
+                                    exports: list[dict[str, Any]]) -> Any:
+        """从当前组件成功产物导出正式 PNG 和几何清单，输出必须位于 smart-ui/exports/。"""
+        return await asyncio.to_thread(projects.export_assets, project_root, expected_revision, component_id, exports)
 
     @server.tool()
     async def project_get_export(project_root: str, export_id: StrictStr) -> Any:
-        """校验并读取历史导出清单和原始资产版本，不要求生产路径仍为旧版本。"""
+        """校验并读取当前导出清单和资产。"""
         return await asyncio.to_thread(projects.get_export, project_root, export_id)
 
-    @server.tool()
-    async def project_select_image(project_root: str, expected_revision: str,
-                                   asset_id: StrictStr, version: StrictInt) -> Any:
-        """明确选用一个已登记的图像版本；不重建已有组合，不表示用户美术确认。"""
-        return await asyncio.to_thread(projects.select_image, project_root, expected_revision, asset_id, version)
-
     @server.tool(structured_output=False)
-    async def project_get_image(project_root: str, asset_id: StrictStr, version: StrictInt) -> list[Any]:
-        """校验并查看指定图像版本，返回实际图片、来源、摘要及当前选用版本。"""
-        result = await asyncio.to_thread(projects.get_image, project_root, asset_id, version)
+    async def project_get_image(project_root: str, asset_id: StrictStr) -> list[Any]:
+        """校验并读取当前图像及真实来源。"""
+        result = await asyncio.to_thread(projects.get_image, project_root, asset_id)
         return await asyncio.to_thread(_image_content, result)
 
     @server.tool(structured_output=False)
-    async def project_create_composition(project_root: str, expected_revision: str, width: StrictInt,
+    async def project_create_composition(project_root: str, expected_revision: str, composition_id: StrictStr, width: StrictInt,
                                           height: StrictInt, background: StrictStr,
                                           nodes: list[CompositionNode]) -> list[Any]:
-        """按明确坐标组合组件成功运行、独立图像版本及单行文字，保存来源快照和 PNG。
-
-        nodes 按叠放顺序排列。component 用 component_id/run_id；image 用 asset_id/version。
-        图像区域 region=[x,y,width,height] 可省略；目标 width/height 内等比居中，不拉伸。
-        text 必须指定真实 TTF/OTF font_path、font_size、color；x/y 为文字左上基准，描边不能越界。
-        这是一份静态组合预览，不负责布局求解、九宫格、自动换行、运行时交互或生图。
-        """
-        result = await asyncio.to_thread(projects.create_composition, project_root, expected_revision,
+        """按稳定 composition_id 更新当前静态组合；组件引用 component_id，图像引用 asset_id，文字指定真实字体。"""
+        result = await asyncio.to_thread(projects.create_composition, project_root, expected_revision, composition_id,
                                          width, height, background, [node.model_dump() for node in nodes])
         return await asyncio.to_thread(_composition_content, result)
 
     @server.tool(structured_output=False)
     async def project_get_composition(project_root: str, composition_id: StrictStr) -> list[Any]:
-        """校验并读取已有组合快照，源资产更新不改变原图；is_current 仅反映引用版本。"""
+        """读取并校验当前组合预览及来源是否仍匹配。"""
         result = await asyncio.to_thread(projects.get_composition, project_root, composition_id)
         return await asyncio.to_thread(_composition_content, result)
 
@@ -406,26 +322,25 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     async def project_save_layout(project_root: str, expected_revision: str, layout_id: StrictStr, name: StrictStr,
                                   width: StrictInt, height: StrictInt, background: StrictStr,
                                   nodes: list[dict[str, Any]]) -> Any:
-        """保存页面修订和固定/选用资产绑定；保留独立文本框，不绘制或重新生成资产。"""
+        """覆盖当前布局定义；图像通过 asset_id 绑定当前资产，文字独立排版。"""
         return await asyncio.to_thread(projects.save_layout, project_root, expected_revision, layout_id, name,
                                        width, height, background, nodes)
 
     @server.tool()
-    async def project_get_layout(project_root: str, layout_id: StrictStr, version: StrictInt | None = None) -> Any:
-        """读取可修改的当前布局或明确的历史修订；省略 version 读取当前修订。"""
-        return await asyncio.to_thread(projects.get_layout, project_root, layout_id, version)
+    async def project_get_layout(project_root: str, layout_id: StrictStr) -> Any:
+        """读取当前可编辑布局定义。"""
+        return await asyncio.to_thread(projects.get_layout, project_root, layout_id)
 
     @server.tool(structured_output=False)
-    async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr,
-                                   version: StrictInt | None = None) -> list[Any]:
-        """构建独立离线 HTML 和同页 Chromium PNG；明确解析选用版本，保留历史快照及字体证据。"""
-        result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id, version)
+    async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr) -> list[Any]:
+        """覆盖当前布局的离线 HTML 和 PNG，保留当前输入摘要。"""
+        result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id)
         return [json.dumps(result, ensure_ascii=False),
                 await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
 
     @server.tool(structured_output=False)
     async def project_get_page_build(project_root: str, build_id: StrictStr) -> list[Any]:
-        """读取并校验独立页面快照；分别返回布局修订和选用资产是否匹配当前状态。"""
+        """校验并读取当前页面预览，检查布局和资产摘要是否匹配。"""
         result = await asyncio.to_thread(projects.get_page_build, project_root, build_id)
         return [json.dumps(result, ensure_ascii=False),
                 await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
@@ -446,12 +361,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_update_feedback(project_root: str, expected_revision: str, feedback_id: str, status: str,
                                       comment: str, comparison_id: str, source: str = "model") -> Any:
-        """追加偏差复查结果，保留原始观察和全部历史；status 为 open/resolved/dismissed。
-
-        comment 必填。对照必须来自同组件、同参考摘要及同参考区域；resolved 必须引用
-        原反馈运行之后的另一轮成功产物。看图后才能填写结论，技术 verified 不等于视觉偏差解决。
-        source 为 model/user 的来源声明；本工具不会设置风格或组件的用户确认。
-        """
+        """更新当前反馈状态和复查说明，不保留历史流水；resolved 必须基于已变化的产物，技术检查不等于用户美术确认。"""
         return await asyncio.to_thread(projects.update_feedback, project_root, expected_revision, feedback_id,
                                         status, comment, comparison_id, source)
 

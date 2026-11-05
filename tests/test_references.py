@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import Path
+import shutil
 import struct
 import zlib
 
@@ -31,18 +32,23 @@ def test_registration_preserves_readonly_source_and_reports_metadata(tmp_path):
         source.chmod(0o666)
     assert source.read_bytes() == before
     assert source.stat().st_mtime_ns == before_stat.st_mtime_ns
-    assert result["source"] == str(source.resolve())
+    archive = tmp_path / "smart-ui" / "references" / "slime" / source.name
+    assert result["source"] == str(archive)
+    assert archive.read_bytes() == before
     assert result["sha256"] == hashlib.sha256(before).hexdigest()
     assert (result["width"], result["height"], result["mode"]) == (40, 80, "RGB")
     assert result["color_metadata"] == {"has_icc_profile": True, "gamma": 0.45455, "srgb": None}
-    preview = Path(result["preview"])
+    assert "preview" not in result
+    preview = Path(inspect_reference(str(tmp_path), result)["preview"])
     assert preview.is_absolute()
     assert preview.parent == tmp_path / ".smartui" / "cache" / "references"
     with Image.open(preview) as image:
         assert image.size == (40, 80)
-    again = register_reference(str(tmp_path), "slime", str(source))
-    assert again["preview"] != result["preview"]
-    assert preview.is_file()
+    shutil.rmtree(tmp_path / ".smartui")
+    assert not preview.exists()
+    rebuilt = Path(inspect_reference(str(tmp_path), result)["preview"])
+    with Image.open(rebuilt) as image:
+        assert image.size == (40, 80)
 
 
 def test_srgb_rendering_intent_is_reported(tmp_path):
@@ -66,7 +72,7 @@ def test_external_reference_is_archived_without_reencoding_and_survives_input_re
     original = source.read_bytes()
     original_mtime = source.stat().st_mtime_ns
     result = register_reference(str(root), "sample", str(source))
-    archived = root / "docs" / "ui" / "references" / "sample" / source.name
+    archived = root / "smart-ui" / "references" / "sample" / source.name
     assert result["source"] == str(archived)
     assert archived.read_bytes() == original
     assert source.read_bytes() == original
@@ -76,20 +82,18 @@ def test_external_reference_is_archived_without_reencoding_and_survives_input_re
     assert inspection["samples"][0]["hex"] == "#14283C"
 
 
-def test_external_reference_uses_configured_directory_and_refuses_archive_conflicts(tmp_path):
+def test_reference_registration_refuses_to_overwrite_an_existing_id(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
     source, _ = make_reference(tmp_path)
-    paths = {"references": "design/references"}
-    result = register_reference(str(root), "sample", str(source), paths=paths)
-    archived = root / "design" / "references" / "sample" / source.name
+    result = register_reference(str(root), "sample", str(source))
+    archived = root / "smart-ui" / "references" / "sample" / source.name
     assert result["source"] == str(archived)
     archived.write_bytes(b"existing project resource")
-    previews = list((root / ".smartui" / "cache" / "references").iterdir())
-    with pytest.raises(ValueError, match="参考归档目标已存在，不能覆盖"):
-        register_reference(str(root), "sample", str(source), paths=paths)
+    with pytest.raises(ValueError, match="参考图目录已存在，不能覆盖"):
+        register_reference(str(root), "sample", str(source))
     assert archived.read_bytes() == b"existing project resource"
-    assert list((root / ".smartui" / "cache" / "references").iterdir()) == previews
+    assert not list((root / ".smartui" / "temp").iterdir())
 
 
 def test_samples_use_source_pixels_instead_of_downscaled_preview(tmp_path):
@@ -139,10 +143,10 @@ def test_invalid_coordinate_size_fails(tmp_path, coordinates):
         inspect_reference(str(tmp_path), reference, coordinate_size=coordinates)
 
 
-def test_source_change_requires_registration_again(tmp_path):
-    source, reference = make_reference(tmp_path)
+def test_modified_managed_reference_is_rejected(tmp_path):
+    _, reference = make_reference(tmp_path)
     with Image.new("RGB", (4, 4), "red") as image:
-        image.save(source)
+        image.save(reference["source"])
     with pytest.raises(ValueError, match="SHA-256"):
         inspect_reference(str(tmp_path), reference)
 
@@ -250,3 +254,15 @@ def test_paths_must_be_absolute_and_ids_must_be_safe(tmp_path):
         register_reference(str(tmp_path), "sample", str(tmp_path / "missing.png"))
     with pytest.raises(ValueError, match="reference_id"):
         register_reference(str(tmp_path), "../outside", str(source))
+
+
+def test_repeated_reference_inspection_reuses_identical_cache(tmp_path):
+    source = tmp_path / "input.png"
+    Image.new("RGB", (30, 30), "red").save(source)
+    root = tmp_path / "project"
+    root.mkdir()
+    reference = register_reference(str(root), "guide", str(source))
+    first = inspect_reference(str(root), reference, region=[0, 0, 10, 10])
+    second = inspect_reference(str(root), reference, region=[0, 0, 10, 10])
+    assert first["preview"] == second["preview"]
+    assert len(list((root / ".smartui/cache/references").glob("*.png"))) == 1

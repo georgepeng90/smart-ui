@@ -28,7 +28,7 @@ def run(output_root):
     client = PhotoCraftClient()
     backend = client.status()
     output_root.mkdir(parents=True, exist_ok=False)
-    report_path = output_root / "report.json"
+    report_path = output_root / ".smartui" / "report.json"
     report = {"status": "running", "backend": backend,
               "scope": "真实原生制作及通用资产页面链路；不代替用户美术确认"}
     try:
@@ -57,14 +57,13 @@ def run(output_root):
         require(all(edited["verification"][key] for key in
                     ("reopened", "stable_node_ids", "stable_pixels", "stable_properties")), "保存重开检查失败")
         ctx = store.context(root)
-        exported = store.export_assets(root, ctx["revision"], "action", edited["run_id"], [{
-            "asset_id": "action-background", "name": "操作背景", "output_path": "assets/ui/action.png",
+        exported = store.export_assets(root, ctx["revision"], "action", [{
+            "asset_id": "action-background", "name": "操作背景", "output_path": "smart-ui/exports/ui/action.png",
             "state": "available", "purpose": "验证正式交付",
             "region": {"x": 0, "y": 0, "width": 200, "height": 64}, "geometry": {"mode": "contain", "content_rect": {"x": 0, "y": 0, "width": 200, "height": 64}}}])
         report["export"] = exported["export"]
-        selected = store.select_image(root, exported["revision"], "action-background", 1)
-        saved = store.save_layout(root, selected["revision"], "verification", "原生资产页面验证", 400, 160, "#182438", [{
-            "id": "action-instance", "kind": "image", "asset_id": "action-background", "binding": {"kind": "selected"},
+        saved = store.save_layout(root, exported["revision"], "verification", "原生资产页面验证", 400, 160, "#182438", [{
+            "id": "action-instance", "kind": "image", "asset_id": "action-background",
             "x": 100, "y": 48, "width": 200, "height": 64}])
         built = store.build_layout(root, saved["revision"], "verification")
         report["page_build"] = built["page_build"]
@@ -74,6 +73,7 @@ def run(output_root):
         report.update(status="failed", error=str(error))
         raise
     finally:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"status": report["status"], "report": str(report_path)}, ensure_ascii=False))
 

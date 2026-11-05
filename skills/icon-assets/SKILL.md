@@ -1,6 +1,6 @@
 ---
 name: icon-assets
-description: 使用宿主图像工具生成或编辑独立 UI 图标，将真实来源和版本登记到 SmartUI 项目，并在静态 UI 组合中检查效果。
+description: 使用宿主图像工具生成或编辑独立 UI 图标，将图像和真实来源登记到 SmartUI 项目，并在静态 UI 组合中检查效果。
 ---
 
 # 制作和使用独立 ICON 资产
@@ -15,13 +15,13 @@ description: 使用宿主图像工具生成或编辑独立 UI 图标，将真实
 
 1. 查看项目中的实际参考图和风格规则。记录图标表达的含义、目标显示尺寸、使用背景、轮廓、配色、明暗、细节密度、透明背景需求和留白。将直接观察与制作假设分开记录。
 2. 调用宿主图像工具生成或编辑图像。对照实际参考与工具返回的图像，重点查看目标尺寸下的辨识度、边缘、透明度和视觉重心。汇总明确偏差后只修改受影响图像，无偏差不重复生成；修正与结束条件沿用[参考匹配流程](../../docs/style-reproduction-validation.md#继续修正与结束条件)。不为基础组件校准提前生成当前范围之外的图标。
-3. 将选定的宿主输出复制到业务工程，再调用 `project_register_image` 登记。传入项目最新 `revision`、稳定的 `asset_id`、资产名称、绝对路径 `source_path` 和真实的 `provenance`。`kind` 为 `generated` 或 `edited` 时，填写实际使用且非空的 `tool` 和 `prompt`。登记已有图像时使用 `kind: "imported"`，并填写非空 `description`；不要编造提示词、模型信息或其他生成细节。只有确实取得的信息才作为附加字段保存。
-4. 用 `project_get_image` 查看候选版本。登记会创建不可覆盖、按序递增的版本，但不会自动选用。需要将图像设为项目选用版本时，使用最新 `revision` 调用 `project_select_image`。单次组合可以直接引用确切的登记版本，不必改变项目选用状态。选用表示项目采用该版本，不表示用户已确认美术效果。
-5. 按 [page-composition](../page-composition/SKILL.md) 检查图标在 UI 中的效果，优先复用尺寸和背景合适、版本匹配的已有组合。需要新组合或修改时，用 `project_save_layout` 保存布局、`project_build_layout` 构建预览；只安排本次所需的容器、文字和图标，不另做完整页面。查看 PNG，需缩放或排查排版时再打开 HTML。
-6. 需要局部修正图标时，登记新版本，不覆盖归档。按任务要求修改选用或固定绑定，再显式重建；布局变化只修改定义。用 `project_get_page_build` 读取保留当时图像、字体和确切版本的历史构建。
+3. 将准备采用的宿主输出交给 `project_register_image` 登记。传入项目最新 `revision`、稳定的 `asset_id`、资产名称、绝对路径 `source_path` 和真实的 `provenance`。`kind` 为 `generated` 或 `edited` 时，填写实际使用且非空的 `tool` 和 `prompt`。登记已有图像时使用 `kind: "imported"`，并填写非空 `description`；不要编造提示词、模型信息或其他生成细节。只有确实取得的信息才作为附加字段保存。
+4. 用 `project_get_image` 查看当前登记图像。同一资产 ID 保存一份当前图像，直接供布局和组合使用。查看实际候选后再登记需要交付的图像，用户美术确认单独记录。
+5. 按 [page-composition](../page-composition/SKILL.md) 检查图标在 UI 中的效果，优先复用尺寸和背景合适、与当前图像匹配的已有组合。需要新组合或修改时，用 `project_save_layout` 保存布局、`project_build_layout` 构建预览；只安排本次所需的容器、文字和图标，不另做完整页面。查看 PNG，需缩放或排查排版时再打开 HTML。
+6. 需要局部修正图标时，用同一资产 ID 登记更新后的图像，再显式重建受影响的页面或组合。布局变化只修改定义。用 `project_get_page_build` 读取当前构建及其使用的资源。
 
 ## 组合预览的限制
 
-浏览器页面使用 `#RRGGBB` 纯色背景，按节点列表顺序叠放。独立图标按完整原图等比居中；正式组件背景按导出版本的几何声明伸缩。文字使用包含全部所需字符的真实 TTF/OTF，显式设置文本框、行高、对齐、换行和溢出规则，字体随快照保存。
+浏览器页面使用 `#RRGGBB` 纯色背景，按节点列表顺序叠放。独立图标按完整原图等比居中；正式组件背景按正式导出的几何声明伸缩。文字使用工程内包含全部所需字符的持久 TTF/OTF 文件，可复用工程现有字体，且不能位于 `.smartui/`。布局显式设置文本框、行高、对齐、换行和溢出规则，字体随快照保存。
 
-页面工具不生成图像、不自动设计布局，不处理业务交互或将位图导入 PhotoCraft 图层。用浏览器检查明确排布的效果；继续使用宿主图像工具修改独立图标，并通过 [PhotoCraft 绘制流程](../photocraft-drawing/SKILL.md)制作基础 UI。`project_create_composition` 另提供成功组件运行、图像及单行文字的简单 PNG 快照，限制见[项目工具说明](../../docs/project-tools.md#独立图像资产与静态组合预览)。
+页面工具不生成图像、不自动设计布局，不处理业务交互或将位图导入 PhotoCraft 图层。用浏览器检查明确排布的效果；继续使用宿主图像工具修改独立图标，并通过 [PhotoCraft 绘制流程](../photocraft-drawing/SKILL.md)制作基础 UI。`project_create_composition` 另提供当前成功组件产物、图像及单行文字的简单 PNG 快照，限制见[项目工具说明](../../docs/project-tools.md#独立图像资产与静态组合预览)。

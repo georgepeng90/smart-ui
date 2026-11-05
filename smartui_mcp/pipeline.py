@@ -13,7 +13,7 @@ from PIL import Image
 from .client import PhotoCraftClient
 from .layout import ProjectLayout
 from .photocraft import apply_plan, read_document
-from .projects import ProjectError, ProjectStore, spec_sha256
+from .projects import ProjectError, ProjectStore, spec_sha256, style_sha256
 from .programs import run_program
 
 
@@ -44,7 +44,7 @@ def plan_component(project_root, component_id, *, store=None):
     context, program, plan = _prepare(project_root, component_id, store or ProjectStore())
     return {"project_root": context["project_root"], "revision": context["revision"],
             "component_id": component_id, "program_id": program["id"],
-            "program_version": program["version"], "program_sha256": program["sha256"], "plan": plan}
+            "program_sha256": program["sha256"], "plan": plan}
 
 
 def _structure(plan):
@@ -117,7 +117,7 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
             raise ValueError("源文件已在工具外修改，不能按旧记录覆盖：" + str(document))
         plan_bytes = Path(latest["plan_path"]).read_bytes()
         if hashlib.sha256(plan_bytes).hexdigest() != latest["artifact_hashes"]["plan_path"]:
-            raise ValueError("历史绘制计划已被修改，不能据此更新组件")
+            raise ValueError("当前产物的绘制计划已被修改，不能据此更新组件")
         _check_update(plan, json.loads(plan_bytes), layers)
         before = read_document(document)
         _check_identity(before, plan, latest["layer_ids"])
@@ -126,7 +126,7 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
 
     sources.mkdir(parents=True, exist_ok=True)
     run_id = uuid4().hex
-    run_dir = root / ".smartui" / "runs" / run_id
+    run_dir = root / ".smartui" / "temp" / run_id
     run_dir.mkdir(parents=True)
     snapshot, operations_path = run_dir / "style-snapshot.json", run_dir / "operations.json"
     program_path, plan_path = run_dir / "program.py", run_dir / "plan.json"
@@ -140,10 +140,10 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
     calls = []
     _write(operations_path, calls)
     record = {"run_id": run_id, "started_at": datetime.now(timezone.utc).isoformat(),
-              "style_version": style["version"], "spec_sha256": spec_sha256(component["spec"]),
+              "style_sha256": style_sha256(style), "spec_sha256": spec_sha256(component["spec"]),
               "document": str(document), "operations_path": str(operations_path),
               "style_snapshot_path": str(snapshot), "edit_layers": layers,
-              "program_id": program["id"], "program_version": program["version"],
+              "program_id": program["id"],
               "program_sha256": program["sha256"], "program_snapshot_path": str(program_path),
               "plan_path": str(plan_path)}
 
@@ -204,19 +204,34 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
     except Exception as error:
         record.update(status="failed", error=str(error))
         _write(run_dir / "result.json", record)
-        try:
-            store.record_run(project_root, expected_revision, component_id, record)
-        except Exception as recording_error:
-            raise RuntimeError(f"制作失败：{error}；项目记录也未能更新：{recording_error}；现场记录：{run_dir}") from error
-        raise RuntimeError(f"制作失败，已写入组件记录：{error}；现场记录：{run_dir}") from error
+        run_dir = _keep_diagnostic(root, component_id, run_dir)
+        raise RuntimeError(f"制作失败，已保留本机诊断：{error}；现场记录：{run_dir}") from error
     try:
         updated = store.publish_run(project_root, expected_revision, component_id, record)
     except Exception as error:
         record.update(status="failed", error=str(error))
         _write(run_dir / "result.json", record)
+        run_dir = _keep_diagnostic(root, component_id, run_dir)
         raise RuntimeError(f"候选产物已生成，但发布或项目登记失败：{error}；结果文件：{run_dir / 'result.json'}") from error
+    current = updated["data"]["components"][component_id]["latest_run"]
+    shutil.rmtree(run_dir)
     return {"project_root": str(root), "revision": updated["revision"], "component_id": component_id,
-            "run_id": run_id, "document": str(document), "preview": str(preview),
-            "style_version": style["version"], "verification": verification, "backend": record["backend"],
-            "program_id": program["id"], "program_version": program["version"], "program_sha256": program["sha256"],
-            "drawing_elapsed_ms": record["drawing_elapsed_ms"], "result_path": str(run_dir / "result.json")}
+            "run_id": run_id, "document": str(document), "preview": current["preview"],
+            "style_sha256": current["style_sha256"], "verification": verification, "backend": record["backend"],
+            "program_id": program["id"], "program_sha256": program["sha256"],
+            "drawing_elapsed_ms": record["drawing_elapsed_ms"]}
+
+
+def _keep_diagnostic(root, component_id, temporary):
+    """每个组件只保留最近失败现场，成功产物不依赖此目录。"""
+    destination = root / ".smartui/diagnostics" / component_id
+    runtime = (root / ".smartui").resolve()
+    for path in (temporary, destination):
+        ProjectLayout(root)._check_managed_path(path)
+        if not path.resolve().is_relative_to(runtime) or path.resolve() == runtime:
+            raise ValueError(f"诊断路径越界：{path}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.move(str(temporary), str(destination))
+    return destination

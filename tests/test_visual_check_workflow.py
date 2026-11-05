@@ -1,4 +1,4 @@
-"""验证视觉检查记录、历史快照及 MCP 图片响应。"""
+"""验证当前视觉检查记录及 MCP 图片响应。"""
 
 import asyncio
 import base64
@@ -14,19 +14,20 @@ import pytest
 
 from smartui_mcp.projects import ProjectError, ProjectStore, spec_sha256
 from smartui_mcp.server import create_server
-from test_review_workflow import PROGRAM, RULE, project, project_session, record_sample_run
+from test_review_workflow import PROGRAM, RULE, compare, project, project_session, record_sample_run
 
 
-def _item(run_id="first", label="正常状态", **options):
-    return {"component_id": "sample", "run_id": run_id, "label": label, **options}
+def _item(label="正常状态", **options):
+    return {"component_id": "sample", "label": label, **options}
 
 
 def _create(store, context, *items):
     return store.create_visual_check(context["project_root"], context["revision"],
-                                     list(items), background="#123456", columns=2)
+                                     "sample-check", list(items), background="#123456", columns=2)
 
 
-def test_saved_visual_check_keeps_historical_run_and_original_pixels(project):
+@pytest.mark.parametrize("redraw_id", ["first", "second"])
+def test_saved_visual_check_replaces_current_images_after_redrawing(project, redraw_id):
     store, context = project
     root = context["project_root"]
     spec = context["data"]["components"]["sample"]["spec"]
@@ -41,25 +42,23 @@ def test_saved_visual_check_keeps_historical_run_and_original_pixels(project):
     assert first["project_revision"] == context["revision"]
     for image in first["images"].values():
         path = Path(image["path"])
-        assert path.parent == Path(root) / ".smartui" / "visual-checks" / first["id"]
+        assert path.parent == Path(root) / "smart-ui" / "previews" / "checks" / first["id"]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == image["sha256"]
     assert store.get_visual_check(root, first["id"])["visual_check"] == first
 
-    later = record_sample_run(store, store.context(root), "second", (20, 150, 20, 255))
-    mixed = _create(store, later, _item(label="修改前"), _item("second", "修改后"))["visual_check"]
-    assert not mixed["is_current"]
-    assert [item["is_current"] for item in mixed["items"]] == [False, True]
-    Path(run["preview"]).unlink()
-    historical = ProjectStore().get_visual_check(root, first["id"])["visual_check"]
-    assert historical == first | {"is_current": False, "items": [entry | {"is_current": False}]}
-    with Image.open(historical["images"]["item-1"]["path"]) as crop:
+    later = record_sample_run(store, store.context(root), redraw_id, (20, 150, 20, 255))
+    assert not store.get_visual_check(root, first["id"])["visual_check"]["is_current"]
+    current = _create(store, later, _item("修改后", region=[1, 1, 3, 2]))["visual_check"]
+    assert current["id"] == first["id"] and current["is_current"]
+    assert current["items"][0]["is_current"]
+    assert ProjectStore().get_visual_check(root, first["id"])["visual_check"] == current
+    with Image.open(current["images"]["item-1"]["path"]) as crop:
         assert crop.size == (3, 2)
-        assert crop.getpixel((0, 0)) == (150, 20, 20, 255)
+        assert crop.getpixel((0, 0)) == (20, 150, 20, 255)
 
-    document = (Path(root) / "docs" / "ui" / "components.md").read_text(encoding="utf-8")
-    for value in (first["id"], mixed["id"], "正常状态", "修改前", "修改后", "overview.png"):
-        assert value in document
     stored = store.context(root)["data"]
+    assert list(stored["visual_checks"]) == [first["id"]]
+    assert stored["visual_checks"][first["id"]]["items"][0]["label"] == "修改后"
     assert stored["style"]["user_confirmation"] is None
     assert stored["components"]["sample"]["user_confirmation"] is None
 
@@ -83,20 +82,67 @@ def test_visual_check_tracks_current_run_when_component_requirements_change(proj
     assert fetched == first | {"is_current": False, "items": [first["items"][0] | {"is_current": False}]}
 
 
-def test_visual_check_rejects_stale_revision_and_ineligible_runs_without_writing(project):
+def test_visual_check_rejects_stale_revision_and_components_without_current_artifacts(project):
     store, context = project
     root = Path(context["project_root"])
-    latest = store.record_run(str(root), context["revision"], "sample", {
-        "run_id": "failed", "status": "failed", "error": "合成记录用于验证失败状态",
-    })
-    before = (root / ".smartui" / "project.json").read_bytes()
+    spec = context["data"]["components"]["sample"]["spec"]
+    latest = store.define_component(str(root), context["revision"], "pending", "未绘制样片", spec)
+    before = (root / "smart-ui" / "project.json").read_bytes()
     with pytest.raises(ProjectError, match="revision"):
         _create(store, context, _item())
-    for run_id in ("missing", "failed"):
-        with pytest.raises(ProjectError, match="成功产物"):
-            _create(store, latest, _item(run_id))
-    assert (root / ".smartui" / "project.json").read_bytes() == before
-    assert not list((root / ".smartui" / "visual-checks").glob("*"))
+    with pytest.raises(ProjectError, match="成功产物"):
+        _create(store, latest, _item(component_id="pending"))
+    assert (root / "smart-ui" / "project.json").read_bytes() == before
+    assert not list((root / "smart-ui" / "previews" / "checks").glob("*"))
+
+
+def test_visual_check_rejects_ids_that_differ_only_in_case(project):
+    store, context = project
+    first = _create(store, context, _item())
+    with pytest.raises(ProjectError, match="check_id.*仅大小写不同"):
+        store.create_visual_check(context["project_root"], first["revision"], "SAMPLE-CHECK",
+                                  [_item()], background="#123456")
+    assert store.get_visual_check(context["project_root"], "sample-check") == first
+
+
+@pytest.mark.parametrize("key", ["comparison", "visual_check"])
+def test_failed_preview_record_write_restores_previous_current_files(project, monkeypatch, key):
+    store, context = project
+    root = context["project_root"]
+    if key == "comparison":
+        first = compare(store, context)
+        fetch = store.get_comparison
+
+        def replace():
+            return store.compare_component(root, first["revision"], "sample", "guide", artifact_scale=2)
+    else:
+        first = _create(store, context, _item())
+        fetch = store.get_visual_check
+
+        def replace():
+            return _create(store, first, _item(scale=2))
+
+    saved = first[key]
+    index = Path(root) / "smart-ui/project.json"
+    before = index.read_bytes()
+    originals = {Path(image["path"]): image["sha256"] for image in saved["images"].values()}
+
+    def fail_write(*args):
+        assert any(hashlib.sha256(path.read_bytes()).hexdigest() != digest for path, digest in originals.items())
+        raise ProjectError("模拟预览的项目记录写入失败")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_write", fail_write)
+        with pytest.raises(ProjectError, match="项目记录写入失败"):
+            replace()
+    assert index.read_bytes() == before
+    assert fetch(root, saved["id"]) == first
+    assert {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in originals} == originals
+    assert not list((Path(root) / ".smartui/temp").iterdir())
+
+    updated = replace()[key]
+    assert updated["id"] == saved["id"]
+    assert updated["images"] != saved["images"]
 
 
 @pytest.mark.parametrize(("field", "exception", "message"), [
@@ -108,12 +154,12 @@ def test_visual_check_rejects_changed_run_evidence(project, field, exception, me
     store, context = project
     root = Path(context["project_root"])
     run = context["data"]["components"]["sample"]["latest_run"]
-    before = (root / ".smartui" / "project.json").read_bytes()
+    before = (root / "smart-ui" / "project.json").read_bytes()
     Path(run[field]).write_bytes(b"changed run artifact")
     with pytest.raises(exception, match=message):
         _create(store, context, _item())
-    assert (root / ".smartui" / "project.json").read_bytes() == before
-    assert not list((root / ".smartui" / "visual-checks").glob("*"))
+    assert (root / "smart-ui" / "project.json").read_bytes() == before
+    assert not list((root / "smart-ui" / "previews" / "checks").glob("*"))
 
 
 @pytest.mark.parametrize("key", ["item-1", "overview"])
@@ -149,7 +195,7 @@ def test_stdio_visual_check_persists_and_returns_verified_overviews_across_proce
         env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(missing_cli)},
     )
     items = [_item(), _item(label="裁切后的按钮", region=[0, 0, 4, 3], scale=2)]
-    arguments = {"project_root": root, "expected_revision": context["revision"], "items": items,
+    arguments = {"project_root": root, "expected_revision": context["revision"], "check_id": "sample-check", "items": items,
                  "background": "#101820", "columns": 2}
 
     async def workflow():

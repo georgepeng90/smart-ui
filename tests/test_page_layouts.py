@@ -1,4 +1,4 @@
-"""可更新布局的版本、资源绑定、字体证据与工程迁移契约。"""
+"""当前布局、资产解析、字体校验与工程位置变更。"""
 
 from copy import deepcopy
 import hashlib
@@ -18,19 +18,23 @@ from test_review_workflow import project, record_sample_run
 @pytest.fixture
 def exported_project(project):
     store, context = project
-    exported = store.export_assets(context["project_root"], context["revision"], "sample", "first", [export_item()])
+    exported = store.export_assets(context["project_root"], context["revision"], "sample", [export_item()])
     return store, store.context(exported["project_root"])
 
 
 @pytest.fixture
-def label(text_node):
-    return {**text_node, "width": 48, "height": 30, "line_height": 24,
+def label(text_node, exported_project):
+    _, context = exported_project
+    font = Path(context["project_root"]) / "smart-ui/sources/fonts/fixture.ttf"
+    font.parent.mkdir(parents=True)
+    shutil.copyfile(text_node["font_path"], font)
+    return {**text_node, "font_path": str(font), "width": 48, "height": 30, "line_height": 24,
             "align": "left", "wrap": True, "overflow": "error"}
 
 
-def image_node(identifier="button-instance", binding=None, **changes):
+def image_node(identifier="button-instance", **changes):
     return {"id": identifier, "kind": "image", "asset_id": "button", "x": 2, "y": 2,
-            "width": 18, "height": 12, "binding": binding or {"kind": "fixed", "version": 1}, **changes}
+            "width": 18, "height": 12, **changes}
 
 
 def save(store, context, nodes, **changes):
@@ -40,37 +44,26 @@ def save(store, context, nodes, **changes):
 
 
 def project_bytes(context):
-    return (Path(context["project_root"]) / ".smartui/project.json").read_bytes()
+    return (Path(context["project_root"]) / "smart-ui/project.json").read_bytes()
 
 
-def test_fixed_and_selected_bindings_resolve_independently_without_mutating_definition(exported_project):
+def test_instances_resolve_the_current_asset_without_mutating_the_layout(exported_project):
     store, context = exported_project
     root = context["project_root"]
-    selected = store.select_image(root, context["revision"], "button", 1)
-    fixed = image_node("fixed")
-    following = image_node("following", {"kind": "selected"}, x=25)
-    saved = save(store, selected, [fixed, following])
+    saved = save(store, context, [image_node("first"), image_node("second", x=25)])
     original = deepcopy(saved["layout"]["definition"])
+    first = resolve_definition(store.context(root)["data"], original)
     second_run = record_sample_run(store, store.context(root), "second", (20, 140, 240, 255))
-    exported = store.export_assets(root, second_run["revision"], "sample", "second", [export_item()])
-    store.select_image(root, exported["revision"], "button", 2)
+    store.export_assets(root, second_run["revision"], "sample", [export_item()])
     current = store.context(root)
     state_before = deepcopy(current["data"])
     resolved = resolve_definition(current["data"], original)
-    assert [node["version"] for node in resolved["nodes"]] == [1, 2]
-    assert resolved["nodes"][0]["sha256"] != resolved["nodes"][1]["sha256"]
+    digest = current["data"]["images"]["button"]["sha256"]
+    assert [node["sha256"] for node in resolved["nodes"]] == [digest, digest]
+    assert digest != first["nodes"][0]["sha256"]
     assert original == saved["layout"]["definition"]
     assert current["data"] == state_before
     assert store.get_layout(root, "screen")["layout"]["definition"] == original
-
-
-def test_selected_binding_requires_explicit_selection_and_fixed_version_must_exist(exported_project):
-    store, context = exported_project
-    before = project_bytes(context)
-    for binding, message in [({"kind": "selected"}, "尚未选用"), ({"kind": "fixed", "version": 2}, "不存在的资产版本")]:
-        with pytest.raises(ValueError, match=message):
-            save(store, context, [image_node(binding=binding)])
-    assert project_bytes(context) == before
 
 
 def test_font_digest_roundtrip_allows_editing_and_resaving_the_returned_definition(exported_project, label):
@@ -84,36 +77,31 @@ def test_font_digest_roundtrip_allows_editing_and_resaving_the_returned_definiti
     assert definition == saved["layout"]["definition"]
     font["text"] = "A\nA"
     updated = store.save_layout(context["project_root"], fetched["revision"], "screen", "测试页面", **definition)
-    assert updated["layout"]["version"] == 2
+    assert updated["layout"]["sha256"] != saved["layout"]["sha256"]
     assert updated["layout"]["definition"]["nodes"][1]["font_sha256"] == digest
     assert updated["layout"]["definition"]["nodes"][1]["text"] == "A\nA"
-    assert store.get_layout(context["project_root"], "screen", 1)["layout"]["definition"] == saved["layout"]["definition"]
+    assert store.get_layout(context["project_root"], "screen")["layout"] == updated["layout"]
 
 
-def test_moving_shared_instances_creates_only_a_layout_version_and_preserves_history(exported_project):
+def test_moving_shared_instances_updates_the_layout_and_preserves_the_assets(exported_project):
     store, context = exported_project
     nodes = [image_node("first"), image_node("second", x=25)]
     saved = save(store, context, nodes)
-    old_record = {key: deepcopy(saved["layout"][key]) for key in
-                  ("version", "definition", "definition_sha256", "created_at")}
     assets = deepcopy(store.context(context["project_root"])["data"]["images"])
     changed = deepcopy(nodes)
     changed[0]["x"] = 4
     changed[1]["y"] = 20
     updated = save(store, saved, changed)
-    assert updated["layout"]["version"] == 2
+    assert updated["layout"]["sha256"] != saved["layout"]["sha256"]
     current = store.context(context["project_root"])
     assert current["data"]["images"] == assets
-    assert len(current["data"]["images"]["button"]["versions"]) == 1
-    before_read = project_bytes(current)
-    historical = store.get_layout(context["project_root"], "screen", 1)
-    assert {key: historical["layout"][key] for key in old_record} == old_record
-    assert project_bytes(current) == before_read
-    assert historical["revision"] == current["revision"]
+    assert current["data"]["layouts"]["screen"] == updated["layout"]
+    assert set(current["data"]["layouts"]["screen"]) == {"id", "name", "definition", "sha256"}
     assert saved["layout"]["definition"]["nodes"] == nodes
+    assert updated["layout"]["definition"]["nodes"] == changed
 
 
-def test_identical_save_reuses_layout_version_and_project_revision(exported_project, label):
+def test_identical_save_reuses_project_revision(exported_project, label):
     store, context = exported_project
     saved = save(store, context, [image_node(), label])
     before = project_bytes(saved)
@@ -121,31 +109,15 @@ def test_identical_save_reuses_layout_version_and_project_revision(exported_proj
     again = store.save_layout(context["project_root"], saved["revision"], "screen", "测试页面", **definition)
     assert again == saved
     assert project_bytes(again) == before
-    assert len(store.context(context["project_root"])["data"]["layouts"]["screen"]["versions"]) == 1
 
 
-def test_layout_rename_preserves_the_name_saved_in_each_historical_version(exported_project):
+def test_layout_rename_updates_current_name_without_changing_definition(exported_project):
     store, context = exported_project
     first = save(store, context, [image_node()], name="背包页面")
     second = save(store, first, [image_node()], name="物品详情页面")
-    assert second["layout"]["version"] == 2
     assert second["layout"]["name"] == "物品详情页面"
-    assert second["layout"]["definition_sha256"] == first["layout"]["definition_sha256"]
-    historical = store.get_layout(context["project_root"], "screen", 1)["layout"]
-    assert historical["name"] == "背包页面"
-    assert historical["created_at"] == first["layout"]["created_at"]
-    assert store.get_layout(context["project_root"], "screen")["layout"]["name"] == "物品详情页面"
-
-
-def test_missing_historical_layout_name_reports_the_invalid_record(exported_project):
-    store, context = exported_project
-    save(store, context, [image_node()])
-    path = Path(context["project_root"]) / ".smartui/project.json"
-    state = json.loads(path.read_text(encoding="utf-8"))
-    del state["layouts"]["screen"]["versions"][0]["name"]
-    path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    with pytest.raises(ProjectError, match=r"layouts\.screen\.versions\[1\]\.name.*非空字符串"):
-        store.get_layout(context["project_root"], "screen", 1)
+    assert second["layout"]["sha256"] == first["layout"]["sha256"]
+    assert store.get_layout(context["project_root"], "screen")["layout"] == second["layout"]
 
 
 def test_layout_accepts_512_nodes_without_the_static_composition_limit(exported_project):
@@ -163,10 +135,8 @@ def test_layout_accepts_512_nodes_without_the_static_composition_limit(exported_
 @pytest.mark.parametrize("change,message", [
     ({"kind": "component"}, "kind"), ({"id": "../invalid"}, "id"),
     ({"unknown": True}, "字段"), ({"x": True}, "x"), ({"width": 0}, "width"),
-    ({"x": 63}, "超出画布"), ({"binding": {"kind": "latest"}}, "binding.kind"),
-    ({"binding": {"kind": "fixed"}}, "binding.*字段"),
-    ({"binding": {"kind": "fixed", "version": True}}, "binding.version"),
-    ({"binding": {"kind": "selected", "version": 1}}, "binding.*字段"),
+    ({"x": 63}, "超出画布"), ({"binding": {"kind": "fixed", "version": 1}}, "字段"),
+    ({"asset_id": "../invalid"}, "asset_id"),
 ])
 def test_invalid_image_schema_never_saves_a_partial_layout(exported_project, change, message):
     store, context = exported_project
@@ -248,12 +218,12 @@ def test_missing_asset_and_duplicate_instance_ids_are_explicit_errors(exported_p
     assert project_bytes(context) == before
 
 
-def test_changed_asset_archive_is_rejected_by_resolution_and_save(exported_project):
+def test_changed_asset_file_is_rejected_by_resolution_and_save(exported_project):
     store, context = exported_project
     saved = save(store, context, [image_node()])
     state = store.context(context["project_root"])["data"]
-    archive = Path(state["images"]["button"]["versions"][0]["path"])
-    archive.write_bytes(b"manual asset edit")
+    path = Path(state["images"]["button"]["path"])
+    path.write_bytes(b"manual asset edit")
     before = project_bytes(saved)
     with pytest.raises(ValueError, match="SHA-256"):
         resolve_definition(state, saved["layout"]["definition"])
@@ -267,25 +237,59 @@ def test_project_move_preserves_relative_font_path_and_layout_digest(exported_pr
     root = Path(context["project_root"])
     font = root / "Assets/Fonts/fixture.ttf"
     font.parent.mkdir(parents=True)
-    shutil.copyfile(label["font_path"], font)
+    Path(label["font_path"]).rename(font)
     label["font_path"] = str(font)
     saved = save(store, context, [image_node(), label])
     disk = json.loads(project_bytes(saved))
-    stored = disk["layouts"]["screen"]["versions"][0]
+    path = root / disk["layouts"]["screen"]
+    assert path == root / "smart-ui/layouts/screen.json"
+    stored = json.loads(path.read_text(encoding="utf-8"))
     assert stored["definition"]["nodes"][1]["font_path"] == "Assets/Fonts/fixture.ttf"
     moved = tmp_path / "移动后的布局工程"
     shutil.move(root, moved)
     restored = store.get_layout(str(moved), "screen")
     assert Path(restored["layout"]["definition"]["nodes"][1]["font_path"]) == moved / "Assets/Fonts/fixture.ttf"
-    assert restored["layout"]["definition_sha256"] == saved["layout"]["definition_sha256"]
+    assert restored["layout"]["sha256"] == saved["layout"]["sha256"]
     current = store.context(str(moved))
     resolved = resolve_definition(current["data"], restored["layout"]["definition"])
     assert Path(resolved["nodes"][0]["source"]).is_relative_to(moved)
     before = project_bytes(restored)
     repeat = store.save_layout(str(moved), restored["revision"], "screen", "测试页面", **restored["layout"]["definition"])
-    assert repeat["layout"]["version"] == 1
+    assert repeat["layout"] == restored["layout"]
     assert repeat["revision"] == restored["revision"]
     assert project_bytes(repeat) == before
+
+
+@pytest.mark.parametrize(("location", "message"), [
+    ("outside", "越出工程根目录"), ("local", r"不能依赖 \.smartui/"),
+])
+def test_layout_and_composition_reject_nonpersistent_fonts(exported_project, label, text_node, location, message):
+    store, context = exported_project
+    root = Path(context["project_root"])
+    parent = root.parent if location == "outside" else root / ".smartui"
+    font = parent / "untracked.ttf"
+    shutil.copyfile(label["font_path"], font)
+    before = project_bytes(context)
+    with pytest.raises(ValueError, match=message):
+        save(store, context, [{**label, "font_path": str(font)}])
+    with pytest.raises(ValueError, match=message):
+        store.create_composition(str(root), context["revision"], "composition", 64, 48, "#123456",
+                                 [{**text_node, "font_path": str(font)}])
+    assert project_bytes(context) == before
+
+
+def test_layout_and_composition_reject_ids_that_differ_only_in_case(exported_project, label, text_node):
+    store, context = exported_project
+    root = context["project_root"]
+    saved = save(store, context, [image_node()])
+    node = {**text_node, "font_path": label["font_path"]}
+    composed = store.create_composition(root, saved["revision"], "composition", 64, 48, "#123456", [node])
+    before = project_bytes(composed)
+    with pytest.raises(ProjectError, match="layout_id"):
+        save(store, composed, [image_node(x=6)], layout_id="Screen")
+    with pytest.raises(ProjectError, match="composition_id"):
+        store.create_composition(root, composed["revision"], "Composition", 64, 48, "#123456", [node])
+    assert project_bytes(composed) == before
 
 
 def test_revision_conflict_never_writes_the_attempted_definition(exported_project):

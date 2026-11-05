@@ -1,4 +1,4 @@
-"""为已记录的绘制产物生成统一背景的视觉检查图。"""
+"""为当前绘制产物生成统一背景的视觉检查图。"""
 
 from contextlib import closing, contextmanager
 import math
@@ -8,12 +8,14 @@ from tempfile import TemporaryDirectory
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .comparisons import LABEL_HEIGHT, PADDING, _check_output_size, _check_scale, _open_verified_image
-from .references import _absolute_path, _box, _sha256, _source_rect
+from .comparisons import (LABEL_HEIGHT, PADDING, RUN_FIELDS, _check_output_size, _check_scale,
+                          _open_verified_image)
+from .image_assets import _replace_directory
+from .layout import ProjectLayout
+from .references import _absolute_path, _box, _sha256, _source_rect, _temporary_directory
 
 
 MAX_ITEMS = 16
-RUN_FIELDS = ("run_id", "status", "style_version", "spec_sha256", "program_id", "program_version", "program_sha256")
 
 
 def _snapshot_item(item: dict, index: int, path: Path) -> dict:
@@ -33,11 +35,11 @@ def _snapshot_item(item: dict, index: int, path: Path) -> dict:
     if not isinstance(preview_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", preview_hash):
         raise ValueError(f"{prefix}.run 缺少有效的预览图 SHA-256")
     if not isinstance(run.get("preview"), str) or not set(RUN_FIELDS) <= run.keys():
-        raise ValueError(f"{prefix}.run 缺少预览图路径或版本信息")
+        raise ValueError(f"{prefix}.run 缺少预览图路径或产物来源")
     scale = item["scale"]
     _check_scale(scale, f"{prefix}.scale")
     source = _absolute_path(run["preview"], f"{prefix}.run.preview")
-    with _open_verified_image(source, preview_hash, f"第 {index} 项产物预览图") as image, closing(image):
+    with _open_verified_image(source, preview_hash, f"第 {index} 项产物预览图", path.parent) as image, closing(image):
         # Pillow 裁切时会解码整张预览图，因此也限制源图的尺寸。
         _check_output_size(image.size, f"第 {index} 项源预览图")
         size = list(image.size)
@@ -123,13 +125,14 @@ def build_visual_check(
     background: str,
     columns: int = 3,
     grayscale: bool = True,
+    commit=None,
 ) -> dict:
     """保存原尺寸裁切快照和检查总览，返回来源、坐标和文件摘要。"""
     root = _absolute_path(project_root, "project_root")
     if not root.is_dir():
         raise ValueError(f"project_root 必须是目录：{root}")
-    if not isinstance(check_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", check_id):
-        raise ValueError("check_id 必须以英文字母或数字开头，且只能包含英文字母、数字、下划线和连字符")
+    if not isinstance(check_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", check_id):
+        raise ValueError("check_id 必须以英文字母或数字开头，且只能包含英文字母、数字、点、下划线和连字符")
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_ITEMS:
         raise ValueError(f"items 必须是包含 1 到 {MAX_ITEMS} 项的列表")
     if not isinstance(background, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", background):
@@ -140,12 +143,12 @@ def build_visual_check(
         raise ValueError("grayscale 必须是布尔值")
     columns = min(columns, len(items))
     background = background.upper()
-    destination = root / ".smartui" / "visual-checks" / check_id
-    if destination.exists():
-        raise FileExistsError(f"视觉检查输出目录已存在：{destination}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(dir=destination.parent) as temp:
-        staging = Path(temp)
+    destination = root / "smart-ui" / "previews" / "checks" / check_id
+    layout = ProjectLayout(root)
+    layout._check_managed_path(destination)
+    with TemporaryDirectory(dir=_temporary_directory(root)) as temp:
+        staging = Path(temp) / "current"
+        staging.mkdir()
         # 每次只解码和处理一张源图，用磁盘快照承接布局和绘制两个步骤。
         entries = [_snapshot_item(item, index, staging / f"item-{index}.png") for index, item in enumerate(items, 1)]
         image_keys = [item["image"] for item in entries] + ["overview"]
@@ -166,17 +169,18 @@ def build_visual_check(
             key: {"path": str(destination / f"{key}.png"), "sha256": _sha256(staging / f"{key}.png")}
             for key in image_keys
         }
-        staging.rename(destination)
-    return {
-        "id": check_id,
-        "items": entries,
-        "images": images,
-        "display": {
-            "size": size,
-            "columns": columns,
-            "background": background,
-            "resampling": "lanczos",
-            "icc_conversion": False,
-            "grayscale": grayscale_info,
-        },
-    }
+        record = {
+            "id": check_id,
+            "items": entries,
+            "images": images,
+            "display": {
+                "size": size,
+                "columns": columns,
+                "background": background,
+                "resampling": "lanczos",
+                "icc_conversion": False,
+                "grayscale": grayscale_info,
+            },
+        }
+        return _replace_directory(layout, staging, destination,
+                                  lambda: commit(record) if commit is not None else record)

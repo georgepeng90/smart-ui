@@ -4,7 +4,7 @@
 
 ## 程序入口与执行
 
-完整 Python 源码必须定义 `build(parameters, spec, component_id)`。`parameters` 来自当前风格，`spec` 为完整组件规格，`component_id` 为稳定标识。用 `project_save_program` 保存源码，通过 `spec.program_id` 引用；保存只检查语法，`project_plan_component` 和 `project_draw_component` 都执行程序并严格预检计划。单独查看或诊断计划时使用前者，已明确的参数调整可直接调用绘制入口。缺少必需配置直接报告具体字段。
+完整 Python 源码必须定义 `build(parameters, spec, component_id)`。`parameters` 来自当前风格，`spec` 为完整组件规格，`component_id` 为稳定标识。用 `project_save_program` 将当前源码保存至 `smart-ui/programs/<program_id>.py`，通过 `spec.program_id` 引用；保存只检查语法，`project_plan_component` 和 `project_draw_component` 都执行程序并严格预检计划。单独查看或诊断计划时使用前者，已明确的参数调整可直接调用绘制入口。缺少必需配置直接报告具体字段。
 
 程序在当前解释器的独立进程中运行，最长 60 秒，打印不会混入计划结果。这是可信本机代码，可访问文件及网络，不构成安全沙箱。返回值只能包含标准 JSON 类型和有限数值。
 
@@ -98,4 +98,4 @@ def build(parameters, spec, component_id):
 
 省略 `layers` 更新全部节点；传入节点 key 只更新该范围。新旧计划的画布与结构必须一致，未选节点内容不能变化，尺寸或结构变体当前使用新组件 ID。源文件必须与已登记证据一致；不自动覆盖外部改动。
 
-每次实际运行保存程序、计划、风格快照、原生请求响应及后端构建证据。成功保留输出 `.pcraft`、原尺寸 PNG 和重开检查；更新保留输入文件。局部更新检查未选节点。失败、超时或记录冲突保留现场，不自动重试。详情见[项目工具](project-tools.md)及[PhotoCraft 接口](photocraft-contract.md)。
+成功制作保存当前 `.pcraft`、原尺寸 PNG、继续修改所需的计划和检查结果。局部更新检查未选节点。原生请求响应、临时候选文件和失败现场留在本机 `.smartui/`，历史交付从 Git 查看。详情见[项目工具](project-tools.md)及[PhotoCraft 接口](photocraft-contract.md)。

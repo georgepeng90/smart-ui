@@ -1,19 +1,20 @@
 """将明确坐标的组件、图像与文字组合为可追溯的静态预览。"""
 
 from copy import deepcopy
+import hashlib
 from io import BytesIO
 from pathlib import Path
-import re
 from tempfile import TemporaryDirectory
+import re
 import unicodedata
 
 from fontTools.ttLib import TTFont, TTLibError
 from PIL import Image, ImageDraw, ImageFont
 
-from .comparisons import _check_output_size, _open_verified_image
+from .comparisons import RUN_FIELDS, _check_output_size, _open_verified_image
+from .image_assets import _replace_directory
 from .layout import ProjectLayout
-from .references import _absolute_path, _box, _sha256, _source_rect
-from .visual_checks import RUN_FIELDS
+from .references import _absolute_path, _box, _sha256, _source_rect, _temporary_directory
 
 
 MAX_NODES = 64
@@ -67,7 +68,7 @@ def _validate_node(node, index, canvas_size):
     image_fields = {"source", "sha256", "width", "height", "region"}
     kind = node.get("kind")
     if kind in ("component", "image"):
-        required = common | image_fields | ({"component_id", "run", "spec"} if kind == "component" else {"asset_id", "version"})
+        required = common | image_fields | ({"component_id", "run", "spec"} if kind == "component" else {"asset_id"})
         optional = set()
     elif kind == "text":
         required = common | {"text", "font_path", "font_size", "color"}
@@ -91,19 +92,14 @@ def _validate_node(node, index, canvas_size):
             raise ValueError(f"{field} 的目标矩形越出画布边界")
         if kind == "image":
             _string(node["asset_id"], f"{field}.asset_id")
-            _integer(node["version"], f"{field}.version", 1)
         else:
             _string(node["component_id"], f"{field}.component_id")
             run = node["run"]
             if not isinstance(run, dict) or set(run) != set(RUN_FIELDS):
                 raise ValueError(f"{field}.run 必须恰好包含 {RUN_FIELDS}")
-            if run["status"] not in ("drawn", "verified"):
-                raise ValueError(f"{field}.run 必须是绘制成功的记录")
             for key in ("run_id", "program_id"):
                 _string(run[key], f"{field}.run.{key}")
-            _integer(run["style_version"], f"{field}.run.style_version", 0)
-            _integer(run["program_version"], f"{field}.run.program_version", 1)
-            for key in ("spec_sha256", "program_sha256"):
+            for key in ("style_sha256", "spec_sha256", "program_sha256"):
                 _hash(run[key], f"{field}.run.{key}")
             if not isinstance(node["spec"], dict):
                 raise ValueError(f"{field}.spec 必须是对象")
@@ -122,7 +118,7 @@ def _validate_node(node, index, canvas_size):
 
 def _draw_image(node, index, staging, overview):
     source = _absolute_path(node["source"], f"nodes[{index - 1}].source")
-    with _open_verified_image(source, node["sha256"], f"节点 {node['id']} 的源图") as image:
+    with _open_verified_image(source, node["sha256"], f"节点 {node['id']} 的源图", staging) as image:
         _check_output_size(image.size, f"节点 {node['id']} 的源图")
         size = list(image.size)
         rect = [0, 0, *size] if node["region"] is None else _source_rect(node["region"], size, size, "region")
@@ -147,7 +143,7 @@ def _draw_image(node, index, staging, overview):
                 snapshot_key=key, display_rect=[x, y, width, height])
 
 
-def _draw_text(node, index, staging, overview):
+def _draw_text(node, index, staging, overview, fonts):
     source = _absolute_path(node["font_path"], f"nodes[{index - 1}].font_path")
     if source.suffix.lower() not in (".ttf", ".otf"):
         raise ValueError(f"字体只支持 TTF 或 OTF 文件：{source}")
@@ -166,23 +162,25 @@ def _draw_text(node, index, staging, overview):
     left, top, right, bottom = bbox
     if left < 0 or top < 0 or right > overview.width or bottom > overview.height:
         raise ValueError(f"文字节点 {node['id']} 的实际绘制范围越出画布边界：{bbox}")
-    key = f"font-{index}"
-    (staging / f"{key}{source.suffix.lower()}").write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    if digest not in fonts:
+        key = f"font-{index}"
+        (staging / f"{key}{source.suffix.lower()}").write_bytes(data)
+        fonts[digest] = key
     draw.text((node["x"], node["y"]), node["text"], font=font, anchor="lt", fill=node["color"],
               stroke_width=node["stroke_width"], stroke_fill=node["stroke_color"])
-    node.update(font_path=str(source), font_snapshot_key=key,
-                font_sha256=_sha256(staging / f"{key}{source.suffix.lower()}"),
+    node.update(font_path=str(source), font_snapshot_key=fonts[digest], font_sha256=digest,
                 display_rect=[left, top, right - left, bottom - top], anchor="lt", layout_engine="basic")
 
 
 def build_composition(project_root: str, composition_id: str, width: int, height: int,
-                      background: str, nodes: list[dict]) -> dict:
+                      background: str, nodes: list[dict], *, commit=None) -> dict:
     """按列表顺序叠加，发布原像素与字体快照及组合图；所有返回路径均为绝对路径。"""
     root = _absolute_path(_string(project_root, "project_root"), "project_root")
     if not root.is_dir():
         raise ValueError(f"project_root 必须是目录：{root}")
-    if not isinstance(composition_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", composition_id):
-        raise ValueError("composition_id 必须以英文字母或数字开头，且只能包含英文字母、数字、下划线和连字符")
+    if not isinstance(composition_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", composition_id):
+        raise ValueError("composition_id 必须以英文字母或数字开头，且只能包含英文字母、数字、下划线、点和连字符")
     _integer(width, "width", 1)
     _integer(height, "height", 1)
     _check_output_size((width, height), "组合画布")
@@ -192,26 +190,25 @@ def build_composition(project_root: str, composition_id: str, width: int, height
     entries = [_validate_node(node, index, (width, height)) for index, node in enumerate(nodes, 1)]
     if len({node["id"] for node in entries}) != len(entries):
         raise ValueError("nodes 的 id 必须唯一")
-    destination = root / ".smartui" / "compositions" / composition_id
+    destination = root / "smart-ui" / "previews" / "compositions" / composition_id
     layout = ProjectLayout(root)
     layout._check_managed_path(destination)
-    if destination.exists():
-        raise FileExistsError(f"组合输出目录已存在，不能覆盖：{destination}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(dir=destination.parent) as temp:
-        staging = Path(temp)
+    with TemporaryDirectory(dir=_temporary_directory(layout.root)) as temp:
+        staging = Path(temp) / "current"
+        staging.mkdir()
+        fonts = {}
         with Image.new("RGBA", (width, height), background) as overview:
             for index, node in enumerate(entries, 1):
                 if node["kind"] == "text":
-                    _draw_text(node, index, staging, overview)
+                    _draw_text(node, index, staging, overview, fonts)
                 else:
                     _draw_image(node, index, staging, overview)
             overview.save(staging / "overview.png", format="PNG")
         files = {path.stem: {"path": str(destination / path.name), "sha256": _sha256(path)} for path in staging.iterdir()}
-        layout._check_managed_path(destination)
-        staging.rename(destination)
-    return {"id": composition_id, "width": width, "height": height, "background": background, "nodes": entries,
-            "images": {key: info for key, info in files.items() if not key.startswith("font-")},
-            "fonts": {key: info for key, info in files.items() if key.startswith("font-")},
-            "color_processing": {"icc_conversion": False, "resampling": "lanczos", "alpha_composite": "source_over",
-                                 "description": "保留源图颜色数值，不做 ICC 或 gamma 转换；在纯色背景上按顺序进行 alpha 合成。"}}
+        record = {"id": composition_id, "width": width, "height": height, "background": background, "nodes": entries,
+                  "images": {key: info for key, info in files.items() if not key.startswith("font-")},
+                  "fonts": {key: info for key, info in files.items() if key.startswith("font-")},
+                  "color_processing": {"icc_conversion": False, "resampling": "lanczos", "alpha_composite": "source_over",
+                                       "description": "保留源图颜色数值，不做 ICC 或 gamma 转换；在纯色背景上按顺序进行 alpha 合成。"}}
+        return _replace_directory(layout, staging, destination,
+                                  lambda: commit(record) if commit is not None else record)

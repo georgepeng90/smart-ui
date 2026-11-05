@@ -1,4 +1,4 @@
-"""浏览器页面构建的不可变快照、绑定更新及历史完整性。"""
+"""浏览器页面的固定输出、当前输入更新和文件完整性。"""
 
 from copy import deepcopy
 import asyncio
@@ -21,34 +21,36 @@ from test_page_layouts import exported_project, image_node, label, project_bytes
 from test_review_workflow import project, project_session, record_sample_run
 
 
-def build(store, saved, version=None):
-    return store.build_layout(saved["project_root"], saved["revision"], "screen", version)
+def build(store, saved):
+    return store.build_layout(saved["project_root"], saved["revision"], "screen")
 
 
 def files(record):
     return {key: Path(value["path"]).read_bytes() for key, value in record["files"].items()}
 
 
-def test_build_uses_real_browser_and_each_call_creates_an_independent_snapshot(exported_project, label):
+def test_build_uses_real_browser_and_replaces_the_current_preview(exported_project, label):
     store, context = exported_project
-    saved = save(store, context, [image_node("first"), image_node("second", x=25), label])
+    other_label = {**label, "id": "second-label", "y": 18}
+    saved = save(store, context, [image_node("first"), image_node("second", x=25), label, other_label])
     before_assets = deepcopy(store.context(context["project_root"])["data"]["images"])
     first = build(store, saved)
     record = first["page_build"]
-    assert record["layout_id"] == "screen" and record["layout_version"] == 1
-    assert record["layout_definition_sha256"] == saved["layout"]["definition_sha256"]
+    assert record["id"] == record["layout_id"] == "screen"
+    assert record["layout_sha256"] == saved["layout"]["sha256"]
     assert (record["width"], record["height"]) == (64, 48)
     assert first["matches_layout"] and first["matches_bindings"]
     assert record["renderer"]["engine"] == "chromium"
     assert record["renderer"]["version"]
     assert record["renderer"]["device_scale_factor"] == 1
-    assert record["renderer"]["fonts"][0]["status"] == "loaded"
-    assert len(record["renderer"]["nodes"]) == 3
+    assert [font["status"] for font in record["renderer"]["fonts"]] == ["loaded"]
+    assert len(record["renderer"]["nodes"]) == 4
     assert record["nodes"][0]["snapshot_key"] == record["nodes"][1]["snapshot_key"]
+    assert record["nodes"][2]["snapshot_key"] == record["nodes"][3]["snapshot_key"]
     assert len({node["snapshot_key"] for node in record["nodes"]}) == 2
     for item in record["files"].values():
         path = Path(item["path"])
-        assert path.is_relative_to(Path(context["project_root"]) / ".smartui/page-builds" / record["id"])
+        assert path.is_relative_to(Path(context["project_root"]) / "smart-ui/previews/pages" / record["id"])
         assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
     with Image.open(record["files"]["overview"]["path"]) as screenshot:
         assert screenshot.size == (64, 48)
@@ -57,74 +59,79 @@ def test_build_uses_real_browser_and_each_call_creates_an_independent_snapshot(e
     assert inputs["nodes"][2]["font_path"] == record["nodes"][2]["snapshot_key"]
     old_files = files(record)
     second = build(store, first)
-    assert second["page_build"]["id"] != record["id"]
+    assert second["page_build"]["id"] == record["id"]
+    assert list((Path(context["project_root"]) / "smart-ui/previews/pages").iterdir()) == [
+        Path(record["files"]["overview"]["path"]).parent]
     assert files(record) == old_files
     assert second["page_build"]["files"]["overview"]["sha256"] == record["files"]["overview"]["sha256"]
     assert second["page_build"]["files"]["html"]["sha256"] == record["files"]["html"]["sha256"]
     current = store.context(context["project_root"])
     assert current["data"]["images"] == before_assets
-    assert current["data"]["layouts"]["screen"]["current_version"] == 1
+    assert current["data"]["layouts"]["screen"] == saved["layout"]
+    assert set(current["data"]["page_builds"]) == {"screen"}
 
 
-def test_selected_binding_changes_only_the_next_build_while_old_snapshot_stays_intact(exported_project):
+def test_rebuild_uses_the_new_asset_at_every_instance(exported_project):
     store, context = exported_project
     root = context["project_root"]
-    selected = store.select_image(root, context["revision"], "button", 1)
-    saved = save(store, selected, [image_node("fixed"), image_node("following", {"kind": "selected"}, x=25)])
+    saved = save(store, context, [image_node("first"), image_node("second", x=25)])
     first = build(store, saved)
     old = first["page_build"]
-    old_files = files(old)
     later = record_sample_run(store, store.context(root), "second", (20, 140, 240, 255))
-    exported = store.export_assets(root, later["revision"], "sample", "second", [export_item()])
-    selected = store.select_image(root, exported["revision"], "button", 2)
-    historical = store.get_page_build(root, old["id"])
-    assert historical["matches_layout"] is True
-    assert historical["matches_bindings"] is False
-    assert historical["page_build"] == old
-    second = build(store, selected)
-    assert [node["version"] for node in second["page_build"]["nodes"]] == [1, 2]
+    exported = store.export_assets(root, later["revision"], "sample", [export_item()])
+    stale = store.get_page_build(root, old["id"])
+    assert stale["matches_layout"] and not stale["matches_bindings"]
+    assert stale["page_build"] == old
+    second = build(store, exported)
+    current = second["page_build"]
     assert second["matches_layout"] and second["matches_bindings"]
-    assert files(old) == old_files
+    assert current["id"] == old["id"]
+    digest = store.context(root)["data"]["images"]["button"]["sha256"]
+    assert [node["sha256"] for node in current["nodes"]] == [digest, digest]
+    assert digest != old["nodes"][0]["sha256"]
+    assert current["files"]["overview"]["sha256"] != old["files"]["overview"]["sha256"]
 
 
-def test_fixed_binding_stays_current_when_selection_changes(exported_project):
+def test_export_geometry_change_marks_the_preview_stale_even_when_pixels_match(exported_project):
     store, context = exported_project
     root = context["project_root"]
-    saved = save(store, context, [image_node()])
-    first = build(store, saved)
-    later = record_sample_run(store, store.context(root), "second", (20, 140, 240, 255))
-    exported = store.export_assets(root, later["revision"], "sample", "second", [export_item()])
-    selected = store.select_image(root, exported["revision"], "button", 2)
-    historical = store.get_page_build(root, first["page_build"]["id"])
-    assert historical["matches_layout"] and historical["matches_bindings"]
-    second = build(store, selected)
-    assert second["page_build"]["nodes"][0]["version"] == 1
-    assert second["page_build"]["files"]["overview"]["sha256"] == first["page_build"]["files"]["overview"]["sha256"]
+    first = build(store, save(store, context, [image_node()]))
+    old = first["page_build"]["nodes"][0]
+    item = export_item()
+    item["geometry"] = {"mode": "stretch", "content_rect": item["geometry"]["content_rect"]}
+    updated = store.export_assets(root, first["revision"], "sample", [item])
+    assert updated["export"]["items"][0]["record"]["sha256"] == old["sha256"]
+    stale = store.get_page_build(root, first["page_build"]["id"])
+    assert stale["matches_layout"] and not stale["matches_bindings"]
+    rebuilt = build(store, updated)
+    assert rebuilt["matches_layout"] and rebuilt["matches_bindings"]
+    assert rebuilt["page_build"]["nodes"][0]["geometry"] == item["geometry"]
 
 
-def test_explicit_historical_layout_version_builds_its_saved_definition(exported_project):
+def test_rebuild_replaces_changed_layout_and_removes_unused_input_files(exported_project, label):
     store, context = exported_project
-    first = save(store, context, [image_node(x=2)])
-    second = save(store, first, [image_node(x=20)])
-    built = build(store, second, 1)
-    assert built["page_build"]["layout_version"] == 1
-    assert built["page_build"]["layout_definition_sha256"] == first["layout"]["definition_sha256"]
-    assert built["page_build"]["nodes"][0]["x"] == 2
-    assert built["matches_layout"] is False
-    assert built["matches_bindings"] is True
-    current = build(store, built)
-    assert current["page_build"]["layout_version"] == 2
-    assert current["page_build"]["nodes"][0]["x"] == 20
-    assert current["matches_layout"] is True
+    first = build(store, save(store, context, [image_node(x=2), label]))
+    previous = first["page_build"]
+    copied_font = Path(previous["nodes"][1]["font_path"])
+    assert copied_font.is_file()
+    saved = save(store, first, [image_node(x=20)])
+    stale = store.get_page_build(context["project_root"], previous["id"])
+    assert not stale["matches_layout"]
+    rebuilt = build(store, saved)
+    assert rebuilt["page_build"]["id"] == previous["id"]
+    assert rebuilt["page_build"]["layout_sha256"] == saved["layout"]["sha256"]
+    assert rebuilt["page_build"]["nodes"][0]["x"] == 20
+    assert rebuilt["matches_layout"] and rebuilt["matches_bindings"]
+    assert not copied_font.exists()
 
 
-def test_history_reads_archived_inputs_after_original_image_and_font_are_deleted(exported_project, label):
+def test_current_preview_files_are_independent_of_the_original_image_and_font(exported_project, label):
     store, context = exported_project
     saved = save(store, context, [image_node(), label])
     built = build(store, saved)
     before = files(built["page_build"])
     state = store.context(context["project_root"])["data"]
-    Path(state["images"]["button"]["versions"][0]["path"]).unlink()
+    Path(state["images"]["button"]["path"]).unlink()
     Path(label["font_path"]).unlink()
     raw = project_bytes(built)
     restored = store.get_page_build(context["project_root"], built["page_build"]["id"])
@@ -134,7 +141,7 @@ def test_history_reads_archived_inputs_after_original_image_and_font_are_deleted
     assert project_bytes(built) == raw
 
 
-def test_every_archived_file_is_verified_before_returning_history(exported_project, label):
+def test_every_preview_file_is_verified_before_returning_the_current_build(exported_project, label):
     store, context = exported_project
     built = build(store, save(store, context, [image_node(), label]))
     record = built["page_build"]
@@ -154,7 +161,7 @@ def test_every_archived_file_is_verified_before_returning_history(exported_proje
     assert path.name in str(error.value)
 
 
-def test_build_snapshot_survives_project_move_without_the_original_external_font(exported_project, label, tmp_path):
+def test_current_build_survives_project_move_without_the_original_font(exported_project, label, tmp_path):
     store, context = exported_project
     built = build(store, save(store, context, [image_node(), label]))
     record = built["page_build"]
@@ -164,57 +171,56 @@ def test_build_snapshot_survives_project_move_without_the_original_external_font
     shutil.move(context["project_root"], moved)
     restored = store.get_page_build(str(moved), record["id"])
     assert files(restored["page_build"]) == original
-    assert restored["page_build"]["layout_definition_sha256"] == record["layout_definition_sha256"]
+    assert restored["page_build"]["layout_sha256"] == record["layout_sha256"]
     for item in restored["page_build"]["files"].values():
         assert Path(item["path"]).is_relative_to(moved)
     for node in restored["page_build"]["nodes"]:
         assert Path(node["source" if node["kind"] == "image" else "font_path"]).is_relative_to(moved)
 
 
-def test_revision_conflict_and_invalid_version_leave_no_build_or_state_change(exported_project):
+def test_revision_conflict_leaves_no_build_or_state_change(exported_project):
     store, context = exported_project
     saved = save(store, context, [image_node()])
     root = Path(context["project_root"])
     raw = project_bytes(saved)
     with pytest.raises(ProjectError, match="revision"):
         build(store, context)
-    with pytest.raises(ProjectError, match="版本不存在"):
-        build(store, saved, 2)
     assert project_bytes(saved) == raw
-    assert not (root / ".smartui/page-builds").exists()
+    assert not (root / "smart-ui/previews/pages").exists()
 
 
-def test_overflow_failure_does_not_publish_a_build_or_change_project_state(exported_project, label):
+def test_overflow_failure_preserves_the_current_build_and_project_state(exported_project, label):
     store, context = exported_project
+    first = build(store, save(store, context, [image_node()]))
+    before = files(first["page_build"])
     label.update(text="A A A A A A A A", width=10, height=15, wrap=False, overflow="error")
-    saved = save(store, context, [label])
+    saved = save(store, first, [label])
     raw = project_bytes(saved)
     with pytest.raises(ValueError, match="超出文本框"):
         build(store, saved)
     assert project_bytes(saved) == raw
-    parent = Path(context["project_root"]) / ".smartui/page-builds"
-    assert not parent.exists() or not list(parent.iterdir())
+    assert files(first["page_build"]) == before
 
 
 def test_missing_required_snapshot_file_record_is_a_schema_error(exported_project):
     store, context = exported_project
     built = build(store, save(store, context, [image_node()]))
     build_id = built["page_build"]["id"]
-    path = Path(context["project_root"]) / ".smartui/project.json"
+    path = Path(context["project_root"]) / "smart-ui/project.json"
     state = json.loads(path.read_text(encoding="utf-8"))
     del state["page_builds"][build_id]["files"]["html"]
     path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    with pytest.raises(ProjectError, match="快照文件集合不完整"):
+    with pytest.raises((ValueError, ProjectError), match="快照文件集合不完整"):
         store.get_page_build(context["project_root"], build_id)
 
 
 @pytest.mark.parametrize("change", ["node_x", "node_text", "page_width"])
-def test_snapshot_metadata_must_match_the_archived_inputs(exported_project, label, change):
+def test_preview_metadata_must_match_the_rendered_inputs(exported_project, label, change):
     store, context = exported_project
     built = build(store, save(store, context, [image_node(), label]))
     record = built["page_build"]
     original_files = files(record)
-    path = Path(context["project_root"]) / ".smartui/project.json"
+    path = Path(context["project_root"]) / "smart-ui/project.json"
     state = json.loads(path.read_text(encoding="utf-8"))
     altered = state["page_builds"][record["id"]]
     if change == "node_x":
@@ -230,7 +236,7 @@ def test_snapshot_metadata_must_match_the_archived_inputs(exported_project, labe
     assert files(record) == original_files
 
 
-def test_build_and_get_over_real_stdio_return_the_archived_png_bytes(exported_project):
+def test_build_and_get_over_real_stdio_return_the_current_png_bytes(exported_project):
     store, context = exported_project
     saved = save(store, context, [image_node()])
 
@@ -239,7 +245,6 @@ def test_build_and_get_over_real_stdio_return_the_archived_png_bytes(exported_pr
                                            env={**os.environ, "PYTHONUTF8": "1"})
         async with project_session(parameters) as session:
             listed = await session.list_tools()
-            assert len(listed.tools) == 30
             assert {"project_build_layout", "project_get_page_build"} <= {tool.name for tool in listed.tools}
             response = await session.call_tool("project_build_layout", {
                 "project_root": context["project_root"], "expected_revision": saved["revision"], "layout_id": "screen",

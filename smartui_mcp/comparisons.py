@@ -1,4 +1,4 @@
-"""将登记参考图与已记录的绘制预览生成并排对照。"""
+"""将登记参考图与当前绘制产物生成并排对照。"""
 
 from contextlib import contextmanager
 import hashlib
@@ -9,7 +9,8 @@ from tempfile import SpooledTemporaryFile, TemporaryDirectory
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .references import _absolute_path, _box, _open_image, _sha256, _size, _source_rect
+from .layout import ProjectLayout
+from .references import _absolute_path, _box, _open_image, _sha256, _size, _source_rect, _temporary_directory
 
 
 MAX_OUTPUT_EDGE = 8192
@@ -19,6 +20,7 @@ CHECKER_SIZE = 12
 CHECKER_COLORS = ("#FFFFFF", "#DDDDDD")
 PADDING = 12
 LABEL_HEIGHT = 20
+RUN_FIELDS = ("run_id", "style_sha256", "program_id", "program_sha256", "spec_sha256")
 
 
 def _check_output_size(size: tuple[int, int], label: str) -> None:
@@ -37,9 +39,9 @@ def _check_scale(scale: float, label: str) -> None:
 
 
 @contextmanager
-def _open_verified_image(source: Path, expected_hash: str, label: str):
+def _open_verified_image(source: Path, expected_hash: str, label: str, temp_dir: Path):
     try:
-        with SpooledTemporaryFile(max_size=SOURCE_SNAPSHOT_MEMORY_LIMIT) as snapshot:
+        with SpooledTemporaryFile(max_size=SOURCE_SNAPSHOT_MEMORY_LIMIT, dir=temp_dir) as snapshot:
             digest = hashlib.sha256()
             with source.open("rb") as stream:
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -58,9 +60,9 @@ def _open_verified_image(source: Path, expected_hash: str, label: str):
 @contextmanager
 def _crop_source(
     source: Path, expected_hash: str, region: list[int] | None, scale: float, *,
-    label: str, coordinate_size: list[int] | None = None, expected_size: list[int] | None = None,
+    label: str, temp_dir: Path, coordinate_size: list[int] | None = None, expected_size: list[int] | None = None,
 ):
-    with _open_verified_image(source, expected_hash, label) as image:
+    with _open_verified_image(source, expected_hash, label, temp_dir) as image:
         source_size = [image.width, image.height]
         if expected_size is not None and source_size != expected_size:
             raise ValueError(f"参考图登记尺寸与源文件不一致，记录 {expected_size}，实际 {source_size}")
@@ -140,20 +142,24 @@ def build_comparison(
     artifact_region: list[int] | None = None,
     reference_scale: float = 1.0,
     artifact_scale: float = 1.0,
+    commit=None,
 ) -> dict:
-    """保存原尺寸的 RGBA 裁切图和按指定倍率排版的对照预览，返回文件摘要及坐标。"""
+    """保存当前对照的 RGBA 裁切图和总览，返回文件摘要及坐标。"""
+    from .image_assets import _replace_directory
+
     root = _absolute_path(project_root, "project_root")
     if not root.is_dir():
         raise ValueError(f"project_root 必须是目录：{root}")
-    if not isinstance(comparison_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", comparison_id):
-        raise ValueError("comparison_id 必须以英文字母或数字开头，且只能包含英文字母、数字、下划线和连字符")
+    if not isinstance(comparison_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", comparison_id):
+        raise ValueError("comparison_id 必须以英文字母或数字开头，且只能包含英文字母、数字、点、下划线和连字符")
     if run.get("status") not in ("drawn", "verified"):
         raise ValueError(f"只有绘制成功的记录可用于对照：run_id={run.get('run_id')}")
     preview_hash = run.get("artifact_hashes", {}).get("preview")
     if not preview_hash:
         raise ValueError(f"绘制记录缺少预览图的 SHA-256：run_id={run['run_id']}")
-    run_metadata = {key: run[key] for key in ("run_id", "status", "style_version", "spec_sha256", "program_id",
-                                              "program_version", "program_sha256")}
+    if not set(RUN_FIELDS) <= run.keys():
+        raise ValueError(f"绘制记录缺少产物来源：run_id={run.get('run_id')}")
+    run_metadata = {key: run[key] for key in RUN_FIELDS}
     reference_id = reference["id"]
     _check_scale(reference_scale, "reference_scale")
     _check_scale(artifact_scale, "artifact_scale")
@@ -161,31 +167,31 @@ def build_comparison(
         reference_coordinate_size = _size(reference_coordinate_size, "reference_coordinate_size")
     reference_path = _absolute_path(reference["source"], "reference.source")
     artifact_path = _absolute_path(run["preview"], "run.preview")
-    destination = root / ".smartui" / "comparisons" / comparison_id
-    if destination.exists():
-        raise FileExistsError(f"对照输出目录已存在：{destination}")
+    destination = root / "smart-ui" / "previews" / "comparisons" / comparison_id
+    layout = ProjectLayout(root)
+    layout._check_managed_path(destination)
+    temp_dir = _temporary_directory(root)
 
     with (
-        _crop_source(reference_path, reference["sha256"], reference_region, reference_scale, label="参考图",
+        _crop_source(reference_path, reference["sha256"], reference_region, reference_scale, label="参考图", temp_dir=temp_dir,
                      coordinate_size=reference_coordinate_size, expected_size=[reference["width"], reference["height"]]) as (ref_image, ref),
-        _crop_source(artifact_path, preview_hash, artifact_region, artifact_scale, label="产物预览图") as (out_image, out),
+        _crop_source(artifact_path, preview_hash, artifact_region, artifact_scale, label="产物预览图", temp_dir=temp_dir) as (out_image, out),
     ):
         comparison, display = _compose(ref_image, out_image, ref, out)
-        with comparison:
-            destination.parent.mkdir(parents=True, exist_ok=True)
+        with comparison, TemporaryDirectory(dir=temp_dir) as temp:
+            staging = Path(temp) / "current"
+            staging.mkdir()
             images = {}
-            with TemporaryDirectory(dir=destination.parent) as temp:
-                staging = Path(temp)
-                for key, image in (("reference", ref_image), ("artifact", out_image), ("comparison", comparison)):
-                    path = staging / f"{key}.png"
-                    image.save(path, format="PNG")
-                    images[key] = {"path": str(destination / path.name), "sha256": _sha256(path)}
-                staging.rename(destination)
-
-    return {
-        "id": comparison_id,
-        "reference": {"id": reference_id, **ref},
-        "artifact": {**run_metadata, **out},
-        "images": images,
-        "display": display,
-    }
+            for key, image in (("reference", ref_image), ("artifact", out_image), ("comparison", comparison)):
+                path = staging / f"{key}.png"
+                image.save(path, format="PNG")
+                images[key] = {"path": str(destination / path.name), "sha256": _sha256(path)}
+            record = {
+                "id": comparison_id,
+                "reference": {"id": reference_id, **ref},
+                "artifact": {**run_metadata, **out},
+                "images": images,
+                "display": display,
+            }
+            return _replace_directory(layout, staging, destination,
+                                      lambda: commit(record) if commit is not None else record)

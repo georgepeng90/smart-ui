@@ -1,4 +1,4 @@
-"""归档独立图像的不可变版本，不管理项目状态或资产选用。"""
+"""保存和验证独立图像的当前文件。"""
 
 from copy import deepcopy
 import json
@@ -11,7 +11,7 @@ from PIL import Image
 
 from .comparisons import _check_output_size
 from .layout import ProjectLayout
-from .references import _open_image, _sha256
+from .references import _open_image, _sha256, _temporary_directory
 
 
 def _file_path(value: str, label: str) -> Path:
@@ -72,47 +72,79 @@ def _validate_provenance(value: dict) -> None:
         raise ValueError(f"provenance 必须包含有限的 JSON 值：{error}") from error
 
 
-def register_image_file(project_root: str, paths: dict, asset_id: str, version: int,
-                        source_path: str, provenance: dict) -> dict:
-    """校验并按原始字节归档 PNG、JPEG 或 WebP；已有版本不能覆盖。"""
+def _replace_directory(layout, staging, destination, commit=None):
+    """发布当前目录，保留原目录直到项目记录写入成功。"""
+    layout._check_managed_path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    previous = staging.with_name("previous")
+    published = False
+    try:
+        if destination.exists():
+            if not destination.is_dir():
+                raise ValueError(f"受管输出路径不是目录：{destination}")
+            destination.rename(previous)
+        staging.rename(destination)
+        published = True
+        if commit is not None:
+            return commit()
+    except BaseException as error:
+        try:
+            if published:
+                destination.rename(staging)
+            if previous.exists():
+                previous.rename(destination)
+        except OSError as rollback_error:
+            recovery = staging.parent.with_name(staging.parent.name + "-failed")
+            staging.parent.rename(recovery)
+            raise OSError(f"发布失败：{error}；恢复失败：{rollback_error}；恢复文件保留于 {recovery}") from error
+        raise
+
+
+def register_image_file(project_root: str, paths: dict, asset_id: str, name: str,
+                        source_path: str, provenance: dict, *, commit=None) -> dict:
+    """校验并按原始字节保存 PNG、JPEG 或 WebP，替换同一资产的当前文件。"""
     root = _file_path(project_root, "project_root")
     if not root.is_dir():
         raise ValueError(f"project_root 必须是目录：{root}")
     if not isinstance(asset_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", asset_id):
         raise ValueError("asset_id 必须以英文字母或数字开头，且只能包含英文字母、数字、下划线、点和连字符")
-    if type(version) is not int or version < 1:
-        raise ValueError("version 必须是正整数")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("name 必须是非空字符串")
     _validate_provenance(provenance)
     source = _file_path(source_path, "source_path")
     layout = ProjectLayout(root, paths)
-    destination = layout.directory("sources") / "images" / asset_id / str(version)
+    destination = layout.directory("sources") / "images" / asset_id
     layout._check_managed_path(destination)
     if destination.exists():
-        raise FileExistsError(f"图像资产版本已存在，不能覆盖：{destination}")
+        if not destination.is_dir():
+            raise ValueError(f"受管图像路径不是目录：{destination}")
+        entries = list(destination.iterdir())
+        if len(entries) != 1 or entries[0].name not in {"image.png", "image.jpg", "image.webp"}:
+            raise ValueError(f"受管图像目录必须只包含一个当前图像：{destination}")
+        current = entries[0]
+        layout._check_managed_path(current)
+        if _metadata(current)["extension"] != current.suffix[1:]:
+            raise ValueError(f"受管图像的扩展名与实际格式不一致：{current}")
     digest = _sha256(source)
     metadata = _metadata(source)
     extension = metadata.pop("extension")
-    result = {"version": version, "path": str(destination / f"image.{extension}"),
+    result = {"id": asset_id, "name": name, "path": str(destination / f"image.{extension}"),
               "sha256": digest, **metadata, "provenance": deepcopy(provenance)}
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    layout._check_managed_path(destination)
-    with TemporaryDirectory(dir=destination.parent) as temporary:
-        staging = Path(temporary)
-        archived = staging / f"image.{extension}"
-        with source.open("rb") as original, archived.open("xb") as output:
+    with TemporaryDirectory(dir=_temporary_directory(root)) as temporary:
+        staging = Path(temporary) / "current"
+        staging.mkdir()
+        prepared = staging / f"image.{extension}"
+        with source.open("rb") as original, prepared.open("xb") as output:
             shutil.copyfileobj(original, output)
-        verify_image_version(result | {"path": str(archived)})
-        layout._check_managed_path(destination)
-        if destination.exists():
-            raise FileExistsError(f"图像资产版本已存在，不能覆盖：{destination}")
-        staging.rename(destination)
-    return result
+        verify_image_record(result | {"path": str(prepared)})
+        return _replace_directory(layout, staging, destination,
+                                  lambda: commit(result) if commit is not None else result)
 
 
-def verify_image_version(record: dict) -> None:
+def verify_image_record(record: dict) -> None:
     """核对实际文件摘要、解码尺寸、模式与透明情况，不修改文件。"""
     if not isinstance(record, dict):
-        raise ValueError("图像资产版本记录必须是对象")
+        raise ValueError("图像资产记录必须是对象")
     try:
         path = _file_path(record.get("path"), "图像资产 path")
         digest = record.get("sha256")
@@ -125,8 +157,11 @@ def verify_image_version(record: dict) -> None:
             expected = record.get(field)
             if type(expected) is not type(metadata[field]) or expected != metadata[field]:
                 raise ValueError(f"图像资产 {field} 与记录不一致：记录={expected!r}，实际={metadata[field]!r}")
-        if record.get("provenance", {}).get("kind") == "component_export":
+        provenance = record.get("provenance")
+        if isinstance(provenance, dict) and provenance.get("kind") == "component_export":
             from .exports import validate_export_record
             validate_export_record(record)
+        else:
+            _validate_provenance(provenance)
     except (OSError, ValueError) as error:
-        raise ValueError(f"图像资产版本校验失败：{record.get('path')}；{error}") from error
+        raise ValueError(f"图像资产校验失败：{record.get('path')}；{error}") from error

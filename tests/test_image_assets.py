@@ -1,4 +1,4 @@
-"""验证独立图像原字节归档、版本完整性和工程路径边界。"""
+"""验证独立图像按原字节保存、当前文件完整性和工程路径边界。"""
 
 import hashlib
 import os
@@ -8,7 +8,7 @@ import subprocess
 from PIL import Image
 import pytest
 
-from smartui_mcp.image_assets import register_image_file, verify_image_version
+from smartui_mcp.image_assets import register_image_file, verify_image_record
 
 
 PROVENANCE = {"kind": "generated", "tool": "合成测试", "prompt": "透明图标", "actual_result": {"seed": None}}
@@ -22,7 +22,7 @@ def source_image(tmp_path, mode="RGBA", color=(20, 40, 60, 0), format="PNG"):
 
 
 def register(tmp_path, source):
-    return register_image_file(str(tmp_path), {}, "coin", 1, str(source), PROVENANCE)
+    return register_image_file(str(tmp_path), {}, "coin", "硬币", str(source), PROVENANCE)
 
 
 @pytest.mark.parametrize(("mode", "color", "format", "extension", "transparent"), [
@@ -36,7 +36,7 @@ def test_register_preserves_original_bytes_and_actual_format(tmp_path, mode, col
     original = source.read_bytes()
     record = register(tmp_path, source)
     path = Path(record["path"])
-    assert path == tmp_path / f"art/ui/sources/images/coin/1/image.{extension}"
+    assert path == tmp_path / f"smart-ui/sources/images/coin/image.{extension}"
     assert path.read_bytes() == source.read_bytes() == original
     assert record["sha256"] == hashlib.sha256(original).hexdigest()
     assert (record["width"], record["height"]) == (8, 6)
@@ -44,16 +44,31 @@ def test_register_preserves_original_bytes_and_actual_format(tmp_path, mode, col
     assert record["provenance"] == PROVENANCE
     assert record["provenance"] is not PROVENANCE
     source.unlink()
-    verify_image_version(record)
+    verify_image_record(record)
 
 
-def test_version_conflict_preserves_existing_file(tmp_path):
-    source = source_image(tmp_path)
-    record = register(tmp_path, source)
-    before = Path(record["path"]).read_bytes()
-    with pytest.raises(FileExistsError, match="版本已存在"):
-        register(tmp_path, source)
-    assert Path(record["path"]).read_bytes() == before
+def test_register_replaces_the_same_asset_and_removes_the_previous_format(tmp_path):
+    first = register(tmp_path, source_image(tmp_path))
+    first_path = Path(first["path"])
+    source = source_image(tmp_path, "RGB", (20, 40, 60), "JPEG")
+    second = register(tmp_path, source)
+    path = Path(second["path"])
+    assert second["id"] == first["id"] == "coin"
+    assert second["name"] == "硬币"
+    assert "version" not in second
+    assert path.parent == first_path.parent
+    assert list(path.parent.iterdir()) == [path]
+    assert path.read_bytes() == source.read_bytes()
+    verify_image_record(second)
+
+
+def test_invalid_current_image_cannot_be_overwritten(tmp_path):
+    first = register(tmp_path, source_image(tmp_path))
+    current = Path(first["path"])
+    current.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="无法读取图像资产"):
+        register(tmp_path, source_image(tmp_path))
+    assert current.read_bytes() == b"changed"
 
 
 def test_palette_transparency_is_preserved(tmp_path):
@@ -66,10 +81,14 @@ def test_palette_transparency_is_preserved(tmp_path):
     assert Path(record["path"]).read_bytes() == source.read_bytes()
 
 
-def test_changed_copy_does_not_publish_version(tmp_path, monkeypatch):
+def test_changed_copy_preserves_the_current_image(tmp_path, monkeypatch):
     from smartui_mcp import image_assets
 
     source = source_image(tmp_path)
+    original = register(tmp_path, source)
+    path = Path(original["path"])
+    before = path.read_bytes()
+    source_image(tmp_path, color=(1, 2, 3, 4))
     original_copy = image_assets.shutil.copyfileobj
 
     def changed_copy(original, output):
@@ -79,8 +98,8 @@ def test_changed_copy_does_not_publish_version(tmp_path, monkeypatch):
     monkeypatch.setattr(image_assets.shutil, "copyfileobj", changed_copy)
     with pytest.raises(ValueError, match="SHA-256"):
         register(tmp_path, source)
-    parent = tmp_path / "art/ui/sources/images/coin"
-    assert not list(parent.iterdir())
+    assert list(path.parent.iterdir()) == [path]
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("provenance", [{}, {"kind": "generated", "tool": "", "prompt": "图"},
@@ -94,26 +113,26 @@ def test_changed_copy_does_not_publish_version(tmp_path, monkeypatch):
 def test_invalid_provenance_does_not_write(tmp_path, provenance):
     source = source_image(tmp_path)
     with pytest.raises(ValueError, match="provenance"):
-        register_image_file(str(tmp_path), {}, "coin", 1, str(source), provenance)
-    assert not (tmp_path / "art").exists()
+        register_image_file(str(tmp_path), {}, "coin", "硬币", str(source), provenance)
+    assert not (tmp_path / "smart-ui").exists()
 
 
 def test_imported_image_needs_description_without_generated_prompt(tmp_path):
     source = source_image(tmp_path)
     provenance = {"kind": "imported", "description": "从已有基础 UI 导出的 PNG"}
-    record = register_image_file(str(tmp_path), {}, "button", 1, str(source), provenance)
+    record = register_image_file(str(tmp_path), {}, "button", "按钮", str(source), provenance)
     assert record["provenance"] == provenance
     assert "prompt" not in record["provenance"]
     assert "tool" not in record["provenance"]
-    verify_image_version(record)
+    verify_image_record(record)
 
 
-@pytest.mark.parametrize(("identifier", "version"), [("../coin", 1), ("coin", 0), ("coin", True)])
-def test_invalid_identifier_or_version_does_not_write(tmp_path, identifier, version):
+@pytest.mark.parametrize(("identifier", "name"), [("../coin", "硬币"), ("coin", ""), ("coin", True)])
+def test_invalid_identifier_or_name_does_not_write(tmp_path, identifier, name):
     source = source_image(tmp_path)
     with pytest.raises(ValueError):
-        register_image_file(str(tmp_path), {}, identifier, version, str(source), PROVENANCE)
-    assert not (tmp_path / "art").exists()
+        register_image_file(str(tmp_path), {}, identifier, name, str(source), PROVENANCE)
+    assert not (tmp_path / "smart-ui").exists()
 
 
 @pytest.mark.parametrize("kind", ["invalid", "gif", "truncated", "oversized"])
@@ -128,7 +147,7 @@ def test_invalid_images_do_not_publish(tmp_path, kind):
             source.write_bytes(source.read_bytes()[:45])
     with pytest.raises(ValueError, match="图像资产"):
         register(tmp_path, source)
-    assert not (tmp_path / "art").exists()
+    assert not (tmp_path / "smart-ui").exists()
 
 
 @pytest.mark.parametrize("change", ["bytes", "missing", "width", "mode", "has_transparency"])
@@ -141,27 +160,25 @@ def test_verify_rejects_changed_or_missing_evidence(tmp_path, change):
         path.unlink()
     else:
         record[change] = {"width": 9, "mode": "RGB", "has_transparency": False}[change]
-    with pytest.raises(ValueError, match="版本校验失败") as error:
-        verify_image_version(record)
+    with pytest.raises(ValueError, match="图像资产校验失败") as error:
+        verify_image_record(record)
     assert str(path) in str(error.value)
 
 
-def test_custom_directory_and_path_boundary(tmp_path):
+def test_fixed_directory_and_path_boundary(tmp_path):
     source = source_image(tmp_path)
-    record = register_image_file(str(tmp_path), {"sources": "design/sources"}, "coin", 1, str(source), PROVENANCE)
-    assert Path(record["path"]).is_relative_to(tmp_path / "design/sources")
-    for paths in ({"sources": "../outside"}, {"sources": ".smartui/assets"}):
-        with pytest.raises(ValueError, match="paths.sources"):
-            register_image_file(str(tmp_path), paths, "other", 1, str(source), PROVENANCE)
+    for paths in ({"sources": "design/sources"}, {"sources": "../outside"}, {"sources": ".smartui/assets"}):
+        with pytest.raises(ValueError, match="固定"):
+            register_image_file(str(tmp_path), paths, "coin", "硬币", str(source), PROVENANCE)
     with pytest.raises(ValueError, match="绝对路径"):
-        register_image_file(str(tmp_path), {}, "other", 1, "source.png", PROVENANCE)
+        register_image_file(str(tmp_path), {}, "coin", "硬币", "source.png", PROVENANCE)
 
 
 def test_linked_destination_is_rejected(tmp_path):
     source = source_image(tmp_path)
     external = tmp_path / "external"
     external.mkdir()
-    parent = tmp_path / "art/ui/sources/images"
+    parent = tmp_path / "smart-ui/sources/images"
     parent.mkdir(parents=True)
     if os.name == "nt":
         subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",

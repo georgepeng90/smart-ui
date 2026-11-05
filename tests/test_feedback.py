@@ -1,7 +1,6 @@
-"""验证偏差记录和处理历史关联到实际对照使用的版本。"""
+"""验证偏差记录和当前处理结论关联到实际检查的产物。"""
 
 from copy import deepcopy
-from datetime import datetime
 
 import pytest
 
@@ -14,15 +13,12 @@ def state():
     return {
         "comparisons": {
             "original": {
-                "id": "original", "component_id": "sample", "run_index": 1,
+                "id": "original", "component_id": "sample",
                 "reference": {"id": "reference", "sha256": "a" * 64, "region_source_xywh": [0, 5, 30, 20]},
-                "run": {"run_id": "draw-1", "status": "verified", "style_version": 1, "spec_sha256": "b" * 64,
-                        "program_id": "drawing", "program_version": 1, "program_sha256": "c" * 64},
+                "artifact": {"run_id": "draw-1", "sha256": "b" * 64},
                 "node_keys": ["outline"], "rule_ids": ["outline-weight"],
             },
         },
-        "style": {"version": 2, "rules": [{"id": "current-rule"}], "user_confirmation": None},
-        "components": {"sample": {"needs_review": True, "last_run": {"status": "verified"}}},
     }
 
 
@@ -34,43 +30,31 @@ def add_sample_feedback(state, **overrides):
     return state["feedback"][arguments["feedback_id"]]
 
 
-def add_followup(state, run_status="drawn"):
-    followup = deepcopy(state["comparisons"]["original"])
-    followup.update(id="followup", run_index=2, rule_ids=["current-rule"], node_keys=["new-outline"])
-    followup["run"].update(run_id="draw-2", status=run_status, style_version=2, program_version=2)
-    state["comparisons"]["followup"] = followup
-    return followup
-
-
-@pytest.mark.parametrize("run_status", ["drawn", "verified"])
-def test_feedback_preserves_original_versions_and_processing_history(state, run_status):
-    add_followup(state, run_status)
-    before = deepcopy(state)
+def test_feedback_saves_only_the_current_review(state):
     targets = ["outline"]
     rules = ["outline-weight"]
     record = add_sample_feedback(state, target_nodes=targets, rule_ids=rules)
     targets.clear()
     rules.clear()
-    original = deepcopy(record)
-    assert original == {
-        "id": "outline-too-thick", "comparison_id": "original", "component_id": "sample",
+    assert record == {
+        "id": "outline-too-thick", "comparison_id": "original",
         "observation": "描边偏厚", "suggested_change": "减小描边宽度", "target_nodes": ["outline"],
         "rule_ids": ["outline-weight"], "source": "model", "status": "open",
-        "created_at": original["created_at"], "history": [],
+        "reviewed_artifact_sha256": "b" * 64,
+        "reference_sha256": "a" * 64, "reference_region_source_xywh": [0, 5, 30, 20],
     }
-    changes = [
-        ("resolved", "新产物描边符合参考", "followup", "model"),
-        ("open", "复查发现左边仍偏厚", "followup", "user"),
-        ("dismissed", "左边厚度属于已知的设计差异", "original", "user"),
-    ]
-    for status, comment, comparison_id, source in changes:
-        update_feedback(state, original["id"], status, comment, comparison_id, source)
-        assert record["status"] == status
-    assert record == original | {"status": "dismissed", "history": record["history"]}
-    assert [(item["status"], item["comment"], item["comparison_id"], item["source"])
-            for item in record["history"]] == changes
-    assert all(datetime.fromisoformat(item["at"]).tzinfo for item in record["history"])
-    assert {field: state[field] for field in before} == before
+    original = deepcopy(record)
+    state["comparisons"]["original"]["artifact"].update(run_id="draw-2", sha256="c" * 64)
+    comparisons = deepcopy(state["comparisons"])
+    update_feedback(state, record["id"], "resolved", "新产物描边符合参考", "original", "model")
+    assert record == original | {"status": "resolved", "comment": "新产物描边符合参考",
+                                 "reviewed_artifact_sha256": "c" * 64}
+    update_feedback(state, record["id"], "open", "复查发现左边仍偏厚", "original", "user")
+    assert record["status"] == "open"
+    update_feedback(state, record["id"], "dismissed", "左边厚度属于设计差异", "original", "user")
+    assert record == original | {"status": "dismissed", "source": "user", "comment": "左边厚度属于设计差异",
+                                 "reviewed_artifact_sha256": "c" * 64}
+    assert state["comparisons"] == comparisons
 
 
 @pytest.mark.parametrize(("overrides", "message"), [
@@ -112,24 +96,26 @@ def test_missing_comparison_collection_means_no_records():
     assert state == {}
 
 
-@pytest.mark.parametrize(("path", "value", "message"), [
-    (("component_id",), "other", "同一组件"),
-    (("reference", "id"), "other", "同一参考及源图区域"),
-    (("reference", "sha256"), "d" * 64, "同一参考及源图区域"),
-    (("reference", "region_source_xywh"), [0, 0, 30, 20], "同一参考及源图区域"),
-    (("run", "run_id"), "draw-1", "原始运行之后成功绘制"),
-    (("run", "status"), "failed", "原始运行之后成功绘制"),
-    (("run_index",), 0, "原始运行之后成功绘制"),
-    (("run_index",), 1, "原始运行之后成功绘制"),
-])
-def test_resolving_requires_a_different_successful_run_with_the_same_reference(state, path, value, message):
-    followup = add_followup(state)
-    target = followup[path[0]] if len(path) == 2 else followup
-    target[path[-1]] = value
+def test_resolving_requires_changed_artifact_bytes_for_the_current_comparison(state):
     record = add_sample_feedback(state)
+    state["comparisons"]["original"]["artifact"]["run_id"] = "draw-2"
+    state["comparisons"]["other"] = {"id": "other", "artifact": {"run_id": "draw-3", "sha256": "c" * 64}}
     before = deepcopy(state)
-    with pytest.raises(ProjectError, match=message):
-        update_feedback(state, record["id"], "resolved", "已经复查", "followup", "model")
+    with pytest.raises(ProjectError, match="预览图 SHA-256 已变化"):
+        update_feedback(state, record["id"], "resolved", "已经复查", "original", "model")
+    with pytest.raises(ProjectError, match="原组件和参考的当前对照"):
+        update_feedback(state, record["id"], "resolved", "已经复查", "other", "model")
+    assert state == before
+
+
+def test_resolving_requires_the_same_reference_crop(state):
+    record = add_sample_feedback(state)
+    comparison = state["comparisons"]["original"]
+    comparison["artifact"]["sha256"] = "c" * 64
+    comparison["reference"]["region_source_xywh"][1] = 0
+    before = deepcopy(state)
+    with pytest.raises(ProjectError, match="相同的参考图和源图区域"):
+        update_feedback(state, record["id"], "resolved", "已经复查", "original", "model")
     assert state == before
 
 

@@ -1,4 +1,4 @@
-"""可更新页面定义、字体校验和资产版本解析。"""
+"""当前页面定义、字体校验和资产解析。"""
 
 from copy import deepcopy
 from io import BytesIO
@@ -8,7 +8,7 @@ import re
 from fontTools.ttLib import TTFont, TTLibError
 
 from .comparisons import _check_output_size
-from .image_assets import _file_path, verify_image_version
+from .image_assets import _file_path, verify_image_record
 from .references import _sha256
 from .slicing import image_patches
 
@@ -72,7 +72,7 @@ def validate_definition(width, height, background, nodes):
         identifiers.add(node["id"])
         required = {"id", "kind", "x", "y", "width", "height"}
         if node.get("kind") == "image":
-            required |= {"asset_id", "binding"}
+            required.add("asset_id")
             optional = set()
         elif node.get("kind") == "text":
             required |= {"text", "font_path", "font_size", "line_height", "align", "wrap", "overflow", "color"}
@@ -87,14 +87,6 @@ def validate_definition(width, height, background, nodes):
             raise ValueError(f"{label} 的布局内容区域超出画布")
         if node["kind"] == "image":
             _identifier(node["asset_id"], f"{label}.asset_id")
-            binding = node["binding"]
-            if not isinstance(binding, dict) or binding.get("kind") not in ("fixed", "selected"):
-                raise ValueError(f"{label}.binding.kind 必须是 fixed 或 selected")
-            fields = {"kind", "version"} if binding["kind"] == "fixed" else {"kind"}
-            if set(binding) != fields:
-                raise ValueError(f"{label}.binding 字段与绑定方式不符")
-            if binding["kind"] == "fixed":
-                _integer(binding["version"], f"{label}.binding.version", 1)
         else:
             if not isinstance(node["text"], str) or not node["text"]:
                 raise ValueError(f"{label}.text 必须是非空字符串")
@@ -116,32 +108,33 @@ def validate_definition(width, height, background, nodes):
     return {"width": width, "height": height, "background": background, "nodes": result}
 
 
+def image_geometry(record):
+    # 独立图像使用整图等比显示，正式导出使用显式几何。
+    return record.get("geometry", {"content_rect": {"x": 0, "y": 0, "width": record["width"],
+                                                   "height": record["height"]}, "mode": "contain"})
+
+
 def resolve_definition(state, definition):
-    """解析选用绑定，保留固定绑定；不修改资产或页面定义。"""
+    """按资产 ID 解析当前文件，保留构建输入的摘要。"""
     result = deepcopy(definition)
+    verified = set()
     for node in result["nodes"]:
         if node["kind"] == "text":
             _font(node)
             continue
-        asset = state.get("images", {}).get(node["asset_id"])
-        if asset is None:
-            raise ValueError(f"节点 {node['id']} 引用不存在的资产：{node['asset_id']}")
-        version = node["binding"]["version"] if node["binding"]["kind"] == "fixed" else asset["selected_version"]
-        if version is None:
-            raise ValueError(f"节点 {node['id']} 跟随的资产尚未选用版本：{node['asset_id']}")
-        record = next((entry for entry in asset["versions"] if entry["version"] == version), None)
+        record = state.get("images", {}).get(node["asset_id"])
         if record is None:
-            raise ValueError(f"节点 {node['id']} 引用不存在的资产版本：{node['asset_id']}/{version}")
-        verify_image_version(record)
-        # 未声明几何的独立图像按完整原图等比显示；正式导出必须提供几何声明。
-        geometry = record.get("geometry", {"content_rect": {"x": 0, "y": 0,
-                               "width": record["width"], "height": record["height"]}, "mode": "contain"})
+            raise ValueError(f"节点 {node['id']} 引用不存在的资产：{node['asset_id']}")
+        if node["asset_id"] not in verified:
+            verify_image_record(record)
+            verified.add(node["asset_id"])
+        geometry = image_geometry(record)
         try:
             patches = image_patches(geometry, (record["width"], record["height"]), (node["width"], node["height"]))
             _check_output_size(tuple(math.ceil(value) for value in patches["image_size"]), f"节点 {node['id']} 完整图像")
         except ValueError as error:
-            raise ValueError(f"节点 {node['id']} 资产 {node['asset_id']}/{version}：{error}") from error
-        node.update(version=version, source=record["path"], sha256=record["sha256"],
+            raise ValueError(f"节点 {node['id']} 资产 {node['asset_id']}：{error}") from error
+        node.update(source=record["path"], sha256=record["sha256"],
                     geometry=deepcopy(geometry), patch_plan=patches)
     return result
 
