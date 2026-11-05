@@ -179,61 +179,110 @@ class ProjectStore:
         return self._update(project_root, expected_revision, change)
 
     def record_run(self, project_root: str, expected_revision: str, component_id: str, run: dict) -> dict:
-        def change(state):
+        return self._update(project_root, expected_revision,
+                            lambda state: self._record_run(state, component_id, run))
+
+    def _record_run(self, state, component_id, run, document_artifact=None):
+        if component_id not in state["components"]:
+            raise ProjectError(f"组件不存在：{component_id}")
+        if not isinstance(run, dict):
+            raise ProjectError("run 必须是 JSON 对象")
+        record = deepcopy(run)
+        _identifier(record.get("run_id"), "run.run_id")
+        component = state["components"][component_id]
+        if any(item["run_id"] == record["run_id"] for item in component["runs"]):
+            raise ProjectError(f"绘制记录标识已存在：{record['run_id']}")
+        status = record.get("status")
+        if status not in ("drawn", "verified", "failed"):
+            raise ProjectError("run.status 必须是 drawn、verified 或 failed")
+        if status == "failed":
+            _text(record.get("error"), "失败记录的 error")
+        else:
+            if type(record.get("style_version")) is not int or record["style_version"] != state["style"]["version"]:
+                raise ProjectError("run.style_version 必须等于当前风格版本")
+            if record.get("spec_sha256") != spec_sha256(component["spec"]):
+                raise ProjectError("run.spec_sha256 与当前组件规格不一致")
+            program = self._component_program(state, component["spec"])
+            backend = record.get("backend")
+            if not isinstance(backend, dict) or backend.get("name") != "photocraft":
+                raise ProjectError("成功运行必须记录 PhotoCraft backend")
+            _text(backend.get("version"), "run.backend.version")
+            if not isinstance(backend.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", backend["sha256"]):
+                raise ProjectError("run.backend.sha256 必须是实际可执行文件的 SHA-256")
+            if not isinstance(backend.get("cli_path"), str) or not Path(backend["cli_path"]).is_absolute():
+                raise ProjectError("run.backend.cli_path 必须是实际 CLI 的绝对路径")
+            for field, expected in (("program_id", program["id"]), ("program_version", program["version"]),
+                                    ("program_sha256", program["sha256"])):
+                if record.get(field) != expected or (field == "program_version" and type(record.get(field)) is not int):
+                    raise ProjectError(f"run.{field} 与当前组件使用的程序不一致")
+            if status == "verified":
+                verification = record.get("verification")
+                checks = ("reopened", "stable_node_ids", "stable_pixels", "stable_properties")
+                if not isinstance(verification, dict) or any(verification.get(key) is not True for key in checks):
+                    raise ProjectError("verified 记录必须提供 verification 对象，且重新打开及稳定性检查均为 true")
+                inspection = record.get("inspection")
+                if not isinstance(inspection, dict) or any(
+                    not isinstance(inspection.get(key), dict) or not inspection[key]
+                    for key in ("before", "reopened")
+                ):
+                    raise ProjectError("verified 记录必须包含 inspection.before 和 inspection.reopened 的实际检查数据")
+            record["artifact_hashes"] = {}
+            for field, suffix in (("document", ".pcraft"), ("preview", ".png"),
+                                  ("operations_path", None), ("style_snapshot_path", None),
+                                  ("program_snapshot_path", ".py"), ("plan_path", ".json"),
+                                  ("source_snapshot_path", ".pcraft")):
+                path_value = record.get(field)
+                _text(path_value, f"run.{field}")
+                path = Path(document_artifact if field == "document" and document_artifact is not None else path_value)
+                if not path.is_absolute() or not path.is_file():
+                    raise ProjectError(f"run.{field} 必须是现存文件的绝对路径：{path_value}")
+                if suffix and path.suffix.lower() != suffix:
+                    raise ProjectError(f"run.{field} 文件必须使用 {suffix} 扩展名：{path}")
+                record["artifact_hashes"][field] = _sha(path.read_bytes())
+            if record["artifact_hashes"]["program_snapshot_path"] != program["sha256"]:
+                raise ProjectError("run.program_snapshot_path 源码摘要与当前程序不一致")
+            if record["artifact_hashes"]["source_snapshot_path"] != record["artifact_hashes"]["document"]:
+                raise ProjectError("源文件与本次归档的 source_snapshot_path 摘要不一致")
+            record["user_confirmation"] = None
+            component["latest_run"] = record
+            component["user_confirmation"] = None
+        component["runs"].append(record)
+
+    def publish_run(self, project_root: str, expected_revision: str, component_id: str, run: dict) -> dict:
+        """在同一项目锁内检查输入、发布候选源文件并登记成功运行。"""
+        _identifier(component_id, "component_id")
+        root = self._root(project_root)
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
             if component_id not in state["components"]:
                 raise ProjectError(f"组件不存在：{component_id}")
-            if not isinstance(run, dict):
-                raise ProjectError("run 必须是 JSON 对象")
-            record = deepcopy(run)
-            _identifier(record.get("run_id"), "run.run_id")
-            component = state["components"][component_id]
-            if any(item["run_id"] == record["run_id"] for item in component["runs"]):
-                raise ProjectError(f"绘制记录标识已存在：{record['run_id']}")
-            status = record.get("status")
-            if status not in ("drawn", "verified", "failed"):
-                raise ProjectError("run.status 必须是 drawn、verified 或 failed")
-            if status == "failed":
-                _text(record.get("error"), "失败记录的 error")
-            else:
-                if type(record.get("style_version")) is not int or record["style_version"] != state["style"]["version"]:
-                    raise ProjectError("run.style_version 必须等于当前风格版本")
-                if record.get("spec_sha256") != spec_sha256(component["spec"]):
-                    raise ProjectError("run.spec_sha256 与当前组件规格不一致")
-                program = self._component_program(state, component["spec"])
-                for field, expected in (("program_id", program["id"]), ("program_version", program["version"]),
-                                        ("program_sha256", program["sha256"])):
-                    if record.get(field) != expected or (field == "program_version" and type(record.get(field)) is not int):
-                        raise ProjectError(f"run.{field} 与当前组件使用的程序不一致")
-                if status == "verified":
-                    verification = record.get("verification")
-                    checks = ("reopened", "stable_node_ids", "stable_pixels", "stable_properties")
-                    if not isinstance(verification, dict) or any(verification.get(key) is not True for key in checks):
-                        raise ProjectError("verified 记录必须提供 verification 对象，且重新打开及稳定性检查均为 true")
-                    inspection = record.get("inspection")
-                    if not isinstance(inspection, dict) or any(
-                        not isinstance(inspection.get(key), dict) or not inspection[key]
-                        for key in ("before", "reopened")
-                    ):
-                        raise ProjectError("verified 记录必须包含 inspection.before 和 inspection.reopened 的实际检查数据")
-                record["artifact_hashes"] = {}
-                for field, suffix in (("document", ".kra"), ("preview", ".png"),
-                                      ("operations_path", None), ("style_snapshot_path", None),
-                                      ("program_snapshot_path", ".py"), ("plan_path", ".json")):
-                    path_value = record.get(field)
-                    _text(path_value, f"run.{field}")
-                    path = Path(path_value)
-                    if not path.is_absolute() or not path.is_file():
-                        raise ProjectError(f"run.{field} 必须是现存文件的绝对路径：{path_value}")
-                    if suffix and path.suffix.lower() != suffix:
-                        raise ProjectError(f"run.{field} 文件必须使用 {suffix} 扩展名：{path}")
-                    record["artifact_hashes"][field] = _sha(path.read_bytes())
-                if record["artifact_hashes"]["program_snapshot_path"] != program["sha256"]:
-                    raise ProjectError("run.program_snapshot_path 源码摘要与当前程序不一致")
-                record["user_confirmation"] = None
-                component["latest_run"] = record
-                component["user_confirmation"] = None
-            component["runs"].append(record)
-        return self._update(project_root, expected_revision, change)
+            layout = ProjectLayout(root, state["paths"])
+            document = layout.directory("sources") / (component_id + ".pcraft")
+            layout._check_managed_path(document)
+            if Path(run["document"]) != document:
+                raise ProjectError("运行源文件路径与组件路径不同：" + str(run["document"]))
+            latest = state["components"][component_id]["latest_run"]
+            if latest:
+                if not document.is_file() or _sha(document.read_bytes()) != latest["artifact_hashes"]["document"]:
+                    raise ProjectError("制作期间源文件被外部修改；候选产物已保留，原源文件未覆盖")
+            elif document.exists():
+                raise ProjectError("制作期间目标源文件已被创建，不能覆盖：" + str(document))
+            candidate = Path(run["source_snapshot_path"])
+            # 发布前完成运行记录的全部校验；document 的摘要取本次候选文件。
+            self._record_run(state, component_id, run, document_artifact=candidate)
+            if run["status"] != "verified":
+                raise ProjectError("只有通过实际保存重开核验的运行才能发布源文件")
+            temporary = document.with_name(f".{document.name}.{uuid4().hex}.tmp")
+            with temporary.open("xb") as stream:
+                stream.write(candidate.read_bytes())
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, document)
+            try:
+                return self._write(root, state)
+            except Exception as error:
+                raise ProjectError(f"源文件已发布，但项目记录未能保存；请核对候选文件与当前源文件：{candidate}；{error}") from error
 
     def compare_component(self, project_root: str, expected_revision: str, component_id: str,
                           run_id: str, reference_id: str, reference_region: list[int] | None = None,
@@ -1021,7 +1070,7 @@ class ProjectStore:
                     component_lines.append(f"- {label}：" + (self._link("查看" + label, latest[field])
                                                             if field in latest else "历史记录未保存"))
                 component_lines.extend([
-                    "- Krita 源文件：" + self._link(Path(latest["document"]).name, latest["document"]),
+                    "- 可编辑源文件：" + self._link(Path(latest["document"]).name, latest["document"]),
                     "- PNG 预览：" + self._link(Path(latest["preview"]).name, latest["preview"]),
                     "- 绘制操作记录：" + self._link("查看操作记录", latest["operations_path"]),
                     "- 本次风格快照：" + self._link("查看风格快照", latest["style_snapshot_path"]), "",

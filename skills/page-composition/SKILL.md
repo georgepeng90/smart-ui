@@ -1,6 +1,6 @@
 ---
 name: page-composition
-description: 使用已有组件和独立图像安排页面位置、尺寸与文字，创建可追溯的静态组合并按反馈调整。用于页面排版和资产复用；组件外观修改转到 Krita 制作流程。
+description: 使用已有组件和独立图像安排页面位置、尺寸与文字，创建可追溯的静态组合并按反馈调整。用于页面排版和资产复用；组件外观修改转到 PhotoCraft 制作流程。
 ---
 
 # 使用已有资产组合页面
@@ -14,7 +14,7 @@ description: 使用已有组件和独立图像安排页面位置、尺寸与文�
 | 任务 | 处理方式 |
 | --- | --- |
 | 移动按钮、调整间距、修改文案或层级 | 保留资产绑定，修改布局节点、保存修订并构建新快照 |
-| 修改材质、轮廓或某个组件状态 | 用 [krita-drawing](../krita-drawing/SKILL.md) 修改对应源组件，再组合检查受影响实例 |
+| 修改材质、轮廓或某个组件状态 | 用 [photocraft-drawing](../photocraft-drawing/SKILL.md) 修改对应源组件，再组合检查受影响实例 |
 | 生成或编辑独立图标 | 用 [icon-assets](../icon-assets/SKILL.md) 制作和登记图像，组合时引用明确版本 |
 | 判断目标风格或定位视觉偏差 | 用 [reference-style](../reference-style/SKILL.md) 查看依据，区分资产外观、导出、布局、文字和运行时问题 |
 

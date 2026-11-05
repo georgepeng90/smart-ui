@@ -239,7 +239,7 @@ def test_build_and_get_over_real_stdio_return_the_archived_png_bytes(exported_pr
                                            env={**os.environ, "PYTHONUTF8": "1"})
         async with project_session(parameters) as session:
             listed = await session.list_tools()
-            assert len(listed.tools) == 32
+            assert len(listed.tools) == 30
             assert {"project_build_layout", "project_get_page_build"} <= {tool.name for tool in listed.tools}
             response = await session.call_tool("project_build_layout", {
                 "project_root": context["project_root"], "expected_revision": saved["revision"], "layout_id": "screen",

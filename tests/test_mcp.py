@@ -1,4 +1,5 @@
 import base64
+from contextlib import contextmanager
 import hashlib
 import io
 import json
@@ -15,12 +16,11 @@ from PIL import Image
 
 from smartui_mcp.projects import ProjectStore
 from smartui_mcp.server import create_server
-from test_client import responding_bridge
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1foAAAAASUVORK5CYII=")
 TOOL_NAMES = {
-    "krita_status", "krita_list_brushes", "krita_inspect_document", "krita_execute_batch", "krita_preview",
+    "photocraft_status", "photocraft_inspect_document", "photocraft_preview",
     "project_create", "project_context", "project_add_reference", "project_inspect_reference",
     "project_update_style", "project_define_component", "project_draw_component",
     "project_save_program", "project_get_program", "project_plan_component",
@@ -35,18 +35,13 @@ TOOL_NAMES = {
 
 CUSTOM_PROGRAM = '''def build(parameters, spec, component_id):
     extent = spec["extent"]
-    return {
-        "width": extent, "height": extent,
-        "nodes": [
-            {"key": "group", "name": component_id + " 自定义分组", "kind": "grouplayer", "parent": "root"},
-            {"key": "ink", "name": "程序生成的线条", "kind": "paintlayer", "parent": "group"},
-            {"key": "clip", "name": "局部透明度", "kind": "transparencymask", "parent": "ink",
-             "rects": [[0, 0, extent, extent, 180]]},
-        ],
-        "paint": [{"node": "ink", "brush": "项目自选原生笔刷", "color": parameters["color"], "size": 2,
-                   "strokes": [{"kind": "line", "from": [index, 0], "to": [index, extent - 1]}
-                               for index in range(parameters["line_count"])]}],
-    }
+    nodes = [{"key": "group", "name": component_id + " 自定义分组", "kind": "group", "parent": "root"}]
+    for index in range(parameters["line_count"]):
+        nodes.append({"key": "line-" + str(index), "name": "线条 " + str(index),
+                      "kind": "shape", "parent": "group",
+                      "shape": {"kind": "rect", "rect": [index, 0, 1, extent],
+                                "fill": parameters["color"], "stroke": None}})
+    return {"schema_version": 1, "width": extent, "height": extent, "nodes": nodes}
 '''
 
 
@@ -55,11 +50,22 @@ class FakeClient:
         self.preview_path = preview_path
         self.calls = []
 
+    def status(self):
+        self.calls.append(("status", {}))
+        return {"version": "synthetic transport fixture", "cli_path": "test", "sha256": "0" * 64}
+
+    @contextmanager
+    def session(self, root):
+        self.calls.append(("session", str(root)))
+        yield self
+
     def call(self, method, params):
         self.calls.append((method, params))
-        if method == "preview":
-            return {"path": str(self.preview_path)}
-        return {"method": method, "params": params}
+        if method == "doc.open":
+            return {"width": 1, "height": 1, "warnings": []}
+        if method == "doc.render":
+            return {"mime": "image/png", "base64": base64.b64encode(self.preview_path.read_bytes()).decode()}
+        raise AssertionError(method)
 
 
 class MCPToolTests(unittest.IsolatedAsyncioTestCase):
@@ -127,7 +133,7 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     await server.call_tool("project_get_visual_check", arguments)
             self.assertEqual(fake.calls, [])
 
-    async def test_tools_forward_protocol_and_return_preview_image(self):
+    async def test_current_tools_return_native_inspection_and_document_preview(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             png = root / "preview.png"
@@ -136,77 +142,50 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
             server = create_server(fake)
             tools = await server.list_tools()
             self.assertEqual({t.name for t in tools}, TOOL_NAMES)
-            self.assertIsNone(next(t for t in tools if t.name == "krita_preview").outputSchema)
-            document = str(root / "测试.kra")
-            await server.call_tool("krita_status", {})
-            await server.call_tool("krita_list_brushes", {"query": "Ink"})
-            await server.call_tool("krita_inspect_document", {"document": document})
-            operations = [{"op": "document.save", "document": document}]
-            await server.call_tool("krita_execute_batch", {"operations": operations})
-            preview = await server.call_tool("krita_preview", {"document": document})
-            self.assertEqual(fake.calls, [
-                ("status", {}), ("brushes", {"query": "Ink"}), ("inspect", {"document": document}),
-                ("execute", {"operations": operations}), ("preview", {"document": document}),
-            ])
-            self.assertEqual(json.loads(preview[0].text), {"path": str(png)})
+            self.assertIsNone(next(t for t in tools if t.name == "photocraft_preview").outputSchema)
+            document = str(root / "测试.pcraft")
+            await server.call_tool("photocraft_status", {})
+            with patch("smartui_mcp.server.read_document", return_value={"width": 1, "nodes": [], "manifest": {}}) as inspect:
+                await server.call_tool("photocraft_inspect_document", {"document": document})
+                inspect.assert_called_once_with(Path(document))
+            preview = await server.call_tool("photocraft_preview", {"document": document})
+            self.assertEqual(fake.calls, [("status", {}), ("session", str(root)),
+                ("doc.open", {"path": "测试.pcraft"}), ("doc.render", {"maxSide": 0})])
+            self.assertEqual(json.loads(preview[0].text), {"document": document, "width": 1, "height": 1})
             self.assertEqual(preview[1].mimeType, "image/png")
             self.assertEqual(base64.b64decode(preview[1].data), PNG)
 
     async def test_document_validation_prevents_submission(self):
         fake = FakeClient(Path("unused.png"))
         server = create_server(fake)
-        for document in ["relative.kra", str(Path.cwd() / "wrong.png")]:
-            with self.subTest(document=document), self.assertRaisesRegex(Exception, "绝对 .kra 路径"):
-                await server.call_tool("krita_inspect_document", {"document": document})
+        for document in ["relative.pcraft", str(Path.cwd() / "wrong.png")]:
+            with self.subTest(document=document), self.assertRaisesRegex(Exception, "绝对 .pcraft 路径"):
+                await server.call_tool("photocraft_inspect_document", {"document": document})
         self.assertEqual(fake.calls, [])
 
-    async def test_stdio_handshake_tool_call_preview_and_error(self):
+    async def test_stdio_reports_missing_renderer_without_preventing_project_tools(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
-            png = root / "preview.png"
-            png.write_bytes(PNG)
-            document = str(root / "document.kra")
-
-            def respond(request):
-                if request["method"] == "execute":
-                    return {"id": request["id"], "ok": False, "error": {
-                        "type": "ValueError", "message": "未找到指定图层", "operation_index": 1,
-                        "completed": [{"op": "document.open"}],
-                    }}
-                result = {"path": str(png)} if request["method"] == "preview" else {"protocol_version": 1}
-                return {"id": request["id"], "ok": True, "result": result}
-
+            missing = Path(temporary).resolve() / "missing-cli.exe"
             parameters = StdioServerParameters(
-                command=sys.executable,
-                args=["-m", "smartui_mcp"],
+                command=sys.executable, args=["-m", "smartui_mcp"],
                 cwd=str(Path(__file__).resolve().parents[1]),
-                env={**os.environ, "SMARTUI_BRIDGE_DIR": str(root), "SMARTUI_BRIDGE_TIMEOUT": "2"},
+                env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(missing)},
             )
-            with responding_bridge(root, respond):
-                async with stdio_client(parameters) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        initialize = await session.initialize()
-                        self.assertEqual(initialize.serverInfo.name, "SmartUI Krita")
-                        tools = await session.list_tools()
-                        self.assertEqual({tool.name for tool in tools.tools}, TOOL_NAMES)
-                        result = await session.call_tool("krita_status", {})
-                        self.assertFalse(result.isError)
-                        self.assertEqual(json.loads(result.content[0].text), {"protocol_version": 1})
-                        preview = await session.call_tool("krita_preview", {"document": document})
-                        self.assertFalse(preview.isError)
-                        self.assertIsNone(preview.structuredContent)
-                        self.assertEqual(json.loads(preview.content[0].text), {"path": str(png)})
-                        self.assertEqual(preview.content[1].mimeType, "image/png")
-                        self.assertEqual(base64.b64decode(preview.content[1].data), PNG)
-                        failure = await session.call_tool("krita_execute_batch", {"operations": [{"op": "paint"}]})
-                        self.assertTrue(failure.isError)
-                        self.assertIn('"operation_index": 1', failure.content[0].text)
-                        self.assertIn('"completed"', failure.content[0].text)
-                        self.assertIn("未找到指定图层", failure.content[0].text)
-                        self.assertIn("request_id=", failure.content[0].text)
-                        self.assertIn(str(root / "responses"), failure.content[0].text)
+            async with stdio_client(parameters) as (read, write):
+                async with ClientSession(read, write) as session:
+                    initialize = await session.initialize()
+                    self.assertEqual(initialize.serverInfo.name, "SmartUI PhotoCraft")
+                    tools = await session.list_tools()
+                    self.assertEqual({t.name for t in tools.tools}, TOOL_NAMES)
+                    result = await session.call_tool("photocraft_status", {})
+                    self.assertTrue(result.isError)
+                    self.assertIn(str(missing), result.content[0].text)
+                    created = await session.call_tool("project_create", {
+                        "project_root": str(Path(temporary).resolve() / "project"),
+                        "project_id": "example", "name": "不依赖绘图端的项目操作"})
+                    self.assertFalse(created.isError, created.content)
 
-    async def test_stdio_project_reference_style_and_component_persist_without_krita(self):
+    async def test_stdio_project_reference_style_and_component_persist_without_renderer(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             project_root = root / "中文项目"
@@ -218,11 +197,11 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                 image.save(source)
             original = source.read_bytes()
             original_mtime = source.stat().st_mtime_ns
-            bridge_root = root / "unused-bridge"
+            missing_cli = root / "missing-cli.exe"
             parameters = StdioServerParameters(
                 command=sys.executable, args=["-m", "smartui_mcp"],
                 cwd=str(Path(__file__).resolve().parents[1]),
-                env={**os.environ, "SMARTUI_BRIDGE_DIR": str(bridge_root), "SMARTUI_BRIDGE_TIMEOUT": "0.1"},
+                env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(missing_cli)},
             )
             async with stdio_client(parameters) as (read, write):
                 async with ClientSession(read, write) as session:
@@ -298,19 +277,19 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("已定义规格，尚未生成", components_doc)
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(source.stat().st_mtime_ns, original_mtime)
-            self.assertEqual(list((bridge_root / "requests").glob("*.json")), [])
+            self.assertFalse(missing_cli.exists())
 
-    async def test_stdio_project_program_save_get_and_plan_without_krita(self):
+    async def test_stdio_project_program_save_get_and_plan_without_renderer(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             project_root = root / "程序项目"
-            bridge_root = root / "unused-bridge"
+            missing_cli = root / "missing-cli.exe"
             marker = root / "program-executed.txt"
             source = f"from pathlib import Path\nPath({str(marker)!r}).write_text('已执行', encoding='utf-8')\n" + CUSTOM_PROGRAM
             parameters = StdioServerParameters(
                 command=sys.executable, args=["-m", "smartui_mcp"],
                 cwd=str(Path(__file__).resolve().parents[1]),
-                env={**os.environ, "SMARTUI_BRIDGE_DIR": str(bridge_root), "SMARTUI_BRIDGE_TIMEOUT": "0.1"},
+                env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(missing_cli)},
             )
             async with stdio_client(parameters) as (read, write):
                 async with ClientSession(read, write) as session:
@@ -344,13 +323,12 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(plan_result["program_sha256"], fetched["sha256"])
                     plan = plan_result["plan"]
                     self.assertEqual([plan["width"], plan["height"]], [120, 120])
-                    self.assertEqual([node["kind"] for node in plan["nodes"]],
-                                     ["grouplayer", "paintlayer", "transparencymask"])
+                    self.assertEqual(plan["nodes"][0]["kind"], "group")
                     self.assertEqual(plan["nodes"][0]["name"], "stripes 自定义分组")
-                    self.assertEqual(plan["nodes"][2]["rects"], [[0, 0, 120, 120, 180]])
-                    self.assertEqual(plan["paint"][0]["color"], "#204060")
-                    self.assertEqual(len(plan["paint"][0]["strokes"]), 96)
-                    self.assertEqual(plan["paint"][0]["strokes"][-1]["from"], [95, 0])
+                    self.assertEqual(len(plan["nodes"]), 97)
+                    self.assertTrue(all(node["kind"] == "shape" for node in plan["nodes"][1:]))
+                    self.assertEqual(plan["nodes"][1]["shape"]["fill"], "#204060")
+                    self.assertEqual(plan["nodes"][-1]["shape"]["rect"], [95, 0, 1, 120])
                     self.assertEqual(await call("project_context", project_root=str(project_root)), project)
 
                     modified = source.replace('extent = spec["extent"]', 'extent = spec["extent"] + 1')
@@ -388,7 +366,7 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("RuntimeError: 程序执行阶段的实际错误", runtime_failure.content[0].text)
                     self.assertEqual(await call("project_context", project_root=str(project_root)), project)
                     self.assertEqual(project["components"]["stripes"]["attempts"], 0)
-            self.assertEqual(list((bridge_root / "requests").glob("*.json")), [])
+            self.assertFalse(missing_cli.exists())
 
 
 if __name__ == "__main__":

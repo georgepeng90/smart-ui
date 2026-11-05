@@ -1,137 +1,101 @@
 # 项目 Python 绘制程序约定
 
-项目程序把共用参数和组件规格转换成可验证的 Krita 绘制计划。形状、图层数量、材质、笔刷选择和伸缩规则由程序决定，通用工具不内置按钮或其他固定组件画法。
+项目程序将风格参数和组件规格转换为 PhotoCraft 原生制作计划。共用几何、颜色用途、状态和材质由项目定义；工具不内置业务组件画法。
 
-本接口用于基础 UI 的可编辑制作，可以在组件规格中表达 ICON 容器、占位和留白约束。ICON 图像走独立的宿主生图或编辑流程，不要求提供 `build` 或 `program_id`；SmartUI 不提供生图后端，也不把图像资产作为绘制计划提交。独立图像登记和静态组合预览见[项目工具说明](project-tools.md#独立图像资产与静态组合预览)。
+## 程序入口与执行
 
-## 保存与执行
+完整 Python 源码必须定义 `build(parameters, spec, component_id)`。`parameters` 来自当前风格，`spec` 为完整组件规格，`component_id` 为稳定标识。用 `project_save_program` 保存源码，通过 `spec.program_id` 引用；保存只检查语法，`project_plan_component` 才执行并预检计划。缺少必需配置直接报告具体字段。
 
-用 `project_save_program(project_root, expected_revision, program_id, name, description, source)` 保存完整源码，用 `project_get_program(project_root, program_id)` 读取。保存阶段只编译检查 Python 语法，不执行顶层语句。`project_root` 是业务工程根目录的绝对路径。源码默认保存在工程内 `art/ui/programs/<id>/<version>.py`，可在创建项目时通过 `paths.programs` 指定工程内相对目录；程序元数据的 `source_path` 始终保存工程相对 POSIX 路径。状态位于 `.smartui/project.json`，项目状态保留版本、SHA-256 和历史。
-
-源码提供入口：
-
-```python
-def build(parameters, spec, component_id):
-    return plan
-```
-
-`parameters` 是当前 `style.parameters`；`spec` 是当前组件完整规格，含必需的 `program_id`；`component_id` 是当前组件标识。其余参数字段和业务约束由程序定义，非法配置应直接给出清楚错误。
-
-`project_plan_component(project_root, component_id)` 与绘制都会在独立 Python 进程运行程序，超时为 60 秒。普通 Python `print` 输出被捕获，不混入计划 JSON；语法错误、运行异常、超时和无效计划都明确报错。入口应直接返回只含标准 JSON 类型和有限数值的字典，不能返回自定义对象、集合、NaN 或无穷大。
-
-程序是可信本机 Python 代码，可以访问文件和网络；独立进程不是安全沙箱。程序应把工作集中于计算计划，不在顶层或 build 中修改项目、源文件或 Krita 文档。不要假设项目目录是当前工作目录，也不要依赖程序文件相邻资源自动加入导入路径；必要数据通过参数明确传入。
+程序在当前解释器的独立进程中运行，最长 60 秒，打印不会混入计划结果。这是可信本机代码，可访问文件及网络，不构成安全沙箱。返回值只能包含标准 JSON 类型和有限数值。
 
 ## 最小程序示例
 
-下例生成一层实色面板。先用 `krita_list_brushes` 核对笔刷精确名称，把它保存到共用参数，例如 `{"brush":"b) Basic-5 Size"}`。组件规格使用 `{"program_id":"flat-panel","width":320,"height":120,"color":"#6AAD3D"}`。
-
 ```python
 def build(parameters, spec, component_id):
-    width, height = spec["width"], spec["height"]
     return {
-        "width": width,
-        "height": height,
-        "nodes": [
-            {"key": "surface", "name": component_id + "/surface",
-             "kind": "paintlayer", "parent": "root"},
-        ],
-        "paint": [
-            {"node": "surface", "brush": parameters["brush"],
-             "color": spec["color"], "size": 1,
-             "strokes": [
-                 {"kind": "rectangle", "rect": [1, 1, width - 2, height - 2],
-                  "fill": "foreground"},
-             ]},
-        ],
+        "schema_version": 1, "width": spec["width"], "height": spec["height"],
+        "nodes": [{
+            "key": "surface", "name": component_id + "/底面",
+            "kind": "shape", "parent": "root",
+            "shape": {"kind": "rect", "rect": [0, 0, spec["width"], spec["height"]],
+                      "fill": spec["color"]},
+        }],
     }
 ```
 
-通过 `project_save_program.source` 保存以上完整源码，再定义组件，先生成计划。计划预检不连接 Krita，也不表示笔刷已安装或实际画面已验收；实际绘制前仍需查询本机预设并查看产物。
+组件规格例如 `{"program_id":"flat-panel","width":320,"height":120,"color":"#6AAD3D"}`。示例直接索引必需字段，缺失即失败。
 
-项目程序应根据对应参考和编辑需求定义节点、参数与绘制步骤。示例程序只演示通用接口，不限定组件的图层结构或视觉样式。
+## 计划与节点
 
-## 配色与状态变体示例
+顶层字段为 `schema_version:1`、整数 `width/height` 和 `nodes`。节点从底向上排列，父分组先声明。每个节点必须有唯一 `key`、`name`、`kind` 和 `parent`；`parent` 为 `root` 或此前声明的 group key。原生整数 ID 由执行结果记录，不能将它当作项目 key。
 
-[通用操作背景示例](../examples/drawing-programs/semantic_palette.py) 用一套画法生成两套配色和三种状态。主题表提供轮廓、操作底色、禁用底色和选中标记的颜色。状态表引用这些用途，选中态添加圆点，禁用态改用对应底色。各变体共用轮廓、底面和标记位置的几何规则。使用合成参数演示接口，项目可以根据需求定义不同的状态名和配色。
+| 节点类型 | 制作内容 |
+| --- | --- |
+| `shape` | `shape` 对象使用原生形状参数：`rect`、`roundedRect`、`ellipse`、`polygon`、`star`、`line`、`path` |
+| `pixel` | `strokes` 数组描述原生像素笔触 |
+| `group` | 管理父子结构；不隐式将局部选择扩展为全部子节点 |
 
-先用 `krita_list_brushes` 确认准确的预设名。在源码或插件根目录运行下面的 Python 代码，将输出的对象作为 `project_update_style.parameters` 保存。
+`properties` 可表达 `visible`、0–1 的 `opacity` 和 `blend`。分组默认使用 `PassThrough`（穿透），其他节点默认使用 `Normal`（正常）。`effects` 为 `kind/params` 列表。像素和分组可使用矢量路径 `mask`；形状不能单独设置 `mask`，需要额外裁剪时放入带蒙版的父分组。程序预检严格拒绝未知或非法字段，不静默近似复杂参数。
 
-```python
-import json
-from runpy import run_path
-
-example = run_path("examples/drawing-programs/semantic_palette.py")
-parameters = example["example_parameters"]("填入已核对的 Krita 笔刷名称")
-print(json.dumps(parameters, ensure_ascii=False))
-```
-
-用 `project_save_program` 将示例的完整源码保存为 `semantic-palette`。定义组件时可使用以下规格。
+形状实色填充使用颜色字符串；描边例如 `{"width":3,"color":"#14294A","align":"inside"}`。圆角矩形示例为 `{"kind":"roundedRect","rect":[8,8,184,84],"radii":12,"fill":"#247CDA"}`。渐变填充例如：
 
 ```json
-{"program_id":"semantic-palette", "theme":"lagoon", "state":"available", "width":180, "height":52}
+{"gradient":{"stops":[[0,"#6FC6FF"],[1,"#247CDA"]],"angle":90,"scale":100,"style":"linear","reverse":false,"dither":false}}
 ```
 
-其他变体可以切换到 `ember` 主题，或选用 `selected`、`disabled` 状态。为各样片指定组件 ID，逐一预检和绘制，然后把实际的成功运行加入[多产物视觉检查](project-tools.md#多产物视觉检查)。确认引用该颜色用途的样片得到预期配色，共用几何及不相关状态保持一致。示例只依赖传入的项目参数和规格，缺少笔刷、主题、状态或颜色引用时会报告具体配置项。
+复杂节点的参数约束以当前计划校验器为准。只使用已预检且能由当前原生后端实际执行的参数，不将应用本身的全部能力宣称为计划接口能力。
 
-## 计划结构
+### 形状几何
 
-计划顶层只包含 `width`、`height`、`nodes`、`paint`：
+| kind | 几何字段 |
+| --- | --- |
+| `rect/ellipse` | `rect:[x,y,width,height]` |
+| `roundedRect` | `rect`；`radii` 为单值或四项数组，缺省 10 |
+| `polygon` | `rect`；整数 `sides`（3–100，缺省 5）、`cornerRadius`（缺省 0） |
+| `star` | 同 polygon，另有 `starRatio`（0.001–1，缺省 0.5） |
+| `line` | `from/to:[x,y]`；`weight`、`arrowStart/arrowEnd`、`arrowWidth/arrowLength/arrowConcavity` |
+| `path` | `path` 对象，见矢量路径说明 |
+
+形状尺寸必须为正；坐标范围为 −300000 至 300000。填充缺省黑色，`null` 禁用填充；描边缺省 `null`。描边还可指定 `opacity`（0–100）、`cap`（butt/round/square）、`join`（miter/round/bevel）、`miterLimit`、`dashes` 和 `dashOffset`。图层不透明度使用 0–1，不能混用描边及效果的百分比单位。
+
+渐变支持 `linear/radial/angle/reflected/diamond`，还可指定 `opacityStops`、`midpoints`、`offset` 和 `align`。颜色及透明度停止点位置为 0–1，必须严格递增；`midpoints` 为空或与渐变区间数量相同。预检会将省略的可选参数补为校验器规定的固定值，便于比较局部更新的实际含义。这些值属于制作计划的约定，不代表 PhotoCraft 图形界面的默认设置。
+
+形状填充的 `offset:[x,y]` 使用相对比例，例如 `[-0.28,-0.4]`，不能把百分数直接写成 `[-28,-40]`。线性渐变在 `angle:-90` 时从上方的首个停止点过渡到下方的末个停止点；反转使用 `reverse`。制作时仍需查看实际预览确认方向和范围。
+
+### 矢量路径与蒙版
+
+形状的 `path` 以及蒙版的 `mask.path` 使用同一路径结构：
 
 ```json
-{
-  "width":320,
-  "height":120,
-  "nodes":[
-    {"key":"component", "name":"panel", "kind":"grouplayer", "parent":"root"},
-    {"key":"surface", "name":"panel/surface", "kind":"paintlayer", "parent":"component", "properties":{"opacity":255}},
-    {"key":"cutout", "name":"panel/cutout", "kind":"transparencymask", "parent":"surface", "rects":[[0,0,320,120,255]]}
-  ],
-  "paint":[
-    {"node":"surface", "brush":"b) Basic-5 Size", "color":"#6AAD3D", "size":1,
-     "opacity":1, "strokes":[{"kind":"rectangle", "rect":[1,1,318,118], "fill":"foreground"}]}
-  ]
-}
+{"subpaths":[{"knots":[[0,0],[100,0],[100,80],[0,80]],"closed":true,"op":"combine"}],"fillRule":"nonzero","inverted":false}
 ```
 
-画布宽高为 1–16384 的整数。数值必须有限，布尔值不作为数值。未知字段会报错。
+蒙版对象为 `{"path":上述路径,"enabled":true,"linked":true,"density":100,"feather":0}`；density 为 0–100，feather 为 0–1000。
 
-### 节点
+每条子路径至少两个 knot。点可以是 `[x,y]`，或有 `anchor`、可选 `in/out` 控制点和 `smooth` 的对象。子路径 `op` 支持 combine/subtract/intersect/exclude；`fillRule` 支持 nonzero/evenodd。形状需要额外裁剪时，将它放入带 mask 的父 group。
 
-`nodes` 按声明顺序建立结构；父节点必须先声明。
+### 像素笔触
 
-| 字段 | 约束 |
-| --- | --- |
-| `key` | 唯一标识，以字母或数字开头，仅含字母、数字、点、下划线和连字符；不能使用保留值 root |
-| `name` | 非空且在计划中唯一的显示名称，可以包含斜杠 |
-| `kind` | paintlayer、grouplayer 或 transparencymask |
-| `parent` | root 或此前节点 key；绘画图层与分组只能放在分组内 |
-| `properties` | 可选属性对象，省略的字段使用下述明确默认值 |
-| `rects` | 仅透明度蒙版使用，必需；空数组表示全透明 |
+```json
+{"key":"detail","name":"细节","kind":"pixel","parent":"root","strokes":[{"color":"#FFFFFF","size":6,"opacity":0.7,"points":[[10,12,1],[32,18,0.5]],"seed":0,"brush":{"hardness":1,"spacing":0.1,"flow":1}}]}
+```
 
-透明度蒙版必须挂在绘画图层或分组下，不能直接挂 root，也不能挂在另一个蒙版下。`rects` 每项是整数 `[x,y,width,height,alpha]`，宽高至少为 1，alpha 为 0–255。
+`points` 每项必须为 `[x,y,pressure]`，其中压力范围为 0–1。`size` 范围 0.5–5000，`opacity` 为 0–1，`seed` 是非负 64 位整数。`strokes:[]` 表示合法空白像素层。`brush` 仅接受八个受控参数：`hardness`、`spacing`、`flow`、`pressureSize`、`pressureOpacity`、`angle`、`roundness` 和 `aliased`。省略时依次补为 `1`、`0.1`、`1`、`false`、`false`、`0`、`1` 和 `false`；这些是校验器规定的固定值，不代表图形界面默认值，也不依赖外部笔刷预设。
 
-`properties` 允许布尔字段 `visible/locked/inherit_alpha/alpha_locked`、整数 `opacity`（0–255）和 `blending_mode`（normal/multiply/screen/overlay）。`alpha_locked` 仅适用于绘画图层。最终锁定属性在绘制完成后应用，避免锁定妨碍本次绘制。
+### 图层效果
 
-默认属性为 `visible=true`、`locked=false`、`opacity=255`、`blending_mode="normal"`、`inherit_alpha=false`，绘画图层另有 `alpha_locked=false`。计划会补齐这些值；删去先前指定的属性意味着恢复默认值，而不是沿用源文件旧值。
+`effects` 最多 32 项，每项为 `{"kind":"dropShadow","params":{"color":"#000000","opacity":40,"distance":3,"size":4}}`。支持 dropShadow、innerShadow、outerGlow、innerGlow、stroke、colorOverlay、gradientOverlay、bevelEmboss 和 satin；不同效果只接受对应参数。效果 opacity 为 0–100；angle 为 −360 至 360；size/distance 为 0–1000。颜色、blend、轮廓及效果专用字段经过严格校验，未知字段报错。通过空效果数组可以明确移除当前节点的效果。
 
-### 绘制步骤
+效果的 `color/from/to` 必须是不透明颜色：可使用六位颜色、alpha 为 `FF` 的八位颜色或 alpha 为 `1` 的 RGBA 数组；透明度通过效果的 `opacity` 设置。形状填充、形状描边和像素笔触可使用颜色自身的 alpha。
 
-`paint` 按数组顺序执行。每项必须有 `node/brush/color/size/strokes`，可选 `opacity`（默认 1）。`node` 只能指向绘画图层 key，分组和蒙版通过节点属性与 rects 表达，不接受 paint 步骤。
+## 共用配色与状态示例
 
-笔刷名为非空精确预设名；颜色为 `#RRGGBB`；size 在 0.01–10000，opacity 在 0–1；strokes 是非空数组。所有坐标已经是最终画布坐标，工具不再对项目参数进行缩放。
+[semantic_palette.py](../examples/drawing-programs/semantic_palette.py) 提供 `example_parameters()`，含两套颜色用途和三个状态。将其返回值存入项目风格参数，组件规格指定 `theme/state/width/height`；改变主题只改变颜色，状态只改变声明的颜色用途和标记可见性。示例不需要外部项目或笔刷资源。
 
-| 笔触 kind | 字段 |
-| --- | --- |
-| line | from、to 为两个整数坐标；可选 pressure_from、pressure_to，范围 0–1，默认 1 |
-| rectangle / ellipse | rect 为 `[x,y,width,height]`，宽高至少 0.01；可选 fill |
-| path | commands 为命令数组，首项必须 M；可选 fill |
+为不同样片使用不同组件 ID，绘制后用[视觉检查](project-tools.md#多产物视觉检查)比较目标尺寸下的轮廓、留白和状态。自动测试验证参数复用，不代表参考风格通过。
 
-形状 fill 允许 none（默认）或 foreground。路径命令为 `["M",x,y]`、`["L",x,y]`、`["Q",cx,cy,x,y]`、`["C",c1x,c1y,c2x,c2y,x,y]` 和 `["Z"]`。描边使用指定 Krita 原生笔刷，封闭路径与形状填色是几何填色；不要将它们描述为完整自由手绘笔迹。
+## 更新与证据
 
-## 局部更新与版本追溯
+省略 `layers` 更新全部节点；传入节点 key 只更新该范围。新旧计划的画布与结构必须一致，未选节点内容不能变化，尺寸或结构变体当前使用新组件 ID。源文件必须与已登记证据一致；不自动覆盖外部改动。
 
-绘制时 `layers` 选择计划节点 key，可包含分组或蒙版。工具对比上次成功运行的计划，拒绝所选范围外的变化，不限制某个固定角色或参数名。当前画布与结构也必须匹配；需要新尺寸或结构时用新组件 ID。
-
-选择分组只更新分组自身属性，不隐式更新子树；需要修改子节点时逐一列出它们的 key。局部更新必须有已登记的 `plan.json` 及其摘要，供工具校验和比较。
-
-每次绘制保留实际程序版本、源码摘要、`program.py` 和 `plan.json`，使结果能追溯到真正执行的源码。保存新源码后，旧 run 继续保留旧版本，依赖组件需要重新检查；不能直接修改历史版本号表示已完成重画。完整状态与失败语义见[项目工具说明](project-tools.md)。
+每次实际运行保存程序、计划、风格快照、原生请求响应及后端构建证据。成功保留输出 `.pcraft`、原尺寸 PNG 和重开检查；更新保留输入文件。局部更新检查未选节点。失败、超时或记录冲突保留现场，不自动重试。详情见[项目工具](project-tools.md)及[PhotoCraft 接口](photocraft-contract.md)。

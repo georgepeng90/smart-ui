@@ -28,7 +28,7 @@ def test_custom_layout_and_relative_links_survive_project_move(tmp_path):
     store = ProjectStore()
     root = tmp_path / "original"
     paths = {"documents": "design/ui/docs", "references": "design/ui/refs",
-             "programs": "design/ui/programs", "sources": "design/ui/krita"}
+             "programs": "design/ui/programs", "sources": "design/ui/sources"}
     context = store.create(str(root), "game", "项目", paths)
     source = tmp_path / "reference.png"
     Image.new("RGB", (10, 10), "red").save(source)
@@ -72,7 +72,7 @@ def test_gitignore_keeps_shared_project_data_and_preserves_existing_rules(tmp_pa
     ProjectStore().create(str(root), "game", "项目")
     rules = ignore.read_text(encoding="utf-8").splitlines()
     assert "my-local-notes.txt" in rules
-    assert {"cache/", "project.lock", "migration-backups/"} <= set(rules)
+    assert {"cache/", "project.lock"} <= set(rules)
     assert not {"*", "project.json", "runs/", "comparisons/", "visual-checks/"} & set(rules)
 
 

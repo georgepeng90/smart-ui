@@ -1,87 +1,71 @@
-"""通过项目程序预检验证示例配色、状态与绘制计划。"""
+"""验证示例当前要求：颜色用途共享、状态差异及缺失配置报错。"""
 
+from copy import deepcopy
 import importlib.util
 from pathlib import Path
 
 import pytest
-
 from smartui_mcp.programs import ProgramError, run_program
 
-
-_program_path = Path(__file__).resolve().parents[1] / "examples" / "drawing-programs" / "semantic_palette.py"
-_module_spec = importlib.util.spec_from_file_location("semantic_palette", _program_path)
-_program = importlib.util.module_from_spec(_module_spec)
-_module_spec.loader.exec_module(_program)
-_source = _program_path.read_text(encoding="utf-8")
-
-
-@pytest.fixture
-def parameters():
-    return _program.example_parameters("b) Basic-5 Size")
+_path = Path(__file__).resolve().parents[1] / "examples/drawing-programs/semantic_palette.py"
+_spec = importlib.util.spec_from_file_location("semantic_palette", _path)
+_program = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_program)
+_source = _path.read_text(encoding="utf-8")
 
 
 def plan(parameters, **changes):
-    spec = {"program_id": "semantic-palette", "theme": "lagoon",
-            "state": "available", "width": 180, "height": 52}
+    spec = {"program_id": "semantic-palette", "theme": "lagoon", "state": "available", "width": 180, "height": 52}
     return run_program(_source, parameters, spec | changes, "action")
 
 
-def paint_by_node(result):
-    return {step["node"]: step for step in result["paint"]}
-
-
 @pytest.mark.parametrize("state", ["available", "selected", "disabled"])
-def test_two_themes_use_their_own_roles_and_share_geometry(parameters, state):
-    lagoon = plan(parameters, state=state)
-    ember = plan(parameters, theme="ember", state=state)
-    state_roles = parameters["states"][state]
-    for theme, result in (("lagoon", lagoon), ("ember", ember)):
-        roles = {"outline": "outline", **state_roles}
-        assert {step["node"]: step.pop("color") for step in result["paint"]} == {
-            node: parameters["themes"][theme][role] for node, role in roles.items()
-        }
-        assert all(step["brush"] == parameters["brush"] for step in result["paint"])
-    assert lagoon == ember
+def test_themes_change_colors_and_preserve_geometry(state):
+    parameters = _program.example_parameters()
+    a, b = (plan(parameters, theme=theme, state=state) for theme in ("lagoon", "ember"))
+    for result, theme in ((a, "lagoon"), (b, "ember")):
+        roles = parameters["states"][state]
+        assert result["nodes"][0]["shape"].pop("fill") == parameters["themes"][theme][roles["surface"]].lower()
+        assert result["nodes"][0]["shape"]["stroke"].pop("color") == parameters["themes"][theme]["outline"].lower()
+        result["nodes"][1]["shape"].pop("fill")
+    assert a == b
 
 
-def test_states_keep_shared_art_and_apply_only_their_declared_differences(parameters):
+def test_states_only_change_declared_colors_and_marker_visibility():
+    parameters = _program.example_parameters()
     available = plan(parameters)
     selected = plan(parameters, state="selected")
     disabled = plan(parameters, state="disabled")
-    assert available["nodes"] == selected["nodes"] == disabled["nodes"]
-    available_paint = paint_by_node(available)
-    selected_paint = paint_by_node(selected)
-    disabled_paint = paint_by_node(disabled)
-    assert selected_paint.pop("marker")["color"] == parameters["themes"]["lagoon"]["selection"]
-    assert available_paint == selected_paint
-    assert disabled_paint == available_paint | {
-        "surface": available_paint["surface"] | {"color": parameters["themes"]["lagoon"]["inactive"]},
-    }
+    assert available["nodes"][0] == selected["nodes"][0]
+    assert selected["nodes"][1]["properties"]["visible"] is True
+    assert available["nodes"][1]["properties"]["visible"] is False
+    disabled["nodes"][0]["shape"]["fill"] = available["nodes"][0]["shape"]["fill"]
+    assert disabled == available
 
 
-def test_project_can_choose_its_own_state_names_and_share_a_changed_role(parameters):
-    parameters["states"] = {"claimable": {"surface": "action"},
-                            "claimed": {"surface": "inactive"}}
-    before = plan(parameters, state="claimable")
-    claimed = plan(parameters, state="claimed")
+def test_shared_role_change_does_not_change_unrelated_state():
+    parameters = _program.example_parameters()
+    disabled = plan(parameters, state="disabled")
+    available = plan(parameters)
     parameters["themes"]["lagoon"]["action"] = "#408B70"
-    after = plan(parameters, state="claimable")
-    assert paint_by_node(after)["surface"]["color"] == "#408B70"
-    assert paint_by_node(after)["outline"] == paint_by_node(before)["outline"]
-    assert plan(parameters, state="claimed") == claimed
+    changed = plan(parameters)
+    assert changed["nodes"][0]["shape"]["fill"] == "#408b70"
+    changed["nodes"][0]["shape"]["fill"] = available["nodes"][0]["shape"]["fill"]
+    assert changed == available
+    assert plan(parameters, state="disabled") == disabled
 
 
 @pytest.mark.parametrize("path,state", [
-    (("brush",), "available"),
     (("themes", "lagoon"), "available"),
     (("states", "selected"), "selected"),
     (("states", "selected", "surface"), "selected"),
     (("themes", "lagoon", "selection"), "selected"),
 ])
-def test_missing_required_configuration_reports_its_path(parameters, path, state):
+def test_missing_configuration_reports_its_path(path, state):
+    parameters = deepcopy(_program.example_parameters())
     container = parameters
-    for segment in path[:-1]:
-        container = container[segment]
+    for key in path[:-1]:
+        container = container[key]
     del container[path[-1]]
     with pytest.raises(ProgramError, match=r"缺少配置项 parameters\." + r"\.".join(path)):
         plan(parameters, state=state)

@@ -191,10 +191,10 @@ def test_stdio_registration_selection_composition_and_strict_parameters(project,
     store, context = project
     root = context["project_root"]
     source = _source(tmp_path)
-    bridge = tmp_path / "unused-bridge"
+    missing_cli = tmp_path / "missing-photocraft.exe"
     parameters = StdioServerParameters(command=sys.executable, args=["-m", "smartui_mcp"],
         cwd=str(Path(__file__).resolve().parents[1]),
-        env={**os.environ, "SMARTUI_BRIDGE_DIR": str(bridge), "SMARTUI_BRIDGE_TIMEOUT": "0.1"})
+        env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(missing_cli)})
 
     async def workflow():
         async with project_session(parameters) as session:
@@ -226,4 +226,4 @@ def test_stdio_registration_selection_composition_and_strict_parameters(project,
             image = await session.call_tool("project_get_image", {"project_root": root, "asset_id": "coin", "version": 1})
             assert _image_response(image, registered["image"]["versions"][0]["sha256"])["selected_version"] == 1
     asyncio.run(workflow())
-    assert not list((bridge / "requests").glob("*.json"))
+    assert not missing_cli.exists()

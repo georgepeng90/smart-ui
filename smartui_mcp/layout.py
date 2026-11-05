@@ -12,7 +12,7 @@ DEFAULT_PATHS = {
     "sources": "art/ui/sources",
 }
 
-IGNORE_RULES = "# SmartUI 可重建缓存、本机锁和迁移备份\ncache/\nproject.lock\n.*.tmp\nmigration-backups/\n"
+IGNORE_RULES = "# SmartUI 可重建缓存和本机锁\ncache/\nproject.lock\n.*.tmp\n"
 
 RUN_PATH_FIELDS = (
     "document", "preview", "operations_path", "style_snapshot_path",

@@ -24,4 +24,4 @@ description: 使用宿主图像工具生成或编辑独立 UI 图标，将真实
 
 浏览器页面使用 `#RRGGBB` 纯色背景，按节点列表顺序叠放。独立图标按完整原图等比居中；正式组件背景按导出版本的几何声明伸缩。文字使用包含全部所需字符的真实 TTF/OTF，显式设置文本框、行高、对齐、换行和溢出规则，字体随快照保存。
 
-页面工具不生成图像、不自动设计布局，不处理业务交互或将位图导入 Krita 图层。用浏览器检查明确排布的效果；继续使用宿主图像工具修改独立图标，并通过 [Krita 绘制流程](../krita-drawing/SKILL.md)制作基础 UI。`project_create_composition` 另提供成功组件运行、图像及单行文字的简单 PNG 快照，限制见[项目工具说明](../../docs/project-tools.md#独立图像资产与静态组合预览)。
+页面工具不生成图像、不自动设计布局，不处理业务交互或将位图导入 PhotoCraft 图层。用浏览器检查明确排布的效果；继续使用宿主图像工具修改独立图标，并通过 [PhotoCraft 绘制流程](../photocraft-drawing/SKILL.md)制作基础 UI。`project_create_composition` 另提供成功组件运行、图像及单行文字的简单 PNG 快照，限制见[项目工具说明](../../docs/project-tools.md#独立图像资产与静态组合预览)。

@@ -1,6 +1,7 @@
-"""将 Krita 文件队列方法公开为 MCP 工具。"""
+"""提供 PhotoCraft 制作与 SmartUI 项目管理 MCP 工具。"""
 
 import asyncio
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +10,8 @@ from typing import Annotated, Any, Literal
 from mcp.server.fastmcp import FastMCP, Image
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr
 
-from .client import BridgeClient
+from .client import PhotoCraftClient
+from .photocraft import read_document
 from .projects import ProjectStore, ProjectError
 from .references import register_reference, inspect_reference
 from .pipeline import draw_component, plan_component
@@ -74,7 +76,7 @@ def _project_summary(context):
                            "open_feedback_count": value["open_feedback_count"],
                            "target_style_version": value["target_style_version"], "attempts": len(value["runs"]),
                            "last_attempt": {k: v for k, v in value["runs"][-1].items() if k in ("run_id", "status", "error")} if value["runs"] else None,
-                           "latest_run": {k: v for k, v in latest.items() if k in ("run_id", "status", "style_version", "program_id", "program_version", "program_sha256", "document", "preview", "verification", "layer_ids")} if latest else None}
+                           "latest_run": {k: v for k, v in latest.items() if k in ("run_id", "status", "style_version", "program_id", "program_version", "program_sha256", "document", "preview", "verification", "layer_ids", "backend")} if latest else None}
     comparisons = {key: {field: value[field] for field in ("id", "component_id", "run", "is_current", "created_at")}
                    for key, value in data.get("comparisons", {}).items()}
     visual_checks = {
@@ -108,8 +110,8 @@ def _project_summary(context):
 
 def _document_path(document: str) -> str:
     path = Path(document)
-    if not path.is_absolute() or path.suffix.lower() != ".kra":
-        raise ValueError(f"document 必须是绝对 .kra 路径：{document}")
+    if not path.is_absolute() or path.suffix.lower() != ".pcraft":
+        raise ValueError(f"document 必须是绝对 .pcraft 路径：{document}")
     return str(path)
 
 
@@ -148,66 +150,43 @@ def _composition_content(result):
             _verified_png(result["composition"]["images"]["overview"], "组合预览")]
 
 
-def create_server(client: BridgeClient | None = None) -> FastMCP:
-    bridge = client if client is not None else BridgeClient()
+def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
+    renderer = client if client is not None else PhotoCraftClient()
     projects = ProjectStore()
     server = FastMCP(
-        "SmartUI Krita",
+        "SmartUI PhotoCraft",
         instructions=(
-            "使用 Krita 原生笔刷编辑 .kra 文档。文档必须使用绝对路径；节点使用 UUID 或 name:唯一名称。"
-            "批量执行遇错停止并保留已经完成的操作，不会自动回滚。"
-            "超时不代表执行失败，请通过错误中的请求 ID 和结果路径确认结果，避免重复绘制。"
+            "通过 PhotoCraft 无窗口引擎制作可编辑 .pcraft，项目程序先严格预检，再执行、保存重开并核验。"
+            "局部修改使用计划节点 key。失败保留候选文件与请求记录，不自动重放写操作。"
+            "页面复用正式资产和独立文字；技术检查不代表用户美术确认。"
         ),
     )
 
     @server.tool()
-    async def krita_status() -> Any:
-        """实际请求 Krita 状态，返回版本、协议版本和支持的操作。"""
-        return await asyncio.to_thread(bridge.call, "status", {})
+    async def photocraft_status() -> Any:
+        """检查正常安装的 PhotoCraft CLI，返回实际路径、完整版本和可执行文件摘要。"""
+        return await asyncio.to_thread(renderer.status)
 
     @server.tool()
-    async def krita_list_brushes(query: str = "") -> Any:
-        """按可选名称片段查询已安装的原生笔刷预设，返回排序后的名称。"""
-        return await asyncio.to_thread(bridge.call, "brushes", {"query": query})
-
-    @server.tool()
-    async def krita_inspect_document(document: str) -> Any:
-        """检查 .kra 文档和递归图层树，包含节点 UUID、属性与像素 SHA256。"""
-        return await asyncio.to_thread(bridge.call, "inspect", {"document": _document_path(document)})
-
-    @server.tool()
-    async def krita_execute_batch(operations: list[dict[str, Any]]) -> Any:
-        """顺序执行绘制操作；错误会返回 operation_index 和 completed，不会自动回滚。
-
-        每项包含 op；路径必须为绝对 .kra 路径，节点用 UUID 或 name:唯一名称。
-        操作及参数如下：
-        document.create: path, width, height, name（仅允许新路径）；
-        document.open: path；document.save/close: document（close 仅关闭已保存文档）；
-        layer.create: document, name, kind（paintlayer/grouplayer）, parent（默认 root）；
-        layer.update: document, node, properties，允许 name/visible/locked/opacity(0–255)/
-        blending_mode/inherit_alpha/alpha_locked；layer.clear: document, node；
-        mask.create: document, parent, name, rects；mask.update: document, node, rects；
-        rects 每项为 [x,y,w,h,alpha]，未列区域透明；
-        paint: document, node, brush（精确预设名）, color（#RRGGBB）, size,
-        opacity（0–1，默认 1）, strokes。
-        每条 stroke 包含 kind：line 使用 from/to=[x,y]，可选 pressure_from/pressure_to；
-        rectangle/ellipse 使用 rect=[x,y,w,h]；path 使用 commands，支持
-        [M,x,y]、[L,x,y]、[C,c1x,c1y,c2x,c2y,x,y]、[Q,cx,cy,x,y]、[Z]。
-        几何和路径可选 fill=none/foreground（默认 none）。描边使用 Krita 原生笔刷。
-        """
-        return await asyncio.to_thread(bridge.call, "execute", {"operations": operations})
+    async def photocraft_inspect_document(document: str) -> Any:
+        """读取绝对 .pcraft 路径，核验原生数据并返回图层 ID、完整属性和内容摘要。"""
+        result = await asyncio.to_thread(read_document, Path(_document_path(document)))
+        return {key: value for key, value in result.items() if key != "manifest"}
 
     @server.tool(structured_output=False)
-    async def krita_preview(document: str) -> list[Any]:
-        """导出 .kra 文档预览，同时返回 PNG 绝对路径和 MCP 图片。"""
-        result = await asyncio.to_thread(bridge.call, "preview", {"document": _document_path(document)})
-        if not isinstance(result, dict) or not isinstance(result.get("path"), str):
-            raise ValueError("Krita preview 结果缺少 PNG 路径 path")
-        path = Path(result["path"])
-        if not path.is_absolute() or path.suffix.lower() != ".png":
-            raise ValueError(f"Krita preview 必须返回 PNG 绝对路径：{path}")
-        image_data = await asyncio.to_thread(path.read_bytes)
-        return [json.dumps(result, ensure_ascii=False), Image(data=image_data, format="png")]
+    async def photocraft_preview(document: str) -> list[Any]:
+        """在独立会话中打开 .pcraft 并返回原尺寸 PNG，不修改源文件。"""
+        path = Path(_document_path(document))
+        def render():
+            with renderer.session(path.parent) as session:
+                opened = session.call("doc.open", {"path": path.name})
+                result = session.call("doc.render", {"maxSide": 0})
+            if not isinstance(result, dict) or result.get("mime") != "image/png":
+                raise ValueError("PhotoCraft 未返回文档 PNG")
+            payload = base64.b64decode(result["base64"], validate=True)
+            return {"document": str(path), "width": opened["width"], "height": opened["height"]}, payload
+        info, payload = await asyncio.to_thread(render)
+        return [json.dumps(info, ensure_ascii=False), Image(data=payload, format="png")]
 
     @server.tool()
     async def project_create(project_root: str, project_id: str, name: str, paths: dict[str, str] | None = None) -> Any:
@@ -279,23 +258,23 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
     @server.tool()
     async def project_draw_component(project_root: str, expected_revision: str, component_id: str,
                                      layers: list[str] | None = None) -> Any:
-        """将已定义组件交给 Krita 原生笔刷绘制、保存重开、核验，并自动更新组件文档。
+        """将组件交给 PhotoCraft 制作候选源文件、保存重开和核验，成功后发布并更新文档。
 
         执行 spec.program_id 引用的项目 Python 程序。省略 layers 完整绘制，或提供计划节点 key 列表作局部修改。
         局部修改要求完整计划中的未选节点没有变化，实际执行后再次核对无关节点。
         源文件位于配置的 sources 目录（默认 art/ui/sources），参数快照和完整调用记录位于 .smartui/runs。
-        Krita 必须已启动。
+        PhotoCraft CLI 必须已安装；不要求桌面窗口正在运行。
         工具通过代表技术检查通过，视觉效果及用户确认须另行查看。失败尝试会记录实际错误，不自动重试。
         """
         return await asyncio.to_thread(draw_component, project_root, expected_revision, component_id, layers,
-                                        client=bridge, store=projects)
+                                        client=renderer, store=projects)
 
     @server.tool()
     async def project_save_program(project_root: str, expected_revision: str, program_id: str,
                                    name: str, description: str, source: str) -> Any:
         """保存或更新项目 Python 绘制程序，维护不可变源码版本及依赖组件状态；只检查语法，不执行。
 
-        程序实现 build(parameters, spec, component_id) 并返回包含 width/height/nodes/paint 的计划。
+        程序实现 build(parameters, spec, component_id) 并返回包含 schema_version/width/height/nodes 的计划。
         节点、图层、蒙版及画法由项目定义。完整格式见 docs/drawing-programs.md。
         plan/draw 会在本机独立 Python 进程执行该可信源码，不是安全沙箱。
         """
@@ -309,7 +288,7 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
 
     @server.tool()
     async def project_plan_component(project_root: str, component_id: str) -> Any:
-        """执行当前项目 Python 程序并返回经过校验的绘制计划，不调用 Krita。
+        """执行当前项目 Python 程序并返回经过校验的绘制计划，不启动绘图进程。
 
         使用与绘制相同的独立 Python 进程和 60 秒限制；用于检查节点结构、参数计算及批量笔触。
         """
@@ -321,7 +300,7 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
                                         reference_coordinate_size: list[StrictInt] | None = None,
                                         artifact_region: list[StrictInt] | None = None, reference_scale: StrictFloat = 1.0,
                                         artifact_scale: StrictFloat = 1.0) -> list[Any]:
-        """保存参考与指定成功运行产物的对照，返回 revision、版本证据和并排图片，无需启动 Krita。
+        """保存参考与指定成功运行产物的对照，返回 revision、版本证据和并排图片，无需启动绘图进程。
 
         region 均为 [x,y,width,height]；参考按 reference_coordinate_size 映射（省略为原图），
         artifact_region 使用完整产物 PNG 的原始像素坐标。两端 scale 默认 1，分别等比缩放，
@@ -347,7 +326,7 @@ def create_server(client: BridgeClient | None = None) -> FastMCP:
     async def project_create_visual_check(project_root: str, expected_revision: str, items: list[VisualCheckItem],
                                           background: StrictStr, columns: StrictInt = 3,
                                           grayscale: StrictBool = True) -> list[Any]:
-        """保存 1 到 16 项指定成功运行的视觉检查视图，返回彩色总览和可选灰度总览，无需启动 Krita。
+        """保存 1 到 16 项指定成功运行的视觉检查视图，返回彩色总览和可选灰度总览，无需启动绘图进程。
 
         每项用 component_id 和 run_id 指定来源，label 对应图中序号。region 为完整预览图上的
         [x,y,width,height]，省略时使用全图。scale 按原尺寸等比缩放，默认为 1。

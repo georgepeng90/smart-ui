@@ -143,10 +143,10 @@ def _mcp_visual_check(response):
 def test_stdio_visual_check_persists_and_returns_verified_overviews_across_processes(project, tmp_path):
     store, context = project
     root = context["project_root"]
-    bridge_root = tmp_path / "unused-bridge"
+    missing_cli = tmp_path / "missing-photocraft.exe"
     parameters = StdioServerParameters(
         command=sys.executable, args=["-m", "smartui_mcp"], cwd=str(Path(__file__).resolve().parents[1]),
-        env={**os.environ, "SMARTUI_BRIDGE_DIR": str(bridge_root), "SMARTUI_BRIDGE_TIMEOUT": "0.1"},
+        env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(missing_cli)},
     )
     items = [_item(), _item(label="裁切后的按钮", region=[0, 0, 4, 3], scale=2)]
     arguments = {"project_root": root, "expected_revision": context["revision"], "items": items,
@@ -178,7 +178,7 @@ def test_stdio_visual_check_persists_and_returns_verified_overviews_across_proce
             assert fetched == created
 
     asyncio.run(workflow())
-    assert not list((bridge_root / "requests").glob("*.json"))
+    assert not missing_cli.exists()
 
 
 def test_mcp_rechecks_bytes_after_project_store_verification(project, monkeypatch):

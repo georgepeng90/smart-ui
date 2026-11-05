@@ -1,146 +1,110 @@
-import concurrent.futures
-from contextlib import contextmanager
+"""验证独立 JSONL 会话、可执行文件发现及失败证据。"""
+import io
 import json
-import os
-from pathlib import Path
-import tempfile
-import threading
-import unittest
-from unittest.mock import patch
-from uuid import UUID
+import queue
+from types import SimpleNamespace
 
-from smartui_mcp.client import BridgeClient, BridgeProtocolError, BridgeRemoteError, BridgeTimeoutError
+import pytest
+from smartui_mcp.client import (PhotoCraftClient, PhotoCraftSession, PhotoCraftError,
+    PhotoCraftProtocolError, PhotoCraftRemoteError, PhotoCraftTimeoutError, SUPPORTED_VERSION)
 
+class Process:
+    def __init__(self, replies):
+        self.stdin = io.StringIO()
+        self.stdout = io.StringIO("".join(json.dumps(reply) + "\n" for reply in replies))
+    def wait(self, timeout):
+        return 0
 
-@contextmanager
-def responding_bridge(root, handle):
-    """模拟扩展原子发布响应；退出时传回后台线程错误。"""
-    stop = threading.Event()
-    errors = []
-
-    def run():
-        seen = set()
-        try:
-            while not stop.is_set():
-                for path in (root / "requests").glob("*.json"):
-                    if path.name in seen:
-                        continue
-                    seen.add(path.name)
-                    request = json.loads(path.read_text(encoding="utf-8"))
-                    response = handle(request)
-                    response_dir = root / "responses"
-                    response_dir.mkdir(parents=True, exist_ok=True)
-                    temporary = response_dir / (path.stem + ".tmp")
-                    temporary.write_text(json.dumps(response, ensure_ascii=False), encoding="utf-8")
-                    os.replace(temporary, response_dir / path.name)
-                stop.wait(0.002)
-        except Exception as error:
-            errors.append(error)
-
-    thread = threading.Thread(target=run)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join(timeout=2)
-        if thread.is_alive():
-            raise AssertionError("模拟 Krita 线程未结束")
-        if errors:
-            raise errors[0]
+@pytest.fixture
+def fake_session(tmp_path, monkeypatch):
+    sessions = []
+    def create(replies):
+        process = Process(replies)
+        monkeypatch.setattr("smartui_mcp.client.subprocess.Popen", lambda *a, **k: process)
+        session = PhotoCraftSession(SimpleNamespace(timeout=.02, cli_path=tmp_path / "cli.exe"), tmp_path, trace=[])
+        sessions.append(session)
+        return session, process
+    yield create
+    for session in sessions:
+        session.close()
 
 
-class BridgeClientTests(unittest.TestCase):
-    def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name).resolve()
-        self.client = BridgeClient(self.root, timeout=1)
+def test_sequential_ids_and_trace(fake_session):
+    s, p = fake_session([{"id": 1, "ok": True, "result": {"a": 1}}, {"id": 2, "ok": True, "result": []}])
+    assert s.call("doc.inspect") == {"a": 1}
+    assert s.call("engine.commands", {"filter": "shape"}) == []
+    requests = [json.loads(line) for line in p.stdin.getvalue().splitlines()]
+    assert [r["id"] for r in requests] == [1, 2]
+    assert s.trace[1]["response"]["result"] == []
+    assert s.stderr_path.is_file()
 
-    def test_request_is_complete_before_atomic_publication(self):
-        replace = os.replace
-        publications = []
+@pytest.mark.parametrize("response", [
+    {"id": 2, "ok": True, "result": {}}, {"id": True, "ok": True, "result": {}},
+    {"id": 1, "ok": 1, "result": {}}, {"id": 1, "ok": True}])
+def test_invalid_response_poisoned_without_retry(fake_session, response):
+    s, p = fake_session([response])
+    with pytest.raises(PhotoCraftProtocolError):
+        s.call("doc.inspect")
+    with pytest.raises(PhotoCraftError):
+        s.call("doc.inspect")
+    assert len(p.stdin.getvalue().splitlines()) == 1
+    assert s.trace[0]["error"]
 
-        def observe(source, destination):
-            if Path(destination).parent.name == "requests":
-                self.assertEqual(Path(source).suffix, ".tmp")
-                self.assertFalse(Path(destination).exists())
-                request = json.loads(Path(source).read_text(encoding="utf-8"))
-                self.assertEqual(request["id"], Path(destination).stem)
-                self.assertEqual(str(UUID(request["id"])), request["id"])
-                publications.append(request)
-            return replace(source, destination)
-
-        with responding_bridge(self.root, lambda r: {"id": r["id"], "ok": True, "result": ["原生笔刷"]}):
-            with patch("smartui_mcp.client.os.replace", side_effect=observe):
-                self.assertEqual(self.client.call("brushes", {"query": "笔刷"}), ["原生笔刷"])
-        self.assertEqual(len(publications), 1)
-        self.assertEqual(publications[0]["method"], "brushes")
-        self.assertEqual(publications[0]["params"], {"query": "笔刷"})
-        self.assertEqual(list((self.root / "requests").glob("*.tmp")), [])
-
-    def test_remote_error_preserves_batch_details_and_result_file(self):
-        details = {"type": "ValueError", "message": "缺少笔刷：测试", "operation_index": 2, "completed": [{"op": "layer.create", "node": "uuid"}]}
-        with responding_bridge(self.root, lambda r: {"id": r["id"], "ok": False, "error": details}):
-            with self.assertRaises(BridgeRemoteError) as caught:
-                self.client.call("execute", {"operations": [{"op": "paint"}]})
-        error = caught.exception
-        self.assertEqual(error.error, details)
-        self.assertTrue(error.response_path.exists())
-        self.assertIn(error.request_id, str(error))
-        self.assertIn(str(error.response_path), str(error))
-        self.assertIn('"operation_index": 2', str(error))
-        self.assertIn('"completed"', str(error))
-
-    def test_timeout_submits_once_and_keeps_original_request(self):
-        client = BridgeClient(self.root, timeout=0.02)
-        with self.assertRaises(BridgeTimeoutError) as caught:
-            client.call("execute", {"operations": [{"op": "document.save"}]})
-        error = caught.exception
-        requests = list((self.root / "requests").glob("*.json"))
-        self.assertEqual(len(requests), 1)
-        self.assertEqual(requests[0].stem, error.request_id)
-        self.assertEqual(error.response_path, self.root / "responses" / requests[0].name)
-        self.assertIn("未自动重试", str(error))
-        self.assertIn(str(error.response_path), str(error))
-
-    def test_malformed_response_is_not_treated_as_success(self):
-        invalid = [
-            lambda r: {"id": "wrong", "ok": True, "result": {}},
-            lambda r: {"id": r["id"], "ok": 1, "result": {}},
-            lambda r: {"id": r["id"], "ok": True},
-            lambda r: {"id": r["id"], "ok": False, "error": "失败"},
-        ]
-        for response in invalid:
-            with self.subTest(response=response):
-                with responding_bridge(self.root, response):
-                    with self.assertRaises(BridgeProtocolError):
-                        self.client.call("status")
-
-    def test_concurrent_calls_use_distinct_requests(self):
-        with responding_bridge(self.root, lambda r: {"id": r["id"], "ok": True, "result": r["params"]["number"]}):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-                results = list(pool.map(lambda n: self.client.call("inspect", {"number": n}), range(8)))
-        self.assertEqual(results, list(range(8)))
-        self.assertEqual(len(list((self.root / "requests").glob("*.json"))), 8)
-
-    def test_invalid_timeout_and_json_do_not_submit(self):
-        for timeout in [0, -1, float("nan"), float("inf")]:
-            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
-                BridgeClient(self.root, timeout=timeout)
-        with self.assertRaises(ValueError):
-            self.client.call("execute", {"opacity": float("nan")})
-        self.assertFalse((self.root / "requests").exists())
-
-    def test_environment_configuration(self):
-        with patch.dict(os.environ, {"SMARTUI_BRIDGE_DIR": str(self.root), "SMARTUI_BRIDGE_TIMEOUT": "2.5"}):
-            client = BridgeClient()
-        self.assertEqual(client.bridge_dir, self.root)
-        self.assertEqual(client.timeout, 2.5)
-        with patch.dict(os.environ, {"SMARTUI_BRIDGE_TIMEOUT": "invalid"}):
-            with self.assertRaisesRegex(ValueError, "SMARTUI_BRIDGE_TIMEOUT"):
-                BridgeClient(self.root)
+@pytest.mark.parametrize("response", [
+    {"id": 1, "ok": False, "error": "missing resource"},
+    {"id": 1, "ok": True, "result": {"warnings": ["missing font"]}},
+    {"id": 1, "ok": True, "result": {"completed": 1, "failed": 1, "results": []}}])
+def test_failures_preserve_whole_response(fake_session, response):
+    s, p = fake_session([response])
+    with pytest.raises(PhotoCraftRemoteError) as caught:
+        s.call("batch")
+    assert caught.value.response == response
+    assert caught.value.request_id == 1
+    assert caught.value.stderr_path == s.stderr_path
+    assert len(p.stdin.getvalue().splitlines()) == 1
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_timeout_retains_request_and_disables_reuse(fake_session):
+    s, p = fake_session([])
+    s._reader.join(timeout=1)
+    s._replies = queue.Queue()
+    with pytest.raises(PhotoCraftTimeoutError, match="未自动重试"):
+        s.call("engine.execute", {"command": "shape.create"})
+    with pytest.raises(PhotoCraftError):
+        s.call("doc.inspect")
+    assert len(p.stdin.getvalue().splitlines()) == 1
+    assert s.trace[0]["request"]["method"] == "engine.execute"
+
+
+def test_missing_executable_is_lazy_and_explicit(tmp_path, monkeypatch):
+    monkeypatch.setenv("SMARTUI_PHOTOCRAFT_CLI", str(tmp_path / "absent.exe"))
+    client = PhotoCraftClient()
+    with pytest.raises(FileNotFoundError, match="不存在"):
+        client.status()
+
+
+def test_default_installed_path_and_hash(tmp_path, monkeypatch):
+    monkeypatch.delenv("SMARTUI_PHOTOCRAFT_CLI", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    exe = tmp_path / "Programs/ArtCraft/PhotoCraft/photocraft-cli.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"installed")
+    monkeypatch.setattr("smartui_mcp.client.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=SUPPORTED_VERSION + "\n", stderr=""))
+    status = PhotoCraftClient().status()
+    assert status["cli_path"] == str(exe.resolve())
+    assert len(status["sha256"]) == 64
+    monkeypatch.setattr("smartui_mcp.client.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="photocraft-cli 0.20.2", stderr=""))
+    with pytest.raises(PhotoCraftError, match="不支持"):
+        PhotoCraftClient().status()
+
+
+def test_invalid_timeout_or_params_do_not_submit(fake_session):
+    for timeout in (0, -1, float("nan"), float("inf"), True):
+        with pytest.raises(ValueError):
+            PhotoCraftClient(timeout=timeout)
+    s, p = fake_session([])
+    with pytest.raises(ValueError):
+        s.call("edit", {"x": float("nan")})
+    with pytest.raises(ValueError):
+        s.call("edit", [])
+    assert p.stdin.getvalue() == ""

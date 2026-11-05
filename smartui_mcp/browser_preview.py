@@ -68,6 +68,8 @@ window.smartuiReady = (async () => {
     } else {
       element.textContent = node.text;
       Object.assign(element.style, {
+        // 描边沿字形边缘向两侧展开；内边距让左、右对齐也保留完整描边。
+        padding: `${node.stroke_width / 2}px`,
         fontFamily: node.font_family, fontSize: `${node.font_size}px`,
         lineHeight: `${node.line_height}px`, textAlign: node.align,
         whiteSpace: node.wrap ? 'pre-wrap' : 'pre', overflowWrap: node.wrap ? 'anywhere' : 'normal',

@@ -7,19 +7,19 @@ import shutil
 def main():
     root = Path(__file__).resolve().parents[1]
     distribution_root = root / "dist"
-    target = distribution_root / "smartui-krita"
+    target = distribution_root / "smartui-photocraft"
     # 删除范围只允许当前项目的这个构建目录，拒绝指向外部的链接。
-    if distribution_root.resolve() != root / "dist" or target.resolve() != root / "dist" / "smartui-krita":
+    if distribution_root.resolve() != root / "dist" or target.resolve() != root / "dist" / "smartui-photocraft":
         raise RuntimeError("构建目录解析到预期项目之外：" + str(target.resolve()))
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True)
     files = ["plugin.json", "mcp.json", "pyproject.toml", "uv.lock", "README.md",
-             "docs/bridge-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
+             "docs/photocraft-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
              "docs/toolchain-roadmap.md", "docs/style-reproduction-validation.md", "docs/asset-geometry.md",
-             "scripts/install_krita.py", "scripts/migrate_project_layout.py", "krita_plugin/smartui_bridge.desktop",
-             "examples/drawing-programs/semantic_palette.py"]
-    for directory in ("smartui_mcp", "krita_plugin/smartui_bridge"):
+             "examples/drawing-programs/semantic_palette.py",
+             "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py"]
+    for directory in ("smartui_mcp",):
         files += [str(p.relative_to(root)) for p in (root / directory).rglob("*.py")]
     files += [str(p.relative_to(root)) for p in (root / "skills").rglob("*.md")]
     for relative in sorted(files):

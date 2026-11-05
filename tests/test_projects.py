@@ -30,7 +30,7 @@ def successful_run(project, tmp_path, run_id="run-1", status="drawn"):
            "style_version": project["data"]["style"]["version"],
            "program_id": program["id"], "program_version": program["version"], "program_sha256": program["sha256"],
            "spec_sha256": spec_sha256(project["data"]["components"]["primary-button"]["spec"])}
-    for field, filename in (("document", "button.kra"), ("preview", "button.png"),
+    for field, filename in (("document", "button.pcraft"), ("preview", "button.png"),
                             ("operations_path", "operations.json"), ("style_snapshot_path", "style.json")):
         path = tmp_path / filename
         path.write_bytes(f"实际产物 {field}".encode())
@@ -39,7 +39,11 @@ def successful_run(project, tmp_path, run_id="run-1", status="drawn"):
     source.write_bytes((Path(project["project_root"]) / program["source_path"]).read_bytes())
     plan = tmp_path / "plan.json"
     plan.write_text('{"operations": []}', encoding="utf-8")
-    run.update(program_snapshot_path=str(source), plan_path=str(plan))
+    saved = tmp_path / "source-snapshot.pcraft"
+    saved.write_bytes(Path(run["document"]).read_bytes())
+    run.update(program_snapshot_path=str(source), plan_path=str(plan), source_snapshot_path=str(saved),
+               backend={"name": "photocraft", "version": "synthetic metadata fixture", "sha256": "0" * 64,
+                        "cli_path": str(tmp_path / "photocraft-cli")})
     if status == "verified":
         run["verification"] = {"reopened": True, "stable_node_ids": True,
                                "stable_pixels": True, "stable_properties": True}
@@ -140,16 +144,16 @@ def test_failed_run_keeps_last_success_but_requires_review(store, project, tmp_p
     project = define(store, project)
     project = record(store, project, successful_run(project, tmp_path))
     original = project["data"]["components"]["primary-button"]["latest_run"]
-    project = record(store, project, {"run_id": "run-failed", "status": "failed", "error": "Krita 绘制失败"})
+    project = record(store, project, {"run_id": "run-failed", "status": "failed", "error": "PhotoCraft 绘制失败"})
     component = project["data"]["components"]["primary-button"]
     assert component["latest_run"] == original
-    assert component["runs"][-1]["error"] == "Krita 绘制失败"
+    assert component["runs"][-1]["error"] == "PhotoCraft 绘制失败"
     assert component["needs_review"]
     from pathlib import Path
     document = (Path(project["project_root"]) / "docs/ui/components.md").read_text(encoding="utf-8")
     assert "最近尝试失败，需要重新检查" in document
     assert "不能据此确认当前磁盘文件仍然有效" in document
-    assert "Krita 绘制失败" in document
+    assert "PhotoCraft 绘制失败" in document
 
 
 @pytest.mark.parametrize("field", ["document", "preview", "operations_path", "style_snapshot_path", "program_snapshot_path", "plan_path"])
@@ -244,7 +248,7 @@ def test_markdown_summarizes_rules_references_layers_and_history(store, project,
     project = store.update_style(project["project_root"], project["revision"], "项目风格", [rule], {"radius": 8}, ["sample"])
     project = define(store, project)
     run = successful_run(project, tmp_path, status="verified")
-    run["layer_ids"] = {f"图层 {i}": f"layer-uuid-{i}" for i in range(7)}
+    run["layer_ids"] = {f"图层 {i}": i + 1 for i in range(7)}
     run["inspection"]["before"]["large_debug_payload"] = "不应复制到文档的完整检查对象"
     project = record(store, project, run)
     root = Path(project["project_root"])
@@ -263,10 +267,10 @@ def test_markdown_summarizes_rules_references_layers_and_history(store, project,
     assert "实际产物程序版本：button，版本 1" in components
     assert "本次执行源码" in components
     assert "本次执行计划" in components
-    assert "[button.kra](<" in components
+    assert "[button.pcraft](<" in components
     assert "[button.png](<" in components
     for index in range(7):
-        assert f"| 图层 {index} | layer-uuid-{index} |" in components
+        assert f"| 图层 {index} | {index + 1} |" in components
     assert "像素保持一致：通过" in components
     assert "| run-1 | 工具检查通过 | 1 | — |" in components
     assert "不应复制到文档的完整检查对象" not in components

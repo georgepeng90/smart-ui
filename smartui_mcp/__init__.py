@@ -1,5 +1,1 @@
-"""SmartUI 的 Krita 本地绘制接口。"""
-
-from .client import BridgeClient, BridgeError, BridgeProtocolError, BridgeRemoteError, BridgeTimeoutError
-
-__all__ = ["BridgeClient", "BridgeError", "BridgeProtocolError", "BridgeRemoteError", "BridgeTimeoutError"]
+"""SmartUI 项目制作、PhotoCraft 执行与页面交付工具。"""

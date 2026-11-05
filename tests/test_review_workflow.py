@@ -1,4 +1,4 @@
-"""验证持久化对照和偏差处理流程，使用合成绘制记录代替 Krita。"""
+"""验证持久化对照和偏差处理流程，使用合成绘制记录代替 PhotoCraft。"""
 
 import asyncio
 import base64
@@ -22,9 +22,8 @@ from smartui_mcp.server import create_server
 
 PROGRAM = '''def build(parameters, spec, component_id):
     return {
-        "width": spec["width"], "height": spec["height"],
-        "nodes": [{"key": "outline", "name": "描边", "kind": "paintlayer", "parent": "root"}],
-        "paint": [],
+        "schema_version": 1, "width": spec["width"], "height": spec["height"],
+        "nodes": [{"key": "outline", "name": "描边", "kind": "pixel", "parent": "root", "strokes": []}],
     }
 '''
 RULE = {"id": "outline-width", "description": "描边保持均匀", "reference_id": "guide"}
@@ -46,7 +45,7 @@ def record_sample_run(store, context, run_id, color):
     spec = data["components"]["sample"]["spec"]
     program = store.get_program(root, spec["program_id"])
     plan = plan_component(root, "sample", store=store)["plan"]
-    document, preview, snapshot = (directory / name for name in ("sample.kra", "preview.png", "program.py"))
+    document, preview, snapshot = (directory / name for name in ("sample.pcraft", "preview.png", "program.py"))
     document.write_bytes(b"synthetic draw record")
     with Image.new("RGBA", (spec["width"], spec["height"]), color) as image:
         image.save(preview)
@@ -61,6 +60,11 @@ def record_sample_run(store, context, run_id, color):
             "style": data["style"], "spec": spec, "component_id": "sample",
         }),
     }
+    saved = directory / "output.pcraft"
+    saved.write_bytes(document.read_bytes())
+    run["source_snapshot_path"] = str(saved)
+    run["backend"] = {"name": "photocraft", "version": "synthetic bookkeeping fixture", "sha256": "0" * 64,
+                      "cli_path": str(directory / "photocraft-cli")}
     return store.record_run(root, context["revision"], "sample", run)
 
 
@@ -255,10 +259,10 @@ async def call_tool(session, name, *, image=False, **arguments):
 def test_stdio_review_tools_persist_feedback_across_processes(project, tmp_path):
     store, context = project
     root = context["project_root"]
-    bridge_root = tmp_path / "unused-bridge"
+    missing_cli = tmp_path / "not-installed-photocraft.exe"
     parameters = StdioServerParameters(
         command=sys.executable, args=["-m", "smartui_mcp"], cwd=str(Path(__file__).resolve().parents[1]),
-        env={**os.environ, "SMARTUI_BRIDGE_DIR": str(bridge_root), "SMARTUI_BRIDGE_TIMEOUT": "0.1"},
+        env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(missing_cli)},
     )
 
     async def workflow():
@@ -311,4 +315,4 @@ def test_stdio_review_tools_persist_feedback_across_processes(project, tmp_path)
             assert fetched["comparison"] == second["comparison"]
 
     asyncio.run(workflow())
-    assert not list((bridge_root / "requests").glob("*.json"))
+    assert not missing_cli.exists()

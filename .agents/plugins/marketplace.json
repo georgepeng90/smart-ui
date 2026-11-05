@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "smartui-krita",
+      "name": "smartui-photocraft",
       "source": {
         "source": "local",
-        "path": "./dist/smartui-krita"
+        "path": "./dist/smartui-photocraft"
       },
       "policy": {
         "installation": "AVAILABLE",

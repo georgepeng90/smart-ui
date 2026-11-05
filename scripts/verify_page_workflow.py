@@ -1,4 +1,4 @@
-"""验证正式导出、资产选用、页面构建和历史快照；不执行或验收 Krita。"""
+"""验证正式导出、资产选用、页面构建和历史快照；不执行或验收 PhotoCraft。"""
 
 import argparse
 import hashlib
@@ -16,14 +16,13 @@ from smartui_mcp.projects import ProjectStore, spec_sha256
 
 
 SCOPE = ("本脚本用 Pillow 合成组件 PNG，并登记 status=drawn 的模拟运行。"
-         "模拟 .kra 文件只是明确标记的占位文本，不能用 Krita 打开。"
+         "模拟 .pcraft 文件只是明确标记的占位文本，不能用 PhotoCraft 打开。"
          "本次仅验证通用工具的导出、选用、浏览器页面及历史快照，"
-         "不验证 Krita 绘制、源文件重开或美术质量。")
+         "不验证 PhotoCraft 绘制、源文件重开或美术质量。")
 PROGRAM = '''def build(parameters, spec, component_id):
-    # 这是工具链验证用的空绘制计划；合成 PNG 由验证脚本生成，不调用 Krita。
-    return {"width": spec["width"], "height": spec["height"],
-            "nodes": [{"key": "fixture", "name": "模拟来源", "kind": "paintlayer", "parent": "root"}],
-            "paint": []}
+    # 这是工具链验证用的空绘制计划；合成 PNG 由验证脚本生成，不调用 PhotoCraft。
+    return {"schema_version": 1, "width": spec["width"], "height": spec["height"],
+            "nodes": [{"key": "fixture", "name": "模拟来源", "kind": "pixel", "parent": "root", "strokes": []}]}
 '''
 
 
@@ -75,16 +74,17 @@ def _record_simulated_run(store, context, run_id, green):
     directory.mkdir(parents=True, exist_ok=False)
     component = context["data"]["components"]["fixture-sheet"]
     program = store.get_program(str(root), component["spec"]["program_id"])
-    document, preview, source = (directory / name for name in ("SIMULATED-NOT-A-KRITA-DOCUMENT.kra", "preview.png", "program.py"))
-    document.write_text("SMARTUI SYNTHETIC FIXTURE; NOT A KRITA DOCUMENT\n" + SCOPE, encoding="utf-8")
+    document, preview, source = (directory / name for name in ("SIMULATED-NOT-A-PHOTOCRAFT-DOCUMENT.pcraft", "preview.png", "program.py"))
+    document.write_text("SMARTUI SYNTHETIC FIXTURE; NOT A PHOTOCRAFT DOCUMENT\n" + SCOPE, encoding="utf-8")
     _preview(preview, green)
     source.write_text(program["source"], encoding="utf-8", newline="\n")
-    plan = {"width": 660, "height": 330,
-            "nodes": [{"key": "fixture", "name": "模拟来源", "kind": "paintlayer", "parent": "root"}], "paint": []}
+    plan = {"schema_version": 1, "width": 660, "height": 330,
+            "nodes": [{"key": "fixture", "name": "模拟来源", "kind": "pixel", "parent": "root", "strokes": []}]}
     run = {"run_id": run_id, "status": "drawn", "style_version": context["data"]["style"]["version"],
            "spec_sha256": spec_sha256(component["spec"]), "document": str(document), "preview": str(preview),
            "program_id": program["id"], "program_version": program["version"], "program_sha256": program["sha256"],
-           "program_snapshot_path": str(source), "simulation_notice": SCOPE,
+           "program_snapshot_path": str(source), "source_snapshot_path": str(document), "simulation_notice": SCOPE,
+           "backend": {"name": "photocraft", "version": "SYNTHETIC FIXTURE; NO BACKEND EXECUTED", "sha256": "0" * 64, "cli_path": str(directory / "NO-CLI-WAS-EXECUTED")},
            "operations_path": _write_json(directory / "operations.json", []),
            "plan_path": _write_json(directory / "plan.json", plan),
            "style_snapshot_path": _write_json(directory / "style.json", {
@@ -126,7 +126,7 @@ def _nodes(font):
             text("fixed-label", "固定版本\n保持蓝色", 120, 378, 216, 60, 20, 28, "#FFFFFF"),
             text("selected-label", "跟随选用\n显式重建", 424, 378, 216, 60, 20, 28, "#FFFFFF"),
             text("page-note", "HTML 与 PNG 来自同一个浏览器页面\n中文字体已嵌入，布局可离线打开", 88, 494, 584, 72, 18, 28, "#52647B"),
-            text("scope-note", "素材与绘制记录均为脚本合成，仅验证通用工具流程。\n本次不验证 Krita 绘制、源文件重开或美术质量。", 56, 628, 648, 52, 14, 22, "#9EB0CA")]
+            text("scope-note", "素材与绘制记录均为脚本合成，仅验证通用工具流程。\n本次不验证 PhotoCraft 绘制、源文件重开或美术质量。", 56, 628, 648, 52, 14, 22, "#9EB0CA")]
 
 
 def run(output_root, font_path):

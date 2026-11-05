@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Service
-ServiceTypes=Krita/PythonPlugin
-X-KDE-Library=smartui_bridge
-X-Python-2-Compatible=false
-Name=SmartUI 本地绘制接口
-Comment=通过本地批量命令调用 Krita 原生笔刷、图层和蒙版

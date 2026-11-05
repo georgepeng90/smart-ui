@@ -5,13 +5,13 @@ description: 查看项目视觉参考，区分可见特征与制作假设，归�
 
 # 从参考中提取可执行的项目规则
 
-用 SmartUI 项目 MCP 工具保存参考依据与风格，而不是只在聊天中留下结论。调用参数见[项目工具说明](../../docs/project-tools.md)。编写项目绘制程序时读[程序约定](../../docs/drawing-programs.md)；实际 Krita 制作与修改使用 [krita-drawing Skill](../krita-drawing/SKILL.md)。
+用 SmartUI 项目 MCP 工具保存参考依据与风格，而不是只在聊天中留下结论。调用参数见[项目工具说明](../../docs/project-tools.md)。编写项目绘制程序时读[程序约定](../../docs/drawing-programs.md)；实际 PhotoCraft 制作与修改使用 [photocraft-drawing Skill](../photocraft-drawing/SKILL.md)。
 
 已有资产的页面排版使用 [page-composition Skill](../page-composition/SKILL.md)。反馈先定位到组件外观或状态、资产导出、页面布局、文字或运行时适配；布局变化不触发基础组件重绘。
 
 ## 看图与记录依据
 
-`project_root` 是业务工程根目录的绝对路径。创建时可通过 `paths` 局部指定工程内相对目录，默认文档为 `docs/ui`、参考为 `docs/ui/references`、程序为 `art/ui/programs`、源文件为 `art/ui/sources`。工程外参考登记时会复制入参考目录。状态中的工程内文件引用保存为工程相对 POSIX 路径。保留 `.smartui` 状态和制作记录，缓存、锁及临时文件按生成的忽略规则处理。需要导入数据目录时，按[数据导入与目录迁移](../../docs/project-tools.md#数据导入与目录迁移)先预检，再显式执行。
+`project_root` 是业务工程根目录的绝对路径。创建时可通过 `paths` 局部指定工程内相对目录，默认文档为 `docs/ui`、参考为 `docs/ui/references`、程序为 `art/ui/programs`、源文件为 `art/ui/sources`。工程外参考登记时会复制入参考目录。状态中的工程内文件引用保存为工程相对 POSIX 路径。保留 `.smartui` 状态和制作记录，缓存、锁及临时文件按生成的忽略规则处理。
 
 已有项目先 `project_context`，查看已有规则、组件规格和预览，避免重复建立矛盾规范。新项目先 `project_create`。用 `project_add_reference` 登记只读原图，用 `project_inspect_reference` 查看整图、关键区域和需要的色块。坐标相对完整参考，按预览测量时传 coordinate_size。
 
@@ -29,13 +29,13 @@ description: 查看项目视觉参考，区分可见特征与制作假设，归�
 
 ## 区分基础 UI 与 ICON 的风格要求
 
-基础 UI 与 ICON（图标）共享适用的参考依据，但分别描述制作要求。基础 UI 记录几何、边厚、伸缩和状态；ICON 记录内容语义、造型、描边、配色、明暗和细节密度，以及目标显示尺寸、使用背景、透明背景需求和留白。不要将面板的圆角、九宫格或拉伸规则直接套到 ICON，也不要因参考含有 ICON 就要求为它编写 Krita 绘制程序。
+基础 UI 与 ICON（图标）共享适用的参考依据，但分别描述制作要求。基础 UI 记录几何、边厚、伸缩和状态；ICON 记录内容语义、造型、描边、配色、明暗和细节密度，以及目标显示尺寸、使用背景、透明背景需求和留白。不要将面板的圆角、九宫格或拉伸规则直接套到 ICON，也不要因参考含有 ICON 就要求为它编写 PhotoCraft 绘制程序。
 
 ICON 图像采用独立的宿主生图或图像编辑流程。SmartUI 不内置生图后端；登记真实产物后，可查看版本、明确选用并建立固定坐标的静态 UI 组合。检查时同时查看单图和实际尺寸的组合，关注辨识度、视觉重心及与文字、容器的关系。布局调整复用选用图像；需要改图时创建新版本。占位可以验证布局，不能代替完整美术效果验收。工具字段与限制见[独立图像资产与静态组合预览](../../docs/project-tools.md#独立图像资产与静态组合预览)，实际操作见[ICON 资产 Skill](../icon-assets/SKILL.md)。
 
 ## 维护项目文档与校准
 
-用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。说明规则适用于基础 UI、ICON 还是两者，参数按实际用途组织，不强加固定色板、圆角或高光字段。需要通过 Krita 制作的组件用 `project_define_component` 保存完整规格，其中 program_id 引用已保存的程序；定义规格不表示已经生成资产。ICON 占位和独立生成图像不登记为待绘制组件。
+用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。说明规则适用于基础 UI、ICON 还是两者，参数按实际用途组织，不强加固定色板、圆角或高光字段。需要通过 PhotoCraft 制作的组件用 `project_define_component` 保存完整规格，其中 program_id 引用已保存的程序；定义规格不表示已经生成资产。ICON 占位和独立生成图像不登记为待绘制组件。
 
 每次写入用最新 revision，冲突时重新读取核对。默认的 `docs/ui/style.md` 和 `docs/ui/components.md` 由 MCP 根据 `.smartui/project.json` 生成，不直接手改受管 Markdown 或摘要。
 

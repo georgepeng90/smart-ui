@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartui-mcp"
-version = "0.8.0"
-description = "通过本地文件队列控制 Krita 的 MCP 服务"
+version = "0.9.0"
+description = "使用 PhotoCraft 制作可编辑组件和组合页面的 MCP 服务"
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.30,<2",
     "Pillow>=11",
+    "blake3>=1,<2",
+    "zstandard>=0.23,<1",
     "pydantic>=2,<3",
     "fonttools>=4,<5",
     "playwright>=1.58,<2",

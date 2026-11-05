@@ -23,10 +23,6 @@ __pycache__/
 /.serena/
 **/.smartui/cache/
 **/.smartui/project.lock
-**/.smartui/migration-backups/
-
-# Krita 自动备份
-*.kra~
 
 # 本地环境配置与运行日志；示例配置允许纳入版本管理
 .env

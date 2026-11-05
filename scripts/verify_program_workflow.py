@@ -1,93 +1,84 @@
-"""在已迁移的 SlimeBlock 项目上验证通用程序、依赖状态和任意节点局部修改。"""
+"""在正常安装的 PhotoCraft 中验证创建、局部更新、正式导出和页面构建。"""
 
 import argparse
-import asyncio
 import hashlib
 import json
 from pathlib import Path
+import runpy
 import sys
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from smartui_mcp.client import PhotoCraftClient
+from smartui_mcp.pipeline import draw_component, plan_component
+from smartui_mcp.projects import ProjectStore
 
 
-async def run(project_root):
-    report = {"status": "running", "calls": []}
-    path = project_root / ".smartui/integration/project-program-report.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    common = {"project_root": str(project_root)}
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def run(output_root):
+    if not output_root.is_absolute():
+        raise ValueError("--output-root 必须是绝对路径")
+    if output_root.exists():
+        raise FileExistsError(f"验证只创建新项目，拒绝覆盖：{output_root}")
+    client = PhotoCraftClient()
+    backend = client.status()
+    output_root.mkdir(parents=True, exist_ok=False)
+    report_path = output_root / "report.json"
+    report = {"status": "running", "backend": backend,
+              "scope": "真实原生制作及通用资产页面链路；不代替用户美术确认"}
     try:
-        async with stdio_client(StdioServerParameters(command=sys.executable, args=["-m", "smartui_mcp"], cwd=str(ROOT))) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                assert len((await session.list_tools()).tools) == 15
-
-                async def call(tool_name, **arguments):
-                    result = await session.call_tool(tool_name, {**common, **arguments})
-                    if result.isError:
-                        raise RuntimeError(result.content[0].text)
-                    value = json.loads(result.content[0].text)
-                    report["calls"].append({"tool": tool_name, "result": value})
-                    return value
-
-                ctx = await call("project_context")
-                buttons = [key for key, value in ctx["components"].items() if value["spec"]["program_id"] == "slimeblock.buttons"]
-                for key in buttons:
-                    if ctx["components"][key]["needs_review"]:
-                        await call("project_draw_component", expected_revision=ctx["revision"], component_id=key)
-                        ctx = await call("project_context")
-                hashes = {key: hashlib.sha256(Path(ctx["components"][key]["latest_run"]["document"]).read_bytes()).hexdigest() for key in buttons}
-                source = (ROOT / "examples/drawing-programs/radial_badge.py").read_text(encoding="utf-8")
-                ctx = await call("project_save_program", expected_revision=ctx["revision"], program_id="slimeblock.badge",
-                                 name="圆形徽章绘制程序", description="项目定义圆盘、循环条纹、蒙版和星形，用于验证任意结构", source=source)
-                spec = {"program_id": "slimeblock.badge", "size": 192, "clip_width": 96,
-                        "face": "#8CCC47", "edge": "#4B6818", "shine": "#FDF0AF"}
-                component_id = "badge.star.program-check"
-                ctx = await call("project_define_component", expected_revision=ctx["revision"], component_id=component_id,
-                                 name="通用程序验证用圆形徽章", spec=spec)
-                plan = await call("project_plan_component", component_id=component_id)
-                assert len(plan["plan"]["nodes"]) == 4
-                assert len(plan["plan"]["paint"][2]["strokes"]) == 16
-                first = await call("project_draw_component", expected_revision=ctx["revision"], component_id=component_id)
-                ctx = await call("project_context")
-                original_ids = ctx["components"][component_id]["latest_run"]["layer_ids"]
-                updated_source = source.replace('"opacity": 0.35', '"opacity": 0.6')
-                assert updated_source != source
-                ctx = await call("project_save_program", expected_revision=ctx["revision"], program_id="slimeblock.badge",
-                                 name="圆形徽章绘制程序", description="提高条纹不透明度，其他绘制逻辑保持不变", source=updated_source)
-                assert ctx["components"][component_id]["needs_review"]
-                assert all(not ctx["components"][key]["needs_review"] for key in buttons)
-                assert ctx["components"][component_id]["latest_run"]["program_version"] == first["program_version"]
-                edited = await call("project_draw_component", expected_revision=ctx["revision"], component_id=component_id, layers=["stripes"])
-                assert edited["verification"]["unchanged_other_nodes"] and edited["verification"]["target_pixels_changed"]
-                assert edited["program_version"] == first["program_version"] + 1
-                ctx = await call("project_context")
-                spec["clip_width"] = 64
-                ctx = await call("project_define_component", expected_revision=ctx["revision"], component_id=component_id,
-                                 name="通用程序验证用圆形徽章", spec=spec)
-                mask = await call("project_draw_component", expected_revision=ctx["revision"], component_id=component_id, layers=["clip"])
-                assert mask["verification"]["unchanged_other_nodes"] and mask["verification"]["target_pixels_changed"]
-                ctx = await call("project_context")
-                assert ctx["components"][component_id]["latest_run"]["layer_ids"] == original_ids
-                assert all(not value["needs_review"] for value in ctx["components"].values())
-                for key, digest in hashes.items():
-                    assert hashlib.sha256(Path(ctx["components"][key]["latest_run"]["document"]).read_bytes()).hexdigest() == digest
-                report.update(status="passed", checks={"tools": 15, "custom_program_nodes": 4, "loop_strokes": 16,
-                    "program_version_marks_only_dependents": True, "program_update_local_edit": True,
-                    "mask_local_edit": True, "other_assets_unchanged": True, "same_source_and_node_ids": True},
-                    preview=mask["preview"], document=mask["document"], revision=ctx["revision"])
+        store = ProjectStore()
+        root = str(output_root)
+        ctx = store.create(root, "native-workflow-verification", "PhotoCraft 通用工作流验证")
+        example_path = ROOT / "examples/drawing-programs/semantic_palette.py"
+        parameters = runpy.run_path(str(example_path))["example_parameters"]()
+        ctx = store.update_style(root, ctx["revision"], "通用配色及状态验证", [], parameters, [])
+        ctx = store.save_program(root, ctx["revision"], "semantic-palette", "通用状态程序",
+                                 "验证原生形状、共享颜色和局部更新", example_path.read_text(encoding="utf-8"))
+        spec = {"program_id": "semantic-palette", "theme": "lagoon", "state": "available", "width": 200, "height": 64}
+        ctx = store.define_component(root, ctx["revision"], "action", "操作背景", spec)
+        report["plan"] = plan_component(root, "action", store=store)
+        first = draw_component(root, ctx["revision"], "action", client=client, store=store)
+        report["created"] = first
+        original_png = hashlib.sha256(Path(first["preview"]).read_bytes()).hexdigest()
+        ctx = store.context(root)
+        parameters["themes"]["lagoon"]["action"] = "#408B70"
+        ctx = store.update_style(root, ctx["revision"], "通用配色及状态验证", [], parameters, [])
+        edited = draw_component(root, ctx["revision"], "action", layers=["surface"], client=client, store=store)
+        report["edited"] = edited
+        require(edited["verification"]["unchanged_other_nodes"], "局部更新影响了未选节点")
+        require(edited["verification"]["target_content_changed"], "目标节点未产生实际变化")
+        require(hashlib.sha256(Path(edited["preview"]).read_bytes()).hexdigest() != original_png, "更新未改变预览")
+        require(all(edited["verification"][key] for key in
+                    ("reopened", "stable_node_ids", "stable_pixels", "stable_properties")), "保存重开检查失败")
+        ctx = store.context(root)
+        exported = store.export_assets(root, ctx["revision"], "action", edited["run_id"], [{
+            "asset_id": "action-background", "name": "操作背景", "output_path": "assets/ui/action.png",
+            "state": "available", "purpose": "验证正式交付",
+            "region": {"x": 0, "y": 0, "width": 200, "height": 64}, "geometry": {"mode": "contain", "content_rect": {"x": 0, "y": 0, "width": 200, "height": 64}}}])
+        report["export"] = exported["export"]
+        selected = store.select_image(root, exported["revision"], "action-background", 1)
+        saved = store.save_layout(root, selected["revision"], "verification", "原生资产页面验证", 400, 160, "#182438", [{
+            "id": "action-instance", "kind": "image", "asset_id": "action-background", "binding": {"kind": "selected"},
+            "x": 100, "y": 48, "width": 200, "height": 64}])
+        built = store.build_layout(root, saved["revision"], "verification")
+        report["page_build"] = built["page_build"]
+        require(built["matches_layout"] and built["matches_bindings"], "页面构建未使用当前布局和资产")
+        report["status"] = "passed"
     except Exception as error:
         report.update(status="failed", error=str(error))
         raise
     finally:
-        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(json.dumps({"status": report["status"], "report": str(path), "preview": report.get("preview")}, ensure_ascii=False))
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps({"status": report["status"], "report": str(report_path)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--project-root", type=Path, required=True)
-    asyncio.run(run(parser.parse_args().project_root.resolve()))
+    parser.add_argument("--output-root", type=Path, required=True, help="尚不存在的业务工程绝对路径")
+    run(parser.parse_args().output_root)

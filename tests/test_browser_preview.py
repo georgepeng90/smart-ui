@@ -203,6 +203,45 @@ def test_wrap_and_alignment_are_browser_layout(tmp_path, page, text_node):
     assert measure["content_box"][0] > text_node["x"]
 
 
+@pytest.mark.parametrize("align", ["left", "center", "right"])
+def test_text_alignment_reserves_space_for_the_complete_stroke(tmp_path, page, text_node, align):
+    text_node.update(align=align, width=80, height=36, wrap=False,
+                     stroke_width=6, stroke_color="#FF0000")
+    page["nodes"] = [text_node]
+    result = render_page(tmp_path / "render", page)
+    measure = result["renderer"]["nodes"][0]
+    box, content = measure["box"], measure["content_box"]
+    assert box == [text_node[key] for key in ("x", "y", "width", "height")]
+    assert measure["overflow"] is False
+    half_stroke = text_node["stroke_width"] / 2
+    assert content[0] - half_stroke >= box[0] - 0.02
+    assert content[0] + content[2] + half_stroke <= box[0] + box[2] + 0.02
+    if align == "left":
+        assert content[0] == pytest.approx(box[0] + half_stroke)
+    elif align == "right":
+        assert content[0] + content[2] == pytest.approx(box[0] + box[2] - half_stroke)
+    else:
+        assert content[0] + content[2] / 2 == pytest.approx(box[0] + box[2] / 2)
+    with Image.open(result["overview"]["path"]) as image:
+        # 真实截图仍包含描边颜色，而非通过去掉描边绕过排版检查。
+        assert any(color == (255, 0, 0) for _, color in image.convert("RGB").getcolors(image.width * image.height))
+
+
+def test_stroked_text_wraps_within_the_inner_box_and_still_rejects_real_overflow(tmp_path, page, text_node):
+    text_node.update(text="A A", width=37, height=64, stroke_width=4, wrap=True)
+    page["nodes"] = [text_node]
+    result = render_page(tmp_path / "wrapped", page)
+    measure = result["renderer"]["nodes"][0]
+    assert measure["overflow"] is False
+    assert measure["content_box"][3] > text_node["line_height"]
+    text_node["height"] = 55
+    with pytest.raises(ValueError, match="中文文案.*超出文本框"):
+        render_page(tmp_path / "too-short", page)
+    text_node.update(text="中文 A", width=48, height=36, wrap=False)
+    with pytest.raises(ValueError, match="中文文案.*超出文本框"):
+        render_page(tmp_path / "too-narrow", page)
+
+
 def test_missing_and_modified_sources_are_explicit_errors(tmp_path, page, image_node, text_node):
     page["nodes"] = [image_node]
     Path(image_node["source"]).unlink()

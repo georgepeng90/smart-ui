@@ -1,8 +1,8 @@
 # 项目工具与执行记录
 
-SmartUI Krita v0.8.0 提供二十七个项目工具，与五个底层 `krita_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产、正式 PNG 导出、可更新页面布局、浏览器构建和静态组合预览。具体画法属于项目程序。
+SmartUI PhotoCraft v0.9.0 提供二十七个项目工具，与三个底层 `photocraft_*` 工具共存。项目管理参考、风格规则、Python 绘制程序、组件规格、运行记录、参考对照、偏差反馈、多产物视觉检查、独立图像资产、正式 PNG 导出、可更新页面布局、浏览器构建和静态组合预览。具体画法属于项目程序。
 
-当前项目组件指关联绘制程序的 Krita 制作对象。ICON（图标）图像采用独立资产流程：生成和编辑由宿主图像工具完成，SmartUI 登记真实产物及来源，再以静态组合预览检查。SmartUI 不内置生图后端；不要将图像资产伪装成组件成功运行。`project_add_reference` 登记的是只读参考，不是生产资产导入。
+当前项目组件指关联绘制程序的 PhotoCraft 制作对象。ICON（图标）图像采用独立资产流程：生成和编辑由宿主图像工具完成，SmartUI 登记真实产物及来源，再以静态组合预览检查。SmartUI 不内置生图后端；不要将图像资产伪装成组件成功运行。`project_add_reference` 登记的是只读参考，不是生产资产导入。
 
 ## 工具参数与调用顺序
 
@@ -18,7 +18,7 @@ SmartUI Krita v0.8.0 提供二十七个项目工具，与五个底层 `krita_*` 
 | `project_save_program` | `project_root: str, expected_revision: str, program_id: str, name: str, description: str, source: str` | 只检查语法并保存程序源码与版本 |
 | `project_get_program` | `project_root: str, program_id: str` | 读取程序元数据和源码，不执行 |
 | `project_define_component` | `project_root: str, expected_revision: str, component_id: str, name: str, spec: dict` | 创建或替换规格，保留执行历史；spec 必须引用已保存的 program_id |
-| `project_plan_component` | `project_root: str, component_id: str` | 执行程序并预检计划，不调用 Krita、不登记绘制成功 |
+| `project_plan_component` | `project_root: str, component_id: str` | 执行程序并预检计划，不调用 PhotoCraft、不登记绘制成功 |
 | `project_draw_component` | `project_root: str, expected_revision: str, component_id: str, layers: list[str] \| null = null` | 执行、保存、重开检查并记录；省略 layers 完整绘制 |
 | `project_compare_component` | `project_root: str, expected_revision: str, component_id: str, run_id: str, reference_id: str, reference_region: list[int] \| null = null, reference_coordinate_size: list[int] \| null = null, artifact_region: list[int] \| null = null, reference_scale: float = 1.0, artifact_scale: float = 1.0` | 保存参考与运行预览的对照，返回 JSON 和拼图 |
 | `project_get_comparison` | `project_root: str, comparison_id: str` | 校验并读取对照快照、拼图与反馈详情 |
@@ -51,23 +51,13 @@ SmartUI Krita v0.8.0 提供二十七个项目工具，与五个底层 `krita_*` 
 | `documents` | `docs/ui` | 自动生成的 `style.md`、`components.md` |
 | `references` | `docs/ui/references` | 登记并保存的参考原图 |
 | `programs` | `art/ui/programs` | `<program_id>/<version>.py` |
-| `sources` | `art/ui/sources` | `<component_id>.kra` 及 `images/<asset_id>/<version>/image.<png|jpg|webp>` |
+| `sources` | `art/ui/sources` | `<component_id>.pcraft` 及 `images/<asset_id>/<version>/image.<png|jpg|webp>` |
 
 目录映射不改变 `project_root` 的含义。参考输入在工程外时，登记操作将其复制到 `<references>/<reference_id>/<原文件名>`，后续读取和摘要检查针对该副本。工程内输入可保留其原有位置。
 
 项目状态 JSON 中的工程内文件引用保存为工程相对 POSIX 路径，即用 `/` 分隔；明确的工程外路径可以使用绝对路径。运行时 API 返回可直接读取的绝对路径，程序元数据的 `source_path` 除外，它保持工程相对路径。生成文档的资源链接相对于 `documents` 目录，移动整个工程后仍可使用。历史 `operations.json`、`result.json` 等原始执行证据保留当时调用的路径和字节，继续制作使用项目状态中解析后的文件引用。
 
-创建项目时，工具在 `.smartui/.gitignore` 中写入缓存、锁、临时文件及 `migration-backups/` 的忽略规则，并保留已有规则。状态、运行、对照及视觉检查记录应保留，不要整体忽略 `.smartui/`。
-
-## 数据导入与目录迁移
-
-迁移脚本接收根目录含 `project.json` 且 `schema_version=2` 的完整数据目录，输出当前 schema 3 工程布局。在工具源码仓库中运行：
-
-```powershell
-uv run --locked python scripts/migrate_project_layout.py --source-root <源数据目录绝对路径> --project-root <业务工程根目录绝对路径>
-```
-
-默认只预检并展示计划，增加 `--apply` 才写入。迁移器先验证完整备份，再创建工程目录并核对摘要；源目录保持原样。备份保存在目标工程的 `.smartui/migration-backups/` 中。目标文件冲突或源数据变化会明确报错。确认目标工程可正常读取后，再按需归档源目录。
+创建项目时，工具在 `.smartui/.gitignore` 中写入缓存、锁、临时文件 的忽略规则，并保留已有规则。状态、运行、对照及视觉检查记录应保留，不要整体忽略 `.smartui/`。
 
 ## 参考区域与规则依据
 
@@ -107,9 +97,9 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 
 ## 原文件更新
 
-`layers=["surface"]` 中的值是计划节点 key，不是显示名称或固定角色。可选择绘画图层、分组和透明度蒙版；选择分组只更新该分组自身属性，不隐式包含子树；需要修改子节点时，逐一列出它们的 key。工具比较新计划与上次实际计划，拒绝非目标节点及绘制内容的变化，因此任何参数都可能用于局部调整，前提是它只影响选中范围。
+`layers=["surface"]` 中的值是计划节点 key，不是显示名称或固定角色。可选择形状、像素图层或分组；选择分组只更新该分组自身属性，不隐式包含子树；需要修改子节点时，逐一列出它们的 key。工具比较新计划与上次实际计划，拒绝非目标节点及绘制内容的变化，因此任何参数都可能用于局部调整，前提是它只影响选中范围。
 
-已有源文件通过记录的 UUID 定位。无论完整重画还是局部更新，当前画布和图层结构都必须匹配既有记录；改变尺寸或结构时暂用新组件 ID 创建变体。源文件被外部改动、Krita 存在未保存修改或 UUID 不符时直接报错。完整重画不能用来绕过结构检查。局部更新必须有已登记的 `plan.json` 及其摘要，供工具校验和比较。
+已有源文件通过记录的原生整数 ID 定位。无论完整重画还是局部更新，当前画布和图层结构都必须匹配既有记录；改变尺寸或结构时暂用新组件 ID 创建变体。源文件被外部改动、源文件节点身份不符时直接报错。完整重画不能用来绕过结构检查。局部更新必须有已登记的 `plan.json` 及其摘要，供工具校验和比较。
 
 共享规则或参数变化后，组件需要重新检查；能否只更新部分节点取决于计划对比，不根据特定参数名或高光角色判断。只更新目标节点不能把未实际执行的变化宣称为完成。
 
@@ -136,11 +126,11 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 
 规则或共用参数变化提升风格版本；只改风格说明或引用清单不升级。`needs_review` 是派生状态：缺少成功产物、当前规格/风格/程序与实际记录不同，或最近尝试失败，都需要重新检查。
 
-源文件默认位于 `art/ui/sources/<component_id>.kra`。每次运行在 `.smartui/runs/<run_id>/` 保存 `program.py`、`plan.json`、`style-snapshot.json`、`operations.json`、`result.json`，成功时另有 `preview.png` 与 `output.kra`；更新已有文件时保留 `input.kra`。运行记录包含实际风格版本、规格摘要、程序版本、源码哈希、节点 UUID、文件摘要及检查数据。
+源文件默认位于 `art/ui/sources/<component_id>.pcraft`。每次运行在 `.smartui/runs/<run_id>/` 保存 `program.py`、`plan.json`、`style-snapshot.json`、`operations.json` 和 `result.json`。成功时另有 `before-reopen.png`、`preview.png`、`output/<component_id>.pcraft` 与 `reopened/<component_id>.pcraft`；更新已有文件时保留 `input.pcraft`。运行记录的 `backend` 包含实际 `name=photocraft`、`version`、CLI `sha256` 和 `cli_path`；`source_snapshot_path` 指向 `output/` 中的归档源文件，其摘要包含在 `artifact_hashes` 中。读取实际产物时使用记录的路径。运行记录还包含实际风格版本、规格摘要、程序版本、源码哈希、原生节点 ID、文件摘要及检查数据。
 
 `drawn` 表示已绘制，`verified` 表示保存重开后的技术检查通过，`failed` 表示尝试失败。技术检查不证明视觉接近参考，也不代表用户确认；当前工具不代填 `user_confirmation`。
 
-预检错误直接报告。进入执行阶段后的失败追加实际错误并保留现场，不替换最近成功记录；历史成功不能证明失败后的磁盘文件有效。资产生成后若项目 revision 冲突，会报告记录未更新并给出结果路径，不自动重试。
+预检错误直接报告。候选制作失败时保留现场并尝试登记 `failed`，不替换最近成功记录；登记仍受 `expected_revision` 约束，发生冲突时仅保留运行目录中的证据。发布前发现项目版本或原源文件摘要变化时，拒绝发布并保留候选产物，原源文件不被覆盖。发布后若项目持久化失败，错误会明确说明源文件已发布并给出结果路径，不自动回滚或重试。
 
 `.smartui/project.json` 是唯一结构化数据源，受管 Markdown 只展示摘要。手改、缺失或多文件写入中断造成摘要不一致时明确报错。状态写入使用项目排他锁、同目录临时文件和原子替换，不静默修复或吞掉错误。
 
@@ -150,7 +140,7 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 
 项目在 `.smartui/comparisons/<comparison_id>/` 保存两份原始像素尺寸的 RGBA 裁切快照和 RGB 棋盘背景拼图。显示尺寸四舍五入到整数像素并记入对照。每份裁切快照和拼图均限制为每边最多 8192 像素、每张最多 3200 万像素。超限时选择更小区域，若仅拼图超限，也可降低显示倍率。
 
-对照记录用 SHA-256 绑定参考、运行输入和保存证据，读取时校验快照。创建和读取都通过 MCP 返回拼图，不调用 Krita 或改写输入。处理过程不做 ICC 颜色转换，不输出自动质量分。
+对照记录用 SHA-256 绑定参考、运行输入和保存证据，读取时校验快照。创建和读取都通过 MCP 返回拼图，不调用 PhotoCraft 或改写输入。处理过程不做 ICC 颜色转换，不输出自动质量分。
 
 查看拼图后，用 `project_record_feedback` 分别记录可见现象 `observation` 和建议改动 `suggested_change`。可用 `target_nodes` 关联运行所用绘制计划的节点 key，用 `rule_ids` 关联运行所用风格快照的规则。初始状态为 `open`。
 
@@ -166,7 +156,7 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 
 ## 多产物视觉检查
 
-用 `project_create_visual_check` 并排查看已实际绘制的样片。适用场景包括检查同一组件的配色和状态、多个尺寸的变体，以及两次绘制之间的差异。工具读取指定运行保存的 PNG，不连接 Krita。
+用 `project_create_visual_check` 并排查看已实际绘制的样片。适用场景包括检查同一组件的配色和状态、多个尺寸的变体，以及两次绘制之间的差异。工具读取指定运行保存的 PNG，不连接 PhotoCraft。
 
 | 参数 | 约束 |
 | --- | --- |
@@ -185,7 +175,7 @@ uv run --locked python scripts/migrate_project_layout.py --source-root <源数�
 
 ## 正式 PNG 导出
 
-`project_export_assets` 读取明确的组件成功 `run_id`，校验计划、风格快照和预览摘要，再按声明区域生成生产 PNG。当前支持整图或矩形区域导出；不能从已合成的预览中自动去除文字，源程序应提供无示例文案的导出区域。工具不执行 Krita 绘制、不按图层组重新投影，也不修改 Unity `.meta` 或导入设置。
+`project_export_assets` 读取明确的组件成功 `run_id`，校验计划、风格快照和预览摘要，再按声明区域生成生产 PNG。当前支持整图或矩形区域导出；不能从已合成的预览中自动去除文字，源程序应提供无示例文案的导出区域。工具不执行 PhotoCraft 绘制、不按图层组重新投影，也不修改 Unity `.meta` 或导入设置。
 
 每项导出必须完整声明以下字段；`exports` 包含 1 至 64 项，资产 ID 和输出路径在批次内唯一：
 
@@ -276,4 +266,4 @@ SmartUI 不内置模型生图或图像编辑后端。先用宿主可用的图像
 
 组合文件保存在 `.smartui/compositions/<composition_id>/`，包含 overview PNG、组件/图像源裁切和字体快照；项目状态中的可选 `compositions` 保存节点依据、尺寸与摘要。`project_get_composition(project_root, composition_id)` 校验快照后读取历史组合；即使源资产之后更新，历史图仍使用保存时快照。`is_current` 只表示组合中的图像版本仍为当前选用版本，或组件运行仍匹配当前成功运行；文字节点不参与判定。它不表示预览经过用户确认。新版本选用后旧组合不会自动重建。
 
-该工具是固定坐标预览，不提供自动布局、九宫格、自动换行、运行时交互或将位图导入 Krita 文档。它也不生成图像。关于实际生成、查看、复制、登记、局部替换与组合检查的操作顺序，见[ICON 资产 Skill](../skills/icon-assets/SKILL.md)。
+该工具是固定坐标预览，不提供自动布局、九宫格、自动换行、运行时交互或将位图导入 PhotoCraft 文档。它也不生成图像。关于实际生成、查看、复制、登记、局部替换与组合检查的操作顺序，见[ICON 资产 Skill](../skills/icon-assets/SKILL.md)。
