@@ -1,0 +1,14 @@
+{
+  "name": "SmartUI.UGUI.Pipeline.Editor",
+  "rootNamespace": "SmartUI.UGUI.Editor",
+  "references": ["SmartUI.UGUI.Editor", "Unity.Pipeline.Attributes"],
+  "includePlatforms": ["Editor"],
+  "defineConstraints": ["SMARTUI_HAS_PIPELINE"],
+  "versionDefines": [
+    {
+      "name": "com.unity.pipeline",
+      "expression": "0.10.0-exp.1",
+      "define": "SMARTUI_HAS_PIPELINE"
+    }
+  ]
+}

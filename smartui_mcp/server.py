@@ -122,6 +122,8 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     projects = ProjectStore()
     from .unity import UnityStore
     unity = UnityStore(projects)
+    from .unity_builds import UnityBuildStore
+    unity_builds = UnityBuildStore(unity)
     server = FastMCP(
         "SmartUI PhotoCraft",
         instructions=(
@@ -430,5 +432,49 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
                                             handoff_id: StrictStr, request: dict[str, Any]) -> Any:
         """校验控件实例及真实来源，保存含直接输入与传递依赖摘要的交付清单；不创建 Unity 页面。"""
         return await asyncio.to_thread(unity.prepare_handoff, project_root, expected_revision, handoff_id, request)
+
+    @server.tool()
+    async def project_unity_build_context(project_root: str) -> Any:
+        """读取 Unity 制作定义、构建配置、独立 revision 和执行状态，不连接 Editor。"""
+        return await asyncio.to_thread(unity_builds.context, project_root)
+
+    @server.tool()
+    async def project_configure_unity_build(project_root: str, expected_revision: StrictStr | None,
+                                            config: dict[str, Any]) -> Any:
+        """配置 Assets 输出目录与 TMP 字体、材质映射；使用构建资料 revision，首次为 null。"""
+        return await asyncio.to_thread(unity_builds.configure, project_root, expected_revision, config)
+
+    @server.tool()
+    async def project_define_unity_recipe(project_root: str, expected_revision: StrictStr | None,
+                                          control_id: StrictStr, recipe: dict[str, Any],
+                                          definition: dict[str, Any] | None = None,
+                                          expected_registry_revision: StrictStr | None = None) -> Any:
+        """维护控件制作定义；修改耦合的公开接口或状态时，一并传 definition 和目录 revision 原子保存。"""
+        return await asyncio.to_thread(unity_builds.define_recipe, project_root, expected_revision, control_id, recipe,
+                                       definition, expected_registry_revision)
+
+    @server.tool()
+    async def project_set_unity_bindings(project_root: str, expected_revision: StrictStr | None,
+                                         page_id: StrictStr, bindings: dict[str, Any]) -> Any:
+        """保存正式页面控件实例的公开业务槽位到绑定键映射；不复制布局或生成业务事件代码。"""
+        return await asyncio.to_thread(unity_builds.set_bindings, project_root, expected_revision, page_id, bindings)
+
+    @server.tool()
+    async def project_prepare_unity_build(project_root: str, expected_revision: StrictStr | None,
+                                          control_ids: list[StrictStr], page_ids: list[StrictStr],
+                                          operation: Literal["plan", "apply", "verify"] = "plan") -> Any:
+        """从当前控件及正式页面生成持久化请求；不启动 Unity。构建控件并登记后再准备引用它们的页面。"""
+        return await asyncio.to_thread(unity_builds.prepare, project_root, expected_revision,
+                                       control_ids, page_ids, operation)
+
+    @server.tool()
+    async def project_execute_unity_build(project_root: str, request_id: StrictStr) -> Any:
+        """通过 Unity CLI 单次执行已准备请求，核对实际资源并登记；不自动重试或启动另一个工程副本。"""
+        return await asyncio.to_thread(unity_builds.execute, project_root, request_id)
+
+    @server.tool()
+    async def project_reconcile_unity_build(project_root: str, request_id: StrictStr) -> Any:
+        """核对同一次 Unity 请求留下的结果和资源，处理超时后的登记，不再次执行构建。"""
+        return await asyncio.to_thread(unity_builds.reconcile, project_root, request_id)
 
     return server

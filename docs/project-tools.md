@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.13.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.14.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -198,6 +198,17 @@ uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example
 
 图像节点在构建时按 `asset_id` 解析当前文件。正式资产遵循其伸缩几何；无几何声明的独立图像按完整原图等比居中。透明边和阴影可能延伸到目标内容框之外，按画布边界裁切。
 
+### 控件实例
+
+`control` 节点引用有预览定义的 Unity 控件或变体。每个实例保存独立的 `id`、`control_id`、布局字段和显式 `parameters`。按控件声明填写公开参数，沿用当前默认值时省略对应参数键，无覆盖时传空对象。业务绑定通过 Unity 接入资料单独维护。实例的实际布局宽高须等于控件的固定设计尺寸。
+
+```json
+{"id":"confirm","kind":"control","control_id":"button.primary","x":32,"y":100,"width":240,"height":48,
+ "parameters":{"caption":"确认"}}
+```
+
+浏览器从控件定义解析内部图文，按实例 ID 生成 `confirm/label` 等预览节点。正式布局只保存控件引用及其参数，显示场景中的 `texts`、`images` 和 `text_styles` 只按正式布局中的图文节点 ID 修改。预览展开后同样限制为 512 个节点、32 层。Unity 从同一正式布局取得分组、图文和控件实例的静态矩形。控件制作和接入见 [Unity 接入工具](unity-tools.md)。
+
 ### 分组与尺寸
 
 分组节点包含 `id`、`kind: "group"`、`layout` 和非空 `children`，可嵌套。根节点使用非负 `x`、`y` 和正整数 `width`、`height`。根分组也可用 `region: "canvas"` 或 `region: "safe"` 替代这四个字段，分别占满画布或安全区。使用安全区时，`project_save_layout` 的 `safe_area` 参数必须同时提供 `top`、`right`、`bottom`、`left` 四边的非负整数内缩量，并为画布留下正宽高。
@@ -260,7 +271,7 @@ uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example
 
 `effect_insets` 记录四边效果预留：可见描边占总宽度的一半；投影从字形产生，模糊值大于 0 时每侧预算为 `ceil(2 × blur) + 1` 像素，无模糊时为 0，再分别加减水平和垂直偏移。每侧取描边、投影和 0 的最大值。`effects_bounds` 联合实际断行宽度、CSS 行高及 Canvas 字形外伸，再扩展效果预算；负字距及字体负边距也参与检查。它是布局校验范围，精确像素以 PNG 为准，不能直接作为 Unity 的描边或投影参数。
 
-`project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像或实际使用的文字样式变化后显式重建。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时才校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
+`project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像、实际使用的文字样式或控件定义变化后显式重建。含控件的构建以 `control_dependencies` 记录实际使用的控件、基础控件和嵌套控件的定义摘要。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时才校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
 
 构建中的图像快照按 `asset_id` 命名，字体快照按工程相对字体路径确定名称；内容 SHA-256 独立保存。节点插入、删除或重排不改变其余资源名称，同一身份的资源复用一份快照。字体文件内容变化保持名称，移动整个工程也保持名称；工程内字体路径变更表示新的字体资源身份。资源文件格式变化时扩展名随之变化。快照清单、节点引用及实际文件摘要须一致。
 
@@ -282,9 +293,9 @@ HTML 可缩放，并可显示安全区、布局框、内容框、可见范围和
 
 ### 页面依赖与集中重建
 
-`project_page_dependencies(project_root)` 返回当前 `revision`，并按 ID 列出 `components`、`assets`、`text_styles`、`pages`。组件列出正式导出的 `asset_ids`、直接引用组件的分组位置、当前运行及复查状态。资产与文字样式列出实际引用它们的布局和节点；未构建页面也纳入查询。每个页面给出 `not_built`、`stale` 或 `current` 状态及对应原因。过期的正式导出会报告来源组件、导出所用的运行、当前运行及需要执行的动作。
+`project_page_dependencies(project_root)` 返回当前 `revision`，并按 ID 列出 `components`、`assets`、`text_styles`、`unity_controls` 和 `pages`。组件列出正式导出的 `asset_ids`、直接引用组件的分组位置、当前运行及复查状态。`unity_controls` 列出正式页面直接引用各控件的位置。资产和文字样式包含控件内部的实际预览引用位置。未构建页面也纳入查询。每个页面给出 `not_built`、`stale` 或 `current` 状态及对应原因。过期的正式导出会报告来源组件、导出所用的运行、当前运行及需要执行的动作。
 
-`page_status` 和读取快照的结果分别给出 `matches_layout`、`matches_images`、`matches_typography`、`matches_sources`、`matches_component_usage`。其中 `matches_bindings` 仍表示图像与文字样式均匹配，`is_current` 要求各项均匹配。图像来源过期时，仍能读取此前的快照。重建引用这类资产的页面前，须按当前组件输入重画并重新导出，或在已有当前绘制结果时直接重新导出。只绑定 `spec.usage` 的分组可直接应用当前规格。
+`page_status` 和读取快照的结果分别给出 `matches_layout`、`matches_images`、`matches_typography`、`matches_sources`、`matches_component_usage` 和 `matches_unity_controls`。`matches_bindings` 表示图像与文字样式均匹配，`is_current` 要求各项均匹配。图像来源过期时，仍能读取此前的快照。重建引用这类资产的页面前，须按当前组件输入重画并重新导出，或在已有当前绘制结果时直接重新导出。只绑定 `spec.usage` 的分组可直接应用当前规格。
 
 `project_rebuild_pages(project_root, expected_revision, layout_ids)` 接收非空且无重复的布局 ID 列表。工具先预检所有目标及其构建输入，再按指定顺序逐页发布。成功返回 `completed_layout_ids` 和当前 `revision`。预检失败时不会发布页面。渲染或发布中途失败时停止，错误报告给出失败页面、已完成页面、当前 revision 及原因，便于修正后从对应页面继续。
 

@@ -1,6 +1,6 @@
 # SmartUI PhotoCraft 本地制作插件
 
-SmartUI PhotoCraft v0.13.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护基础控件目录、核对已有文本预制体并准备静态控件实例清单。
+SmartUI PhotoCraft v0.14.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
 
 ## 安装
 
@@ -16,7 +16,7 @@ codex plugin marketplace add .
 codex plugin add smartui-photocraft@smartui-local
 ```
 
-构建输出为 `dist/smartui-photocraft`，本地插件源由 `.agents/plugins/marketplace.json` 定义。插件源已登记时，更新只需重新运行构建命令和 `codex plugin add smartui-photocraft@smartui-local`。安装或更新后，在新聊天中使用插件。构建脚本只生成分发文件。浏览器页面构建使用已安装的 Chromium。
+构建输出为 `dist/smartui-photocraft`，其中包含 Unity Editor 包 `unity/com.smartui.ugui`。本地插件源由 `.agents/plugins/marketplace.json` 定义。插件源已登记时，更新只需重新运行构建命令和 `codex plugin add smartui-photocraft@smartui-local`。安装或更新后，在新聊天中使用插件。浏览器页面构建使用已安装的 Chromium。Unity Editor 包由业务工程按接入说明引入。
 
 ## 使用
 
@@ -44,7 +44,7 @@ codex plugin add smartui-photocraft@smartui-local
 
 `project_page_dependencies` 查询组件、图像、文字样式的页面使用位置及过期原因，`project_rebuild_pages` 集中重建指定页面。源组件变化而导出未更新时，先重新制作和导出再重建。接口见[项目工具说明](docs/project-tools.md)。
 
-使用 `unity-integration` 查询和定义控件、核对并登记已有的 Unity 文本预制体、生成控件使用文档和接入清单。控件登记有独立的 `revision`。清单使用显式提供的静态实例矩形，生成前核对预制体和制作来源，生成时记录各页面的输入与依赖签名。浏览器布局中的控件实例、Unity 导入、运行时布局和业务接入仍待实现。接口与示例见 [Unity 接入工具](docs/unity-tools.md)。
+使用 `unity-integration` 定义并登记控件，在页面布局中以 `control` 节点引用控件。浏览器展开控件图文来预览，Unity Editor 包在工程中生成基础 Prefab、Prefab Variant 和包含嵌套实例的页面 Prefab。构建入口由项目中的 Unity Pipeline 注册，通过 Unity CLI 调用。实际工程的保存重开、覆盖语义、对象引用及运行效果分别验收。接口、适配范围和工程接入条件见 [Unity 接入工具](docs/unity-tools.md)。
 
 工具仓库只保存通用代码、Skill、文档、测试及示例。具体项目的参考、程序、源文件和当前制作资料留在项目中，`projects/` 保持忽略。
 

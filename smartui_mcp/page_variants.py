@@ -144,9 +144,11 @@ def preview_layout_variants(store, project_root, expected_revision, layout_id, v
                 rendered = render_page(output, resolved)
                 files = {kind: {**rendered[kind], "path": Path(rendered[kind]["path"]).name}
                          for kind in ("html", "overview")}
-                _write_json(output / "report.json", {**base, "id": identifier, "definition": definition,
-                                                     "resources": resources, "renderer": rendered["renderer"],
-                                                     "files": files})
+                report = {**base, "id": identifier, "definition": definition, "resources": resources,
+                          "renderer": rendered["renderer"], "files": files}
+                if "control_dependencies" in resolved:
+                    report["control_dependencies"] = resolved["control_dependencies"]
+                _write_json(output / "report.json", report)
                 scene = {"id": identifier, "width": definition["width"], "height": definition["height"],
                          "report": (relative / "report.json").as_posix(),
                          **{kind: (relative / item["path"]).as_posix() for kind, item in files.items()}}

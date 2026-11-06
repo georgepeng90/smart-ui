@@ -17,12 +17,19 @@ def main():
     files = ["plugin.json", "mcp.json", "pyproject.toml", "uv.lock", "README.md",
              "docs/photocraft-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
              "docs/toolchain-roadmap.md", "docs/typography-plan.md", "docs/style-reproduction-validation.md", "docs/asset-geometry.md",
-             "docs/unity-integration-plan.md", "docs/unity-tools.md",
+             "docs/unity-integration-plan.md", "docs/unity-tools.md", "docs/unity-prefab-reuse-plan.md",
              "examples/drawing-programs/semantic_palette.py",
-             "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py", "scripts/adopt_typography.py"]
+             "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py", "scripts/adopt_typography.py",
+             "unity/com.smartui.ugui/package.json"]
     for directory in ("smartui_mcp",):
         files += [str(p.relative_to(root)) for p in (root / directory).rglob("*.py")]
     files += [str(p.relative_to(root)) for p in (root / "skills").rglob("*.md")]
+    unity_package = root / "unity" / "com.smartui.ugui"
+    files += [str(p.relative_to(root)) for p in unity_package.iterdir()
+              if p.is_file() and p.suffix in {".md", ".meta"}]
+    for directory in ("Editor", "Tests"):
+        files += [str(p.relative_to(root)) for p in (unity_package / directory).rglob("*")
+                  if p.is_file() and p.suffix in {".cs", ".asmdef", ".meta"}]
     for relative in sorted(files):
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)

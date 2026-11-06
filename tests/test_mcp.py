@@ -34,6 +34,9 @@ TOOL_NAMES = {
     "project_create_composition", "project_get_composition",
     "unity_protocol_schema", "project_unity_context", "project_define_unity_control",
     "project_register_unity_prefab", "project_prepare_unity_handoff",
+    "project_unity_build_context", "project_configure_unity_build", "project_define_unity_recipe",
+    "project_set_unity_bindings", "project_prepare_unity_build", "project_execute_unity_build",
+    "project_reconcile_unity_build",
 }
 
 CUSTOM_PROGRAM = '''def build(parameters, spec, component_id):
@@ -127,6 +130,87 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     reopened = await call("project_unity_context", project_root=str(root))
                     self.assertEqual(reopened["revision"], prepared["revision"])
                     self.assertEqual(reopened["controls"]["panel"]["unity_validation"], "not_performed")
+
+    async def test_unity_build_tools_work_over_stdio_without_an_editor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            project_root = str(root / "game")
+            parameters = StdioServerParameters(
+                command=sys.executable, args=["-m", "smartui_mcp"],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(root / "missing-cli.exe")},
+            )
+            async with stdio_client(parameters) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    async def call(tool_name, **arguments):
+                        response = await session.call_tool(tool_name, {"project_root": project_root, **arguments})
+                        self.assertFalse(response.isError, response.content)
+                        return json.loads(response.content[0].text)
+
+                    tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+                    self.assertEqual(set(tools), TOOL_NAMES)
+                    prepare_schema = tools["project_prepare_unity_build"].inputSchema
+                    self.assertEqual(prepare_schema["properties"]["operation"]["enum"], ["plan", "apply", "verify"])
+                    self.assertEqual(prepare_schema["properties"]["operation"]["default"], "plan")
+                    project = await call("project_create", project_id="fixture", name="控件构建测试")
+                    initial = await call("project_unity_build_context")
+                    self.assertIsNone(initial["revision"])
+                    self.assertEqual(initial["source_revision"], project["revision"])
+                    self.assertEqual(initial["operations"], [])
+                    configured = await call("project_configure_unity_build", expected_revision=None,
+                                            config={"output_root": "Assets/SmartUI", "fonts": {}})
+                    image = root / "panel.png"
+                    Image.new("RGBA", (32, 32), (24, 100, 175, 255)).save(image)
+                    await call("project_register_image", expected_revision=project["revision"], asset_id="background",
+                               name="面板背景", source_path=str(image),
+                               provenance={"kind": "imported", "description": "构建请求的合成图像"})
+                    project = await call("project_context")
+                    definition = {
+                        "name": "面板", "description": "", "control_type": "panel",
+                        "base_control_id": None, "dependencies": [], "source_component_ids": [],
+                        "asset_ids": ["background"], "text_style_ids": [], "preview_asset_id": None,
+                        "layout": {"min_width": 1, "min_height": 1, "max_width": None, "max_height": None},
+                        "slots": {"content": {"kind": "content", "component_type": "RectTransform",
+                                              "required": True, "description": ""}},
+                        "parameters": {}, "states": {},
+                    }
+                    await call("project_define_unity_control", expected_revision=None, control_id="panel",
+                               definition=definition)
+                    defined = await call("project_define_unity_recipe", expected_revision=configured["revision"],
+                                         control_id="panel", recipe={
+                                             "kind": "base", "width": 32, "height": 32, "button": None,
+                                             "slots": {"content": {"node_id": "root", "component": "rect"}},
+                                             "nodes": [{"id": "art", "kind": "image", "asset_id": "background",
+                                                        "x": 0, "y": 0, "width": 32, "height": 32}],
+                                         })
+                    page = await call("project_save_layout", expected_revision=project["revision"],
+                                      layout_id="home", name="主页", width=100, height=100, background="#123456",
+                                      nodes=[{"id": "panel-instance", "kind": "control", "control_id": "panel",
+                                              "x": 3, "y": 5, "width": 32, "height": 32, "parameters": {}}])
+                    bindings = {"panel-instance": {"content": "home.content"}}
+                    bound = await call("project_set_unity_bindings", expected_revision=defined["revision"],
+                                       page_id="home", bindings=bindings)
+                    prepared = await call("project_prepare_unity_build", expected_revision=bound["revision"],
+                                          control_ids=["panel"], page_ids=[])
+                    self.assertEqual(prepared["status"], "prepared")
+                    self.assertEqual(prepared["unity_execution"], "not_performed")
+                    self.assertEqual(json.loads(Path(prepared["request_path"]).read_bytes()), prepared["request"])
+                    self.assertEqual(prepared["request"]["targets"][0]["path"], "Assets/SmartUI/Controls/panel.prefab")
+                    current = await call("project_unity_build_context")
+                    self.assertEqual(current["source_revision"], page["revision"])
+                    self.assertEqual(current["construction"]["bindings"]["home"], bindings)
+                    self.assertEqual(current["operations"][0]["request_id"], prepared["request_id"])
+
+                    for tool, request_id, message in (
+                        ("project_execute_unity_build", "invalid", "request_id"),
+                        ("project_reconcile_unity_build", prepared["request_id"], "尚未执行"),
+                    ):
+                        failure = await session.call_tool(tool, {"project_root": project_root, "request_id": request_id})
+                        self.assertTrue(failure.isError)
+                        self.assertIn(message, failure.content[0].text)
+                    self.assertFalse((Path(project_root) / "Assets").exists())
 
     async def test_visual_check_tools_require_strict_options(self):
         server = create_server(FakeClient(Path("unused.png")))

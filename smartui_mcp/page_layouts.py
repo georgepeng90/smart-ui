@@ -82,11 +82,13 @@ def validate_definition(width, height, background, nodes, safe_area=None, checks
         elif kind == "text":
             required |= {"text", "text_style_id", "align", "wrap", "overflow"}
             optional |= {"max_lines", "min_font_size"}
+        elif kind == "control":
+            required |= {"control_id", "parameters"}
         elif kind == "group":
             required |= {"layout", "children"}
             optional.add("component_id")
         else:
-            raise ValueError(f"{label}.kind 必须是 image、text 或 group")
+            raise ValueError(f"{label}.kind 必须是 image、text、control 或 group")
         missing = sorted(required - node.keys())
         extra = sorted(node.keys() - required - optional, key=str)
         if missing or extra:
@@ -117,6 +119,14 @@ def validate_definition(width, height, background, nodes, safe_area=None, checks
             raise ValueError(f"{label} 所在的基线分组只接受不换行的单行文字")
         if kind == "image":
             _identifier(node["asset_id"], f"{label}.asset_id")
+        elif kind == "control":
+            _identifier(node["control_id"], f"{label}.control_id")
+            if not isinstance(node["parameters"], dict):
+                raise ValueError(f"{label}.parameters 必须是按参数 ID 组织的对象")
+            for parameter, value in node["parameters"].items():
+                _identifier(parameter, f"{label}.parameters 的参数 ID")
+                if type(value) not in (str, int, float, bool) or (type(value) is float and not math.isfinite(value)):
+                    raise ValueError(f"{label}.parameters.{parameter} 必须是字符串、有限数值或布尔值")
         elif kind == "text":
             _identifier(node["text_style_id"], f"{label}.text_style_id")
             if not isinstance(node["text"], str) or not node["text"]:
@@ -224,9 +234,67 @@ def _resolve_component_usages(state, groups, usages):
     return result
 
 
-def resolve_definition(state, definition):
+def _expand_preview_controls(state, nodes):
+    dependencies, fixed_sizes = {}, {}
+    count = 0
+
+    def expand(node, scope, depth):
+        nonlocal count
+        count += 1
+        if depth > MAX_LAYOUT_DEPTH or count > MAX_PAGE_NODES:
+            raise ValueError(f"控件展开后的布局不得超过 {MAX_LAYOUT_DEPTH} 层或 {MAX_PAGE_NODES} 个节点")
+        node_id = f"{scope}/{node['id']}" if scope else node["id"]
+        if node["kind"] == "group":
+            return {**node, "id": node_id,
+                    "children": [expand(child, scope, depth + 1) for child in node["children"]]}
+        if node["kind"] != "control":
+            return {**node, "id": node_id}
+
+        from .projects import ProjectError
+        from .unity_recipes import control_preview
+
+        control_id = node["control_id"]
+        try:
+            preview = control_preview(state.get("unity_controls", {}), control_id, node["parameters"])
+        except (ValueError, ProjectError) as error:
+            raise ValueError(f"控件实例 {node_id}（{control_id}）：{error}") from error
+        dependencies.update(preview["dependencies"])
+        fixed_sizes[node_id] = (preview["width"], preview["height"])
+        group = {key: value for key, value in node.items() if key not in ("control_id", "parameters")}
+        return dict(group, id=node_id, kind="group", layout={"direction": "absolute"},
+                    children=[expand(child, node_id, depth + 1) for child in preview["nodes"]])
+
+    return [expand(node, None, 1) for node in nodes], dependencies, fixed_sizes
+
+
+def iter_page_preview_nodes(state, nodes):
+    """按当前控件定义遍历浏览器使用的分组及图文，无需测量布局。"""
+    expanded, _, _ = _expand_preview_controls(state, nodes)
+    yield from iter_layout_nodes(expanded)
+
+
+def _layout_tree(nodes, placed, groups):
+    boxes = {node["id"]: {field: node[field] for field in ("x", "y", "width", "height")}
+             for node in placed}
+    boxes.update({group["id"]: dict(zip(("x", "y", "width", "height"), group["box"], strict=True))
+                  for group in groups})
+
+    def place(node):
+        item = {key: deepcopy(value) for key, value in node.items() if key not in ("visual_offset", "children")}
+        item.update(boxes[node["id"]])
+        if node["kind"] == "group":
+            item["children"] = [place(child) for child in node["children"]]
+        return item
+
+    return [place(node) for node in nodes]
+
+
+def resolve_definition(state, definition, *, include_layout_tree=False):
     """解析当前资产和文字样式，校验构建输入使用的真实文件。"""
     result = deepcopy(definition)
+    result["nodes"], dependencies, fixed_sizes = _expand_preview_controls(state, result["nodes"])
+    if dependencies:
+        result["control_dependencies"] = dependencies
     content_text, usages = [], {}
     for node in iter_layout_nodes(result["nodes"]):
         if node["kind"] == "group" and "component_id" in node:
@@ -256,7 +324,13 @@ def resolve_definition(state, definition):
             measured = widths[node["id"]]
             _integer(measured["width"], f"文字节点 {node['id']} 测得的内容宽度", 1)
             node.update(width=measured["width"], content_insets=measured["content_insets"])
-    result["nodes"], groups, baseline_groups = arrange_definition(result)
+    result["nodes"], groups, baseline_groups = arrange_definition(result, fixed_sizes=fixed_sizes)
+    if include_layout_tree:
+        result["layout_tree"] = _layout_tree(definition["nodes"], result["nodes"], groups)
+    for group in groups:
+        if group["id"] in fixed_sizes:
+            # 控件内部图文按定义叠放；页面仍检查控件实例与同级节点的重叠。
+            group["direction"] = "overlay"
     if groups:
         result["layout_groups"] = groups
     if baseline_groups:

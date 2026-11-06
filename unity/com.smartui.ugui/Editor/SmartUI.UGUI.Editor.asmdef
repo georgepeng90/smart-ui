@@ -1,0 +1,6 @@
+{
+  "name": "SmartUI.UGUI.Editor",
+  "rootNamespace": "SmartUI.UGUI.Editor",
+  "references": ["UnityEngine.UI", "Unity.TextMeshPro"],
+  "includePlatforms": ["Editor"]
+}

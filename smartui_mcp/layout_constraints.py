@@ -154,11 +154,16 @@ def _group_boxes(node, inner):
             yield Box(inner.x + x, inner.y + y, width, height)
 
 
-def arrange_definition(definition):
+def arrange_definition(definition, *, fixed_sizes=None):
     """由尺寸已确定的布局树生成按绘制顺序排列的节点及分组信息。"""
     placed, groups, baseline_groups = [], [], []
+    fixed_sizes = fixed_sizes or {}
 
     def place(node, box):
+        size = fixed_sizes.get(node["id"])
+        if size is not None and (box.width, box.height) != size:
+            raise ValueError(f"控件实例 {node['id']} 的布局尺寸 {box.width}×{box.height} "
+                             f"必须等于控件设计尺寸 {size[0]}×{size[1]}")
         if node["kind"] != "group":
             leaf = {key: value for key, value in node.items() if key != "visual_offset"}
             placed.append(dict(leaf, x=box.x, y=box.y, width=box.width, height=box.height))

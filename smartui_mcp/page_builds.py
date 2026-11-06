@@ -12,7 +12,7 @@ from .layout import ProjectLayout
 from .page_layouts import _identifier, resolve_definition
 from .references import _sha256, _temporary_directory
 
-LAYOUT_METADATA = ("layout_groups", "baseline_groups", "safe_area", "component_usage", "checks")
+LAYOUT_METADATA = ("layout_groups", "baseline_groups", "safe_area", "component_usage", "control_dependencies", "checks")
 
 
 def snapshot_key(root, node, source):
@@ -84,6 +84,14 @@ def validate_build_record(record):
     files, nodes = record.get("files"), record.get("nodes")
     if not isinstance(files, dict) or not isinstance(nodes, list) or not nodes:
         raise ValueError(f"页面构建缺少 files 或 nodes：{label}")
+    if "control_dependencies" in record:
+        dependencies = record["control_dependencies"]
+        if not isinstance(dependencies, dict) or not dependencies:
+            raise ValueError(f"页面构建的 control_dependencies 必须是非空对象：{label}")
+        for control_id, digest in dependencies.items():
+            _identifier(control_id, f"页面构建 {label} 的控件 ID")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError(f"页面构建 {label} 的控件 {control_id} 缺少有效依赖摘要")
     required = {"html", "overview", "inputs"}
     for node in nodes:
         if not isinstance(node, dict) or node.get("kind") not in ("image", "text"):

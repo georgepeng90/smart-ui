@@ -157,7 +157,7 @@ class ProjectStore:
 
     def update_typography(self, project_root: str, expected_revision: str, typography: dict) -> dict:
         """保存当前文字规范，拒绝悬空引用；只使使用变化样式的页面构建过期。"""
-        from .page_layouts import iter_layout_nodes
+        from .page_layouts import iter_layout_nodes, iter_page_preview_nodes
         from .typography import resolve_style, validate_font, validate_typography
         from .unity import REGISTRY, UnityStore
 
@@ -165,7 +165,7 @@ class ProjectStore:
         def change(state):
             current = validate_typography(typography, root, state["references"])
             for layout_id, page in state["layouts"].items():
-                for node in iter_layout_nodes(page["definition"]["nodes"]):
+                for node in iter_page_preview_nodes(state, page["definition"]["nodes"]):
                     if node["kind"] != "text":
                         continue
                     style_id = node["text_style_id"]
@@ -176,6 +176,12 @@ class ProjectStore:
                                   label=f"页面 {layout_id} 节点 {node['id']} 的文字样式 {style_id}")
             previous = state["typography"]
             removed = previous["styles"].keys() - current["styles"].keys() if previous is not None else set()
+            if removed:
+                for control_id, recipe in state["unity_controls"].items():
+                    for node in iter_layout_nodes(recipe["nodes"]):
+                        if node["kind"] == "text" and node["text_style_id"] in removed:
+                            raise ProjectError(f"不能移除文字样式 {node['text_style_id']}："
+                                               f"Unity 控件 {control_id} 的节点 {node['id']} 仍在引用")
             if removed and ProjectLayout(root).resolve(REGISTRY).exists():
                 _, _, registry, _ = UnityStore(self)._read(root)
                 for control_id, record in sorted(registry["controls"].items()):
@@ -651,7 +657,7 @@ class ProjectStore:
 
     @staticmethod
     def _page_status(state, record, asset_issues):
-        from .page_dependencies import matches_component_usage, page_source_issues
+        from .page_dependencies import matches_component_usage, matches_unity_controls, page_source_issues
         from .page_layouts import image_geometry
         from .typography import style_digest
 
@@ -670,9 +676,11 @@ class ProjectStore:
         matches_layout = state["layouts"][record["layout_id"]]["sha256"] == record["layout_sha256"]
         issues = page_source_issues(state, record["nodes"], asset_issues)
         usage = matches_component_usage(state, record, asset_issues)
+        controls = matches_unity_controls(state, record)
         return {"matches_layout": matches_layout, "matches_images": images, "matches_typography": text,
                 "matches_bindings": images and text, "matches_sources": not issues, "source_issues": issues,
-                "matches_component_usage": usage, "is_current": matches_layout and images and text and not issues and usage}
+                "matches_component_usage": usage, "matches_unity_controls": controls,
+                "is_current": matches_layout and images and text and not issues and usage and controls}
 
     @staticmethod
     def _layout_result(context, layout_id):
@@ -901,9 +909,32 @@ class ProjectStore:
             from .page_builds import validate_build_record
             for record in resolved.get("page_builds", {}).values():
                 validate_build_record(record)
+            resolved["unity_controls"] = self._read_unity_controls(layout, resolved)
             return resolved, spec_sha256(state)
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise ProjectError(f"无法读取项目状态：{root}；{error}") from error
+
+    @staticmethod
+    def _read_unity_controls(layout, state):
+        from .unity import REGISTRY, _fields
+        from .unity_builds import read_construction
+        from .unity_recipes import resolve_recipes
+
+        construction, _ = read_construction(layout.root)
+        recipes = construction["recipes"]
+        if not recipes:
+            return {}
+        registry = json.loads(layout.resolve(REGISTRY).read_bytes())
+        _fields(registry, {"schema_version", "controls", "handoffs", "document_sha256"}, REGISTRY)
+        if type(registry["schema_version"]) is not int or registry["schema_version"] != 1:
+            raise ProjectError(f"{REGISTRY} 只接受 schema_version=1")
+        if not isinstance(registry["controls"], dict):
+            raise ProjectError(f"{REGISTRY}.controls 必须是对象")
+        definitions = {}
+        for control_id, record in registry["controls"].items():
+            _fields(record, {"definition", "prefab"}, f"控件 {control_id}")
+            definitions[control_id] = record["definition"]
+        return resolve_recipes(definitions, recipes, state)
 
     def _update(self, project_root, expected_revision, change):
         root = self._root(project_root)
@@ -974,7 +1005,7 @@ class ProjectStore:
     @staticmethod
     def _context(root, state, revision):
         from .page_dependencies import asset_source_issues, component_needs_review
-        from .page_layouts import iter_layout_nodes
+        from .page_layouts import iter_page_preview_nodes
 
         data = deepcopy(state)
         current_style_sha256 = style_sha256(data["style"])
@@ -1016,7 +1047,7 @@ class ProjectStore:
             composition["is_current"] = all(node["is_current"] for node in composition["nodes"] if node["kind"] != "text")
         usage = {key: [] for key in data["typography"]["styles"]} if data["typography"] is not None else {}
         for layout_id, page in data.get("layouts", {}).items():
-            for node in iter_layout_nodes(page["definition"]["nodes"]):
+            for node in iter_page_preview_nodes(data, page["definition"]["nodes"]):
                 if node["kind"] == "text":
                     usage[node["text_style_id"]].append({"layout_id": layout_id, "node_id": node["id"]})
         data["typography_usage"] = usage
@@ -1087,11 +1118,12 @@ class ProjectStore:
 
     def _write(self, root, state, artifacts=None):
         layout = ProjectLayout(root)
+        persistent = {key: value for key, value in state.items() if key != "unity_controls"}
         try:
-            _json(state)
+            _json(persistent)
         except (ValueError, TypeError) as error:
             raise ProjectError(f"项目包含无法写入的 JSON 数据：{error}") from error
-        stored = map_state_paths(state, layout.relative)
+        stored = map_state_paths(persistent, layout.relative)
         stored["typography_sha256"] = spec_sha256(stored["typography"]) if stored["typography"] is not None else None
         documents = self._render_for_root(root, state)
         stored["document_hashes"] = {name: _sha(payload) for name, payload in documents.items()}
@@ -1118,7 +1150,9 @@ class ProjectStore:
         for name, payload in documents.items():
             files[layout.documents[name]] = payload
         files[layout.project_file] = (_json(index) + "\n").encode("utf-8")
-        context = self._context(root, map_state_paths(stored, layout.resolve), spec_sha256(stored))
+        resolved = map_state_paths(stored, layout.resolve)
+        resolved["unity_controls"] = state.get("unity_controls", {})
+        context = self._context(root, resolved, spec_sha256(stored))
         self._publish_batch(layout, files)
         return context
 

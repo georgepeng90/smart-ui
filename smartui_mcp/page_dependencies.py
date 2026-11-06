@@ -2,7 +2,7 @@
 
 from .comparisons import RUN_FIELDS
 from .component_usage import check_component_states
-from .page_layouts import iter_layout_nodes
+from .page_layouts import iter_layout_nodes, iter_page_preview_nodes
 from .projects import ProjectError, spec_sha256, style_sha256
 
 
@@ -46,7 +46,11 @@ def asset_source_issues(state):
 
 
 def page_source_issues(state, nodes, asset_issues):
-    asset_ids = dict.fromkeys(node["asset_id"] for node in iter_layout_nodes(nodes) if node["kind"] == "image")
+    return _preview_source_issues(state, iter_page_preview_nodes(state, nodes), asset_issues)
+
+
+def _preview_source_issues(state, nodes, asset_issues):
+    asset_ids = dict.fromkeys(node["asset_id"] for node in nodes if node["kind"] == "image")
     return [asset_issues[asset_id] if asset_id in asset_issues else
             {"asset_id": asset_id, "reason": "asset_missing", "action": "登记或导出该资产"}
             for asset_id in asset_ids if asset_id in asset_issues or asset_id not in state["images"]]
@@ -63,6 +67,13 @@ def matches_component_usage(state, record, asset_issues):
                 check_component_states(state, component_id, asset_issues) != usage["states"]):
             return False
     return True
+
+
+def matches_unity_controls(state, record):
+    """仅比较这份快照用到的控件定义，忽略登记产物的变化。"""
+    controls = state.get("unity_controls", {})
+    return all(control_id in controls and controls[control_id]["dependencies"][control_id] == digest
+               for control_id, digest in record.get("control_dependencies", {}).items())
 
 
 def require_current_page_sources(state, page, asset_issues):
@@ -94,16 +105,21 @@ def page_dependencies(context):
         if component_id in components:
             components[component_id]["asset_ids"].append(key)
         assets[key] = {"component_id": component_id, "uses": [], "source_issue": asset_issues.get(key)}
+    controls = {control_id: {"uses": []} for control_id in state.get("unity_controls", {})}
     pages = {}
     for key, page in state["layouts"].items():
         nodes = page["definition"]["nodes"]
+        preview_nodes = list(iter_page_preview_nodes(state, nodes))
         for node in iter_layout_nodes(nodes):
+            if node["kind"] == "control":
+                controls[node["control_id"]]["uses"].append({"layout_id": key, "node_id": node["id"]})
+        for node in preview_nodes:
             location = {"layout_id": key, "node_id": node["id"]}
             if node["kind"] == "image" and node["asset_id"] in assets:
                 assets[node["asset_id"]]["uses"].append(location)
             elif node["kind"] == "group" and node.get("component_id") in components:
                 components[node["component_id"]]["uses"].append(location)
-        source_issues = page_source_issues(state, nodes, asset_issues)
+        source_issues = _preview_source_issues(state, preview_nodes, asset_issues)
         build_status = state["page_status"].get(key)
         reasons = []
         if build_status is None:
@@ -111,7 +127,8 @@ def page_dependencies(context):
         else:
             for field, reason in (("matches_layout", "layout_changed"), ("matches_images", "image_bindings_changed"),
                                   ("matches_typography", "text_styles_changed"), ("matches_sources", "sources_stale"),
-                                  ("matches_component_usage", "component_usage_changed")):
+                                  ("matches_component_usage", "component_usage_changed"),
+                                  ("matches_unity_controls", "unity_controls_changed")):
                 if not build_status[field]:
                     reasons.append(reason)
         if source_issues and "sources_stale" not in reasons:
@@ -119,4 +136,4 @@ def page_dependencies(context):
         pages[key] = {"status": "not_built" if build_status is None else "stale" if reasons else "current",
                       "stale_reasons": reasons, "source_issues": source_issues}
     return {"project_root": context["project_root"], "revision": context["revision"], "components": components,
-            "assets": assets, "text_styles": state["typography_usage"], "pages": pages}
+            "assets": assets, "text_styles": state["typography_usage"], "unity_controls": controls, "pages": pages}

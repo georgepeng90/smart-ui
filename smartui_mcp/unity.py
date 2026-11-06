@@ -173,7 +173,7 @@ class UnityStore:
         return result
 
     @staticmethod
-    def _prefab_issues(root, registry, effective):
+    def _prefab_issues(root, registry, effective, *, written_controls=()):
         issues = {}
         checked = set()
 
@@ -187,7 +187,8 @@ class UnityStore:
                 issues[key] = {"code": "not_registered", "message": "尚未登记实际预制体文件"}
                 return
             try:
-                verify_prefab(root, prefab["file"])
+                if key not in written_controls:
+                    verify_prefab(root, prefab["file"])
                 if prefab["contract_sha256"] != _contract(effective[key]):
                     raise ProjectError("控件契约已改变，须核对预制体后重新登记")
                 definition = record["definition"]
@@ -216,6 +217,7 @@ class UnityStore:
         return issues
 
     def _context(self, root, source, source_revision, registry, revision):
+        from .page_layouts import iter_layout_nodes
         effective = self._effective(registry, source)
         issues = self._prefab_issues(root, registry, effective)
         controls = {}
@@ -226,6 +228,10 @@ class UnityStore:
             uses += [{"kind": "handoff", "handoff_id": handoff_id, "page_id": page["id"], "instance_id": node["id"]}
                      for handoff_id, handoff in sorted(registry["handoffs"].items())
                      for page in handoff["request"]["pages"] for node in page["instances"] if node["control_id"] == key]
+            uses += [{"kind": "layout", "page_id": page_id, "instance_id": node["id"]}
+                     for page_id, page in sorted(source["layouts"].items())
+                     for node in iter_layout_nodes(page["definition"]["nodes"])
+                     if node["kind"] == "control" and node["control_id"] == key]
             controls[key] = deepcopy(record) | {"effective_definition": effective[key], "uses": uses,
                 "file_status": "not_registered" if record["prefab"] is None else "invalid" if key in issues else "file_checked",
                 "issue": issues.get(key), "unity_validation": "not_performed"}
@@ -252,6 +258,17 @@ class UnityStore:
             registry["controls"][control_id] = {"definition": definition,
                 "prefab": previous["prefab"] if previous is not None else None}
             self._effective(registry, source)
+            from .unity_builds import read_construction
+            from .unity_recipes import resolve_recipes
+            from .page_layouts import resolve_definition
+            construction, _ = read_construction(root)
+            source["unity_controls"] = resolve_recipes(
+                {key: item["definition"] for key, item in registry["controls"].items()}, construction["recipes"], source)
+            for key, page in source["layouts"].items():
+                try:
+                    resolve_definition(source, page["definition"])
+                except ValueError as error:
+                    raise ProjectError(f"控件接口修改使页面 {key} 无效：{error}") from error
             return self._write(root, source, source_revision, registry)
 
     def register_prefab(self, project_root, expected_revision, control_id, path, guid, slot_bindings):

@@ -1,10 +1,10 @@
-# Unity 控件登记与接入清单
+# Unity 控件制作、预制体登记和页面构建
 
-SmartUI 可定义基础控件、核对已有 Unity 文本预制体，并根据静态页面实例准备接入清单。清单目前供项目接入准备和依赖检查使用，Unity 导入、运行时适配和业务绑定由后续阶段实现。浏览器布局继续使用 `image`、`text`、`group` 节点，清单中的实例矩形单独提供给 Unity 接入工具。
+SmartUI 保存公开控件目录、控件制作定义和预制体登记。正式页面可以用 `control` 节点引用控件，浏览器根据制作定义展开图文，Unity Editor 包按页面实例和排列结构生成嵌套预制体。使用已有预制体时，可核对并登记实际文件。接入清单也可单独记录手工指定的静态实例，供项目核对依赖。
 
 ## 工具与持久化
 
-在同一个业务工程中建立 SmartUI 项目并准备真实 Unity 预制体。先读 `project_context` 确认来源项目、组件、图像和文字角色，再使用以下工具。除协议查询外，`project_root` 均为该工程根目录的绝对路径。下面的调用对象省略这一公共参数。
+在目标工程根目录中建立 SmartUI 项目。先读 `project_context` 确认来源项目、组件、图像和文字角色。生成型控件可以先定义再构建，复用工程内已有控件时需要提供真实预制体。除协议查询外，`project_root` 均为该工程根目录的绝对路径。下面的调用对象省略这一公共参数。
 
 | 工具 | 输入与用途 |
 | --- | --- |
@@ -13,10 +13,31 @@ SmartUI 可定义基础控件、核对已有 Unity 文本预制体，并根据�
 | `project_define_unity_control` | 传入 `expected_revision`、`control_id`、完整 `definition`，定义或更新控件 |
 | `project_register_unity_prefab` | 传入 `expected_revision`、`control_id`、`path`、`guid`、`slot_bindings`，核对并登记实际文件 |
 | `project_prepare_unity_handoff` | 传入 `expected_revision`、`handoff_id`、`request`，检查来源与实例并生成清单 |
+| `project_unity_build_context` | 读取构建配置、制作定义、已解析的控件和请求状态 |
+| `project_configure_unity_build` | 传入 `expected_revision`、`config`，设置输出目录和文字角色映射 |
+| `project_define_unity_recipe` | 传入 `expected_revision`、`control_id`、`recipe`；同时修改公开接口或状态时，一并传完整 `definition` 和 `expected_registry_revision`，原子保存两份资料 |
+| `project_set_unity_bindings` | 传入 `expected_revision`、`page_id`、`bindings`，保存正式页面实例的业务槽位映射 |
+| `project_prepare_unity_build` | 传入 `expected_revision`、`control_ids`、`page_ids` 和 `operation`，从当前资料生成构建请求 |
+| `project_execute_unity_build` | 传入 `request_id`，通过目标 Editor 执行该请求并核对结果 |
+| `project_reconcile_unity_build` | 传入同一个 `request_id`，只核对已有执行结果和资源 |
 
-首次定义时传 `expected_revision: null`。之后写入用 Unity 工具最近返回的 `revision`，它标识 `smart-ui/unity/registry.json` 的当前记录。返回的 `source_revision` 来自读取时的 SmartUI 制作资料，项目索引仍使用 schema 5。两种资料共用项目写锁。revision 冲突时重新读取对应上下文，核对差异后再提交。
+公开目录的版本来自 `project_unity_context`，对应 `smart-ui/unity/registry.json`。构建配置、制作定义与业务绑定共用 `project_unity_build_context` 的 `revision`，对应 `smart-ui/unity/construction.json`。两种记录首次写入时分别使用 `expected_revision: null`，之后使用各自的最新版本。构建请求同时固定制作资料的 `source_revision`、目录版本和构建资料版本。发生冲突时重新读取对应资料，核对差异后准备新请求。
+
+已存在制作定义时，如果修改状态图或公开槽位会同时影响目录和制作输入，通过 `project_define_unity_recipe` 一次提交 `recipe` 与完整 `definition`，并分别提供构建资料和公开目录的 revision。工具验证最终组合及已有页面后，一起保存目录、使用文档和制作定义；不能先把其中一份保存成不一致状态。单独修改文案或节点属性时只传 `recipe`。
 
 登记文件使用 schema 1。当前清单位于 `smart-ui/unity/handoffs/<handoff_id>.json`，同 ID 重新准备时保存当前结果。工具维护 `smart-ui/docs/unity-controls.md`，其中展示使用约定、预制体及使用位置。修改说明、接口或登记须通过工具；直接修改受管文档或清单会导致摘要校验失败。工程持久化资料随 Git 保存。
+
+## 在工程中接入 Editor 包
+
+在目标 Unity 6 工程的当前目录与分支接入 `com.smartui.ugui`。源码和插件分发均包含 `unity/com.smartui.ugui`。可将该包作为工程内的嵌入包保存到 `Packages/com.smartui.ugui`，或按项目约定使用指向相同包目录的版本化引用。包使用 Editor 专用程序集，依赖 uGUI 2.0 和 Newtonsoft JSON。工程须启用 Force Text 资源序列化，运行构建时 Editor 须处于空闲的编辑模式。
+
+CLI 接入需要 `com.unity.pipeline` 及支持分组自定义命令的 Unity CLI。SmartUI 的命令程序集以 Pipeline `0.10.0-exp.1` 为起点。按项目的包依赖流程引入 Pipeline，等待当前 Editor 完成脚本编译并运行 Pipeline 服务。用以下命令核对所选工程的命令目录。
+
+```powershell
+unity --format json --no-banner --non-interactive command --project-path "<Unity 工程绝对路径>" --detail full
+```
+
+目标 Editor 应公开 `smartui execute`，其中 `request_path` 是必填字符串参数。SmartUI 通过同一个绝对工程路径发现并调用该命令。使用 SmartUI 工具准备和执行构建，工具会保存本次请求、校验目标身份和结果文件，并处理控件登记。
 
 ## 定义控件
 
@@ -76,6 +97,81 @@ SmartUI 可定义基础控件、核对已有 Unity 文本预制体，并根据�
 - `text` 和 `image` 槽位可声明实例参数；一个槽位的同一属性只能由一个参数控制。参数类型为 `string`、`number`、`boolean` 或 `asset_id`。实例须提供所有必需参数，其余按需传入。状态映射只接受公开图像槽位和已登记的资产。
 - `content`、`event` 和 `data` 槽位接收业务绑定键。实例须提供必需业务槽位的绑定。`control_type`、`component_type`、参数属性名和绑定键由项目约定，实际 Unity 组件及业务行为仍须工程验证。
 - `base_control_id` 指向已登记的基础控件，`dependencies` 指向直接嵌套的其他控件。继承和嵌套关系不得形成循环，变体不能同时嵌套其祖先。变体继承基础控件的依赖、来源引用、槽位、参数和状态映射，可以扩展接口并覆盖状态图。重新声明已有槽位时须保持类别、组件类型和必需条件，重新声明已有参数时须保持目标槽位、属性、值类型和必需条件。变体单独声明自己的尺寸约定。
+
+## 控件制作定义与页面引用
+
+公开目录声明控件的用途、尺寸约定、槽位、参数及依赖。制作定义补充浏览器或 Editor 使用的节点树、默认值和槽位目标。基础控件和已有控件的制作定义使用以下字段。
+
+| 字段 | 含义 |
+| --- | --- |
+| `kind` | `base` 生成普通 Prefab，`external` 为已有 Prefab 提供预览定义 |
+| `width`、`height` | 正整数设计尺寸，须符合公开目录的尺寸范围 |
+| `nodes` | 与页面节点格式相同的内部节点。图像和文字样式须已登记。隐含控件根使用保留 ID `root` |
+| `slots` | 每个公开槽位的 `node_id` 和 `component`。文字与图像分别指向对应节点，内容和数据槽位可指向根或分组的 `rect`，事件槽位可指向根的 `button` |
+| `button` | 无 Button 时为 `null`。否则填 `target_graphic` 图像节点 ID 和 `states` 状态图映射。目标图像对应一个公开槽位，映射与目录中的状态一致。可使用 `normal`、`highlighted`、`pressed`、`selected`、`disabled`；显式声明的 `normal` 须与目标图像节点的资产相同 |
+
+变体制作定义使用 `kind: "variant"` 和 `overrides`。每个覆盖指定 `node_id`、`property` 和 `value`，支持文字节点的 `text`、`text_style_id` 以及图像节点的 `asset_id`。生成型变体从目录的 `base_control_id` 继承尺寸、节点、槽位、参数及 Button 定义。其公开目录中的 `dependencies` 填空数组，嵌套依赖由基础控件继承。省略的覆盖继续继承，显式指定当前基础值仍保留固定该值的制作意图。制作定义的实例参数支持文字槽位的 `text` 和图像槽位的 `asset_id`。
+
+当前 `external` 预览要求目录的 `base_control_id` 为 `null`；它的预览节点不授权修改实际内部对象，因此不能作为生成型变体的基础控件。现有 Prefab Variant 可通过目录工具登记并用于静态交付清单；将它纳入正式页面的只读预览尚需扩展。Unity 导出时，节点 ID 不得使用任意大小写的 `root`，同一预制体内也不得有仅大小写不同的节点 ID。
+
+在页面节点中保存控件 ID、布局字段和显式参数。例如，以下页面实例引用设计尺寸为 320×64 的主按钮。
+
+```json
+{
+  "id": "start",
+  "kind": "control",
+  "control_id": "button.primary",
+  "x": 160,
+  "y": 640,
+  "width": 320,
+  "height": 64,
+  "parameters": {"caption": "开始"}
+}
+```
+
+实例尺寸采用控件的设计尺寸，普通页面节点的布局字段同样适用。浏览器预览验证必需参数、图像和文字样式，内部节点以实例 ID 区分。业务绑定按页面、实例与槽位单独保存，页面预览只依赖控件制作和显示数据。
+
+## 准备、执行与核对构建
+
+先通过 `project_configure_unity_build` 保存配置。以下示例中的 GUID 和路径应替换为工程中现有的 TextMeshPro 字体资源、材质和各自的实际 GUID。每个用于构建的文字角色都需要映射。没有文字输入时可使用空的 `fonts` 对象。
+
+```json
+{
+  "output_root": "Assets/SmartUI",
+  "fonts": {
+    "button-title": {
+      "font_asset_path": "Assets/UI/Fonts/Button SDF.asset",
+      "font_asset_guid": "e411e53ae7f541659054d09af4469881",
+      "material_path": "Assets/UI/Fonts/Button.mat",
+      "material_guid": "727569f7ca2546dcbcf12016f1ec5e67"
+    }
+  }
+}
+```
+
+生成的控件、页面和 Sprite 分别位于输出目录下的 `Controls/`、`Pages/` 和 `Sprites/`。待生成的控件先保存公开目录和制作定义，再准备控件构建。引用已有 Prefab 时，先保存 `external` 预览定义并登记真实资源。页面依赖的生成型控件须已登记且与当前制作输入一致。修改控件后，先应用控件构建，再准备依赖它的页面。
+
+在 `project_set_unity_bindings` 中按实例 ID 和公开槽位 ID 提供业务键。例如，为 `start` 实例的 `click` 槽位保存 `{"start":{"click":"menu.start"}}`。准备页面构建时核对必需绑定。业务键用于项目接入记录，事件处理和运行时绑定由项目代码实现。
+
+用 `project_prepare_unity_build` 选择构建对象。每次请求填写 `control_ids` 或 `page_ids`，另一项传空列表。根据目的选择操作，再将返回的 `request_id` 交给 `project_execute_unity_build`。
+
+| `operation` | Editor 执行内容 |
+| --- | --- |
+| `plan` | 预检并报告新建、更新、复验、保持或冲突 |
+| `apply` | 构建和保存需要写入的对象，重新加载并核对真实资源 |
+| `verify` | 复验当前资源和引用关系 |
+
+请求、状态与结果保存在 `smart-ui/unity/operations/<request_id>/` 的 `request.json`、`operation.json` 和 `result.json`。Editor 为各目标保存成功基线及未完成写入记录，位置为 `smart-ui/unity/import-state/`。页面的直接摘要覆盖背景颜色、本页排列、显式参数和直接资源属性；继承的控件声明及资源内容变化进入依赖摘要，可触发复验。业务绑定保存在项目资料中。
+
+结果按实例 ID 和槽位 ID 记录嵌套槽位。每条记录包含当前预制体中实例排列容器的 `scope_file_id`，以及槽位来源预制体的 `control_id`、`guid` 和 `file_id`。两个同源实例可共享来源身份，各自在当前预制体中使用不同的实例容器。Editor 保存重开后核对各实例范围内的目标对象，SmartUI 再核对本地容器和已登记的来源。
+
+构建请求只能执行一次。执行前，项目资料、控件目录或构建资料的 revision 变化都需要重新准备。执行后核对结果时，普通项目资料变化会触发目标路径及直接、依赖摘要的复查，相关输入一致才可继续登记。控件目录和构建资料仍须与请求的 revision 一致。部分执行结果会区分成功与失败目标，工具只登记已经核对的控件产物。
+
+遇到超时、结果缺失或结果核对失败时，保留当前请求 ID，使用 `project_reconcile_unity_build` 检查同一次执行留下的文件。未完成核对的请求会阻止新构建。若 Editor 中断后始终没有完整结果，或资源留有 `.pending`，需要人工核对请求、目标文件及其 `.meta`、成功基线和中断记录。当前工具只报告状态和冲突，尚无自动补回执、回滚或解锁操作。
+
+当前构建适配固定尺寸的 uGUI 预制体、Sprite、TextMeshPro 文字和标准 Button。文字支持固定字号、填色、行高、字距、水平对齐和换行，溢出策略须为 `error`。缩字、裁切、最大行数、基线排列、描边和投影待后续适配。图像实例参数和变体换图要求源图与替换图的几何和尺寸一致。已生成预制体支持调整受管属性、页面排列和显式参数。增删节点、改变父级、更换嵌套来源、修改 Button 目标或公开槽位时，需要单独迁移。
+
+浏览器预览、合成文件测试和真实 Editor 保存重开分别验证。真实工程还需核对重复嵌套实例、持久对象引用、覆盖与恢复继承，以及实际显示和点击。
 
 ## 登记实际预制体
 
