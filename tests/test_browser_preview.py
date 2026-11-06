@@ -74,7 +74,7 @@ def text_node(tmp_path):
     font = tmp_path / "browser-preview.ttf"
     builder.save(font)
     return {"id": "中文文案", "kind": "text", "x": 20, "y": 30, "width": 200, "height": 80,
-            "text": "中文 A", "font_path": str(font), "font_sha256": _sha(font),
+            "text": "中文 A", "font_path": str(font), "font_sha256": _sha(font), "snapshot_key": font.name,
             "font_size": 20, "line_height": 28, "letter_spacing": 0, "align": "left", "wrap": True,
             "overflow": "error", "fill": {"color": "#FFFFFF", "opacity": 1}, "stroke": None, "shadow": None}
 

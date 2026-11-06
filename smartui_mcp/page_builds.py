@@ -1,6 +1,7 @@
 """从当前布局和资产构建可离线打开的浏览器页面。"""
 
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -27,26 +28,28 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
     with TemporaryDirectory(dir=_temporary_directory(layout.root)) as temporary:
         staging = Path(temporary) / "current"
         staging.mkdir()
-        files, copies = {}, {}
-        for index, node in enumerate(resolved["nodes"]):
+        files = {}
+        for node in resolved["nodes"]:
             field = "source" if node["kind"] == "image" else "font_path"
             hash_field = "sha256" if node["kind"] == "image" else "font_sha256"
             source = _file_path(node[field], f"节点 {node['id']} 来源")
-            if _sha256(source) != node[hash_field]:
-                raise ValueError(f"节点 {node['id']} 在保存快照时来源摘要变化：{source}")
-            key = (node["kind"], node[hash_field])
-            name = copies.get(key)
-            if name is None:
-                name = f"input-{index}{source.suffix.lower()}"
-                copy = staging / name
+            if node["kind"] == "image":
+                name = f"image-{node['asset_id']}{source.suffix.lower()}"
+            else:
+                font_path = source.relative_to(root).as_posix()
+                # 文件名编码工程内字体路径；字体内容摘要单独校验。
+                font_key = hashlib.sha256(font_path.encode("utf-8")).hexdigest()
+                name = f"font-{font_key}{source.suffix.lower()}"
+            copy = staging / name
+            if name not in files:
                 copy.write_bytes(source.read_bytes())
                 if _sha256(copy) != node[hash_field]:
                     raise ValueError(f"节点 {node['id']} 在保存快照时来源摘要变化：{source}")
-                copies[key] = name
-            copy = staging / name
+                files[name] = {"path": str(destination / name), "sha256": node[hash_field]}
+            elif files[name]["sha256"] != node[hash_field]:
+                raise ValueError(f"节点 {node['id']} 的同一快照资源摘要不一致：{source}")
             node[field] = str(copy)
             node["snapshot_key"] = name
-            files[name] = {"path": str(destination / name), "sha256": node[hash_field]}
         rendered = render_page(staging, resolved)
         for key in ("html", "overview"):
             item = deepcopy(rendered[key])
@@ -84,14 +87,17 @@ def validate_build_record(record):
             if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise ValueError(f"{node_label} 缺少有效 text_style_sha256")
         key = node.get("snapshot_key")
-        if not isinstance(key, str) or not key.startswith("input-") or Path(key).name != key:
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key) or key in {
+                "html", "overview", "inputs", "preview.html", "overview.png", "inputs.json"}:
             raise ValueError(f"页面构建节点缺少有效 snapshot_key：{label}")
         required.add(key)
         field = "source" if node["kind"] == "image" else "font_path"
         hash_field = "sha256" if node["kind"] == "image" else "font_sha256"
         item = files.get(key)
-        if (not isinstance(item, dict) or not node.get(field) or not node.get(hash_field) or
-                node[field] != item.get("path") or node[hash_field] != item.get("sha256")):
+        if (not isinstance(item, dict) or not isinstance(node.get(field), str) or
+                Path(node[field]).name != key or node[field] != item.get("path") or
+                not isinstance(node.get(hash_field), str) or not re.fullmatch(r"[0-9a-f]{64}", node[hash_field]) or
+                node[hash_field] != item.get("sha256")):
             raise ValueError(f"页面构建节点与快照文件不一致：{label}/{key}")
     if set(files) != required:
         raise ValueError(f"页面构建快照文件集合不完整：{label}；需要 {sorted(required)}")

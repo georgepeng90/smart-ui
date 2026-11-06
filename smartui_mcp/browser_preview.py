@@ -212,11 +212,12 @@ def _html(page):
         if node["kind"] == "image":
             item["url"] = _resource(node["source"], node["sha256"], f"图像节点 {node['id']}", "image/png")
         elif node["kind"] == "text":
+            key = node["snapshot_key"]
             digest = node["font_sha256"]
-            url = _resource(node["font_path"], digest, f"文字节点 {node['id']} 的字体", "font/otf")
-            if digest not in fonts:
-                fonts[digest] = {"family": f"SmartUIFont_{len(fonts)}", "sha256": digest, "url": url}
-            item["font_family"] = fonts[digest]["family"]
+            if key not in fonts:
+                url = _resource(node["font_path"], digest, f"文字节点 {node['id']} 的字体", "font/otf")
+                fonts[key] = {"family": f"SmartUIFont_{Path(key).stem}", "sha256": digest, "url": url}
+            item["font_family"] = fonts[key]["family"]
         else:
             raise ValueError(f"浏览器预览不支持节点类型：{node['kind']}")
         # 独立 HTML 只携带实际内容，不保留本机资源路径。

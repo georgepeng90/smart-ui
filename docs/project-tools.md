@@ -205,6 +205,8 @@ uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example
 
 `project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像或实际使用的文字样式变化后显式重建。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时才校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
 
+构建中的图像快照按 `asset_id` 命名，字体快照按工程相对字体路径确定名称；内容 SHA-256 独立保存。节点插入、删除或重排不改变其余资源名称，同一身份的资源复用一份快照。字体文件内容变化保持名称，移动整个工程也保持名称；工程内字体路径变更表示新的字体资源身份。资源文件格式变化时扩展名随之变化。快照清单、节点引用及实际文件摘要须一致。
+
 ## 独立图像资产与静态组合预览
 
 用宿主图像工具制作或编辑独立图像，先看实际结果，再将需要使用的 PNG、JPEG 或 WebP 文件交给 `project_register_image`。传入项目最新 revision、`asset_id`、`name`、实际绝对路径 `source_path` 和 `provenance`。登记按原字节保存图像及尺寸、模式、透明度和 SHA-256。同一资产 ID 对应一份当前图像；`project_get_image` 按 ID 查看当前文件及来源。

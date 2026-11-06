@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import sys
 
+from fontTools.ttLib import TTFont
 from mcp import StdioServerParameters
 from PIL import Image
 import pytest
@@ -97,8 +98,63 @@ def test_rebuild_uses_the_new_asset_at_every_instance(exported_project):
     assert current["id"] == old["id"]
     digest = store.context(root)["data"]["images"]["button"]["sha256"]
     assert [node["sha256"] for node in current["nodes"]] == [digest, digest]
+    assert [node["snapshot_key"] for node in current["nodes"]] == [node["snapshot_key"] for node in old["nodes"]]
     assert digest != old["nodes"][0]["sha256"]
     assert current["files"]["overview"]["sha256"] != old["files"]["overview"]["sha256"]
+
+
+def test_preview_resource_names_follow_identity_through_layout_edits(typography_project, label, typography_spec):
+    store, context = typography_project
+    root = context["project_root"]
+    image = Path(store.context(root)["data"]["images"]["button"]["path"])
+    second_image = image_node("second-image", asset_id="other-button")
+    current = store.register_image(root, context["revision"], second_image["asset_id"], "同内容的第二张图片",
+                                   str(image), {"kind": "imported", "description": "验证同内容的独立图像身份"})
+    style = typography_spec["styles"]["button-label"]
+    font = Path(style["font_path"])
+    second_font = font.with_name("other") / font.name
+    second_font.parent.mkdir()
+    shutil.copyfile(font, second_font)
+    typography_spec["styles"].update({
+        "shared-font": {**style, "line_height": 25},
+        "other-font": {**style, "font_path": str(second_font)},
+    })
+    current = store.update_typography(root, current["revision"], typography_spec)
+    button = image_node()
+    shared_label = {**label, "id": "shared-label", "text_style_id": "shared-font"}
+    second_label = {**label, "id": "second-label", "text_style_id": "other-font"}
+    first = build(store, save(store, current, [button, label, shared_label]))
+
+    def resources(result):
+        return {node["id"]: node["snapshot_key"] for node in result["page_build"]["nodes"]}
+
+    initial = resources(first)
+    assert initial[label["id"]] == initial[shared_label["id"]]
+    inserted = build(store, save(store, first, [second_image, second_label, label, shared_label, button]))
+    keys = resources(inserted)
+    assert {key: keys[key] for key in initial} == initial
+    assert len(set(keys.values())) == 4
+    inserted_record = inserted["page_build"]
+    digests = {node["id"]: inserted_record["files"][node["snapshot_key"]]["sha256"]
+               for node in inserted_record["nodes"]}
+    assert digests[second_image["id"]] == digests[button["id"]]
+    assert digests[second_label["id"]] == digests[label["id"]]
+    first_family = first["page_build"]["renderer"]["fonts"][0]["family"]
+    other_family, shared_family = (font["family"] for font in inserted_record["renderer"]["fonts"])
+    assert shared_family == first_family and other_family != first_family
+
+    with TTFont(font) as face:
+        face["name"].setName("Updated test font", 1, 3, 1, 0x409)
+        face.save(font)
+    current = store.update_typography(root, inserted["revision"], typography_spec)
+    rebuilt = build(store, save(store, current, [button, label, second_image]))
+    surviving = resources(rebuilt)
+    assert surviving == {key: keys[key] for key in surviving}
+    record = rebuilt["page_build"]
+    assert record["renderer"]["fonts"][0]["family"] == first_family
+    assert record["files"][surviving[label["id"]]]["sha256"] != digests[label["id"]]
+    assert not Path(inserted_record["files"][keys[second_label["id"]]]["path"]).exists()
+    assert store.get_page_build(root, record["id"]) == rebuilt
 
 
 def test_export_geometry_change_marks_the_preview_stale_even_when_pixels_match(exported_project):
@@ -221,6 +277,22 @@ def test_missing_required_snapshot_file_record_is_a_schema_error(exported_projec
     del state["page_builds"][build_id]["files"]["html"]
     path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     with pytest.raises((ValueError, ProjectError), match="快照文件集合不完整"):
+        store.get_page_build(context["project_root"], build_id)
+
+
+def test_snapshot_file_reference_must_match_the_manifest_key(exported_project):
+    store, context = exported_project
+    built = build(store, save(store, context, [image_node()]))
+    build_id = built["page_build"]["id"]
+    path = Path(context["project_root"]) / "smart-ui/project.json"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    altered = state["page_builds"][build_id]
+    node = altered["nodes"][0]
+    filename = node["snapshot_key"]
+    node["snapshot_key"] = "different-name.png"
+    altered["files"][node["snapshot_key"]] = altered["files"].pop(filename)
+    path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises((ValueError, ProjectError), match="节点与快照文件不一致"):
         store.get_page_build(context["project_root"], build_id)
 
 
