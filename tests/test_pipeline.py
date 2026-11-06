@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from smartui_mcp.client import PhotoCraftClient
+from smartui_mcp.client import PhotoCraftCapabilityError, PhotoCraftClient
 from smartui_mcp.pipeline import draw_component, plan_component
 from smartui_mcp.projects import ProjectError, ProjectStore
 
@@ -27,12 +27,12 @@ def build(parameters, spec, component_id):
 
 
 class UnusedClient:
-    def status(self):
+    def session(self, root, trace):
         raise AssertionError("参数和文件校验必须发生在启动 PhotoCraft 之前")
 
 
 class MissingClient:
-    def status(self):
+    def session(self, root, trace):
         raise FileNotFoundError("未安装 PhotoCraft CLI")
 
 
@@ -52,7 +52,7 @@ def record_source(store, context):
     try:
         client.status()
     except FileNotFoundError:
-        pytest.skip("原生制作回归需要安装受支持的 PhotoCraft 构建")
+        pytest.skip("原生制作回归需要安装 PhotoCraft CLI")
     result = draw_component(context["project_root"], context["revision"], "sample", client=client, store=store)
     assert all(result["verification"].values())
     return store.context(context["project_root"])
@@ -131,8 +131,27 @@ def test_real_creation_keeps_only_current_artifact(project):
     assert "source_snapshot_path" not in run
     assert "operations_path" not in run
     assert run["backend"]["name"] == "photocraft"
+    assert run["backend"]["build_verification"] in ("verified", "unverified")
+    assert run["backend"]["missing_capabilities"] == []
     assert set(run["layer_ids"]) == {"assembly", "ink", "detail"}
     assert not list((root / ".smartui/temp").iterdir())
+
+
+def test_missing_capability_preserves_actual_build_in_diagnostic(project):
+    store, context = project
+    backend = {"version": "photocraft-cli 0.20.2", "cli_path": str(Path(context["project_root"]) / "cli.exe"),
+               "sha256": "0" * 64, "build_verification": "unverified", "missing_capabilities": ["method:doc.save"]}
+
+    class IncompatibleClient:
+        def session(self, root, trace):
+            raise PhotoCraftCapabilityError("PhotoCraft 缺少必需能力：method:doc.save", backend=backend)
+
+    with pytest.raises(RuntimeError, match="缺少必需能力：method:doc.save"):
+        draw_component(context["project_root"], context["revision"], "sample", client=IncompatibleClient(), store=store)
+    root = Path(context["project_root"])
+    result = json.loads((root / ".smartui/diagnostics/sample/result.json").read_text(encoding="utf-8"))
+    assert result["backend"] == {"name": "photocraft", **backend}
+    assert store.context(context["project_root"]) == context
 
 
 def test_local_update_after_project_move_preserves_ids_and_other_nodes(project):

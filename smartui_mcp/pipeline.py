@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from PIL import Image
 
-from .client import PhotoCraftClient
+from .client import PhotoCraftCapabilityError, PhotoCraftClient
 from .layout import ProjectLayout
 from .photocraft import apply_plan, read_document
 from .projects import ProjectError, ProjectStore, spec_sha256, style_sha256
@@ -157,8 +157,8 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
     started = perf_counter()
     try:
         client = client or PhotoCraftClient()
-        record["backend"] = {"name": "photocraft", **client.status()}
         with client.session(run_dir, trace=trace) as session:
+            record["backend"] = {"name": "photocraft", **session.backend}
             ids = None
             if latest:
                 source = run_dir / "input.pcraft"
@@ -202,6 +202,8 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
                       drawing_elapsed_ms=(perf_counter() - started) * 1000, user_confirmation=None)
         _write(run_dir / "result.json", record)
     except Exception as error:
+        if isinstance(error, PhotoCraftCapabilityError):
+            record["backend"] = {"name": "photocraft", **error.backend}
         record.update(status="failed", error=str(error))
         _write(run_dir / "result.json", record)
         run_dir = _keep_diagnostic(root, component_id, run_dir)

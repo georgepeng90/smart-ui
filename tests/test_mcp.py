@@ -55,8 +55,8 @@ class FakeClient:
         return {"version": "synthetic transport fixture", "cli_path": "test", "sha256": "0" * 64}
 
     @contextmanager
-    def session(self, root):
-        self.calls.append(("session", str(root)))
+    def session(self, root, *, preview_only):
+        self.calls.append(("session", str(root), preview_only))
         yield self
 
     def call(self, method, params):
@@ -154,7 +154,7 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
             preview = await server.call_tool("photocraft_preview", {"document": document})
             session_directory = Path(fake.calls[1][1])
             self.assertEqual(session_directory.parent, root / ".smartui" / "temp")
-            self.assertEqual(fake.calls, [("status", {}), ("session", str(session_directory)),
+            self.assertEqual(fake.calls, [("status", {}), ("session", str(session_directory), True),
                 ("doc.open", {"path": "测试.pcraft"}), ("doc.render", {"maxSide": 0})])
             self.assertEqual(Path(document).read_bytes(), b"synthetic document")
             self.assertEqual(json.loads(preview[0].text), {"document": document, "width": 1, "height": 1})

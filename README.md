@@ -4,7 +4,7 @@ SmartUI PhotoCraft v0.11.0 是通用游戏 UI 制作工具。通过项目 Python
 
 ## 安装
 
-需要 Windows、Python 3.12 及以上、uv、正常安装的 PhotoCraft v0.20.1（构建 `327c4cc82`，CLI 版本输出为 `photocraft-cli 0.20.1 (327c4cc82, 2026-11-03)`），以及支持本地 stdio MCP 的 Codex。请通过 [PhotoCraft 官方发布页](https://github.com/storytold/photocraft/releases/tag/v0.20.1)安装应用。服务查找正常安装位置或 PATH 中的 CLI；也可设置 `SMARTUI_PHOTOCRAFT_CLI` 为 CLI 的绝对路径。缺失或完整版本输出不符时明确报错，运行时不自动下载应用。
+需要 Windows、Python 3.12 及以上、uv、正常安装的 PhotoCraft，以及支持本地 stdio MCP 的 Codex。已实测 PhotoCraft v0.20.1 构建 `327c4cc82`，可通过 [PhotoCraft 官方发布页](https://github.com/storytold/photocraft/releases/tag/v0.20.1)安装。服务查找正常安装位置或 PATH 中的 CLI；也可设置 `SMARTUI_PHOTOCRAFT_CLI` 为 CLI 的绝对路径。执行前检查实际必需接口与命令；其他构建标记为尚未验证，通过能力检查后可以执行。应用缺失、能力缺失或查询失败时明确报错，运行时不自动下载应用。
 
 首次安装时，在本仓库根目录运行以下命令：
 

@@ -131,7 +131,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
 
     @server.tool()
     async def photocraft_status() -> Any:
-        """检查正常安装的 PhotoCraft CLI，返回实际路径、完整版本和可执行文件摘要。"""
+        """检查 PhotoCraft CLI，返回实际路径、完整版本、可执行文件摘要、构建验证状态和缺失能力。"""
         return await asyncio.to_thread(renderer.status)
 
     @server.tool()
@@ -150,7 +150,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
             temporary_root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=temporary_root) as temporary:
                 shutil.copyfile(path, Path(temporary) / path.name)
-                with renderer.session(Path(temporary)) as session:
+                with renderer.session(Path(temporary), preview_only=True) as session:
                     opened = session.call("doc.open", {"path": path.name})
                     result = session.call("doc.render", {"maxSide": 0})
             if not isinstance(result, dict) or result.get("mime") != "image/png":
