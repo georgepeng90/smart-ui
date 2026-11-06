@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.11.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.12.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -11,7 +11,7 @@ SmartUI PhotoCraft v0.11.0 管理参考、风格规则、文字规范、Python �
 | 建立和读取项目 | `project_create`、`project_context` | 建立项目或读取当前状态和 revision |
 | 登记并查看参考 | `project_add_reference`、`project_inspect_reference` | 保存原图并按需预览、裁切及取样 |
 | 保存风格 | `project_update_style` | 保存说明、规则、项目共用参数和参考引用 |
-| 保存文字规范 | `project_update_typography` | 保存固定字号和完整角色样式，返回使用位置及页面构建状态 |
+| 保存文字规范 | `project_update_typography` | 保存基准字号和完整角色样式，返回使用位置及页面构建状态 |
 | 保存并读取程序 | `project_save_program`、`project_get_program` | 按程序 ID 保存和读取当前 Python 源码 |
 | 定义、预检及绘制组件 | `project_define_component`、`project_plan_component`、`project_draw_component` | 定义完整规格，按需预检，以全量或指定节点范围绘制 |
 | 参考对照 | `project_compare_component`、`project_get_comparison` | 对照当前组件预览与参考区域，保存及读取对照 |
@@ -21,6 +21,8 @@ SmartUI PhotoCraft v0.11.0 管理参考、风格规则、文字规范、Python �
 | 导出并查看正式 PNG | `project_export_assets`、`project_get_export` | 从组件当前产物裁切 PNG，并核对交付清单 |
 | 保存并读取布局 | `project_save_layout`、`project_get_layout` | 按布局 ID 保存和查看当前定义 |
 | 构建和查看页面 | `project_build_layout`、`project_get_page_build` | 构建布局当前定义的离线 HTML 与 PNG，按标识读取当前构建 |
+| 查询依赖和集中重建 | `project_page_dependencies`、`project_rebuild_pages` | 定位图像、组件和文字样式的使用位置，按指定顺序重建页面 |
+| 检查不同显示场景 | `project_preview_layout_variants` | 用指定尺寸、内缩量和文案构建本机预览并汇总检查结果 |
 | 制作和查看静态组合 | `project_create_composition`、`project_get_composition` | 制作或查看当前等比图像与单行文字组合 |
 
 新项目先创建，再登记参考、保存风格和程序、定义组件。已有项目先读上下文。写入时传最新的 `expected_revision`，使用返回的 `revision` 继续写入。revision 根据当前结构化项目资料计算，包括分文件保存的记录。冲突时重新读取、核对差异后再决定如何修改。
@@ -170,7 +172,7 @@ SmartUI PhotoCraft v0.11.0 管理参考、风格规则、文字规范、Python �
 - 字体使用工程内持久的 TTF/OTF，可复用现有字体目录，不能位于 `.smartui/`。保存时登记 `font_sha256`；传入该字段时要求文件与摘要一致。明确接受新字体内容时先核对文件，再省略对应角色的旧摘要并保存。未知字段、非法字体、缺字和摘要冲突明确报错，不替换字体。
 - `evidence` 可为空，补充设计写入用途和说明；有依据时每项必须包含 `reference_id`、`region:[x,y,width,height]`、`coordinate_size:[width,height]`、非空 `observation` 和 `decision`，分开记录观察及采用的设计决定。引用必须已登记，区域不得超出指定坐标尺寸。
 
-删除仍被角色引用的档位或被页面使用的角色会报错，并给出相关位置。旧构建快照不阻止删除已无当前页面引用的角色。`typography_usage` 按样式 ID 列出 `{layout_id,node_id}`；`page_status` 按已构建页面列出 `matches_layout`、`matches_images`、`matches_typography` 和 `matches_bindings`，最后一项为图像与文字样式均匹配。未构建页面仍可通过使用位置查询。字体和效果的实际值参与样式摘要，说明、参考记录、档位名称及未引用角色的变化不会使无关页面过期。文字变化不改变基础组件的风格摘要。
+删除仍被角色引用的档位或被页面使用的角色会报错，并给出相关位置。旧构建快照不阻止删除已无当前页面引用的角色。`typography_usage` 按样式 ID 列出当前布局（包括分组内节点）的 `{layout_id,node_id}`。字体内容摘要和效果的实际值参与样式摘要，说明、参考记录、档位名称及未引用角色的变化不影响其他页面。文字变化不改变基础组件的风格摘要。构建状态与更新流程见[页面依赖与集中重建](#页面依赖与集中重建)。
 
 ### 已有工程采用文字规范
 
@@ -185,7 +187,7 @@ uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example
 
 ## 可更新的页面布局
 
-用 `project_save_layout` 保存画布、纯色背景和按叠放顺序排列的节点。用 `project_get_layout` 查看当前定义。同一资产的多个实例使用不同节点 ID，均可引用同一 `asset_id`。节点矩形以画布像素定义。
+用 `project_save_layout` 保存正整数画布宽高、`#RRGGBB` 背景和节点树。用 `project_get_layout` 查看当前定义。节点顺序同时决定绘制叠放次序，排在后面的节点画在上层。节点 ID 在同一布局中唯一，最多 512 个节点（含分组），最多 32 层。长度以布局像素表示。
 
 ```json
 {"id":"confirm","kind":"image","asset_id":"primary-button","x":32,"y":100,"width":240,"height":48}
@@ -193,19 +195,95 @@ uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example
 
 图像节点在构建时按 `asset_id` 解析当前文件。正式资产遵循其伸缩几何；无几何声明的独立图像按完整原图等比居中。透明边和阴影可能延伸到目标内容框之外，按画布边界裁切。
 
-文字节点使用 `text_style_id` 引用文字规范中的完整角色，另存文案、文本框和排版策略，不接受逐节点字体、字号、颜色或效果字段。
+### 分组与尺寸
+
+分组节点包含 `id`、`kind: "group"`、`layout` 和非空 `children`，可嵌套。根节点使用非负 `x`、`y` 和正整数 `width`、`height`。根分组也可用 `region: "canvas"` 或 `region: "safe"` 替代这四个字段，分别占满画布或安全区。使用安全区时，`project_save_layout` 的 `safe_area` 参数必须同时提供 `top`、`right`、`bottom`、`left` 四边的非负整数内缩量，并为画布留下正宽高。
+
+```json
+{
+  "id": "action-row",
+  "kind": "group",
+  "region": "canvas",
+  "layout": {"direction": "row", "padding": 16, "gap": 8, "align": "center"},
+  "children": [
+    {"id": "mark", "kind": "image", "asset_id": "confirm-icon", "width": 32, "height": 32},
+    {"id": "label", "kind": "text", "text_style_id": "button-primary", "text": "确认",
+     "width": "fill", "height": 40, "align": "left", "wrap": false, "overflow": "error"}
+  ]
+}
+```
+
+| `layout.direction` | 子节点定位与尺寸 | 支持的排列参数 |
+| --- | --- | --- |
+| `absolute` | 必须提供相对于分组内边距起点的 `x`、`y`，宽高为正整数 | `padding` |
+| `row` / `column` | 沿水平或垂直主轴排列，省略 `x`、`y`，宽高可用整数或 `fill` | `padding`、`gap`、主轴 `justify`、交叉轴 `align` |
+| `overlay` | 在同一内容区域内叠放，省略 `x`、`y`，宽高可用整数或 `fill` | `padding`、水平 `justify`、垂直 `align` |
+
+`padding` 可用一个非负整数表示四边，也可用四边对象。未绑定组件时默认 0，`gap` 默认 0。对齐与分布默认 `start`，也支持 `center` 和 `end`。行、列的 `justify` 另支持 `space-between`，行的 `align` 另支持 `baseline`。主轴上的多个 `fill` 均分扣除固定尺寸及间距后的空间，余数依次分给靠前节点。交叉轴和叠放中的 `fill` 使用该轴全部可用空间。尺寸放不进分组时明确报错。
+
+`visual_offset` 必须同时提供 `x`、`y` 整数校正量，用于可见中心偏离几何中心的资产。仅在居中对齐的轴上填写非零值，正值将节点向左或向上移。行、列的排列轴不支持校正。基线行的直接子节点必须是单行、不换行的文字。Chromium 测量字体实际基线并对齐，若对齐后节点超出分组内容区则报错。
+
+### 组件使用规格
+
+页面分组可用 `component_id` 引用已声明 `spec.usage` 的组件。用 `project_define_component` 随组件规格保存 `usage`，其五个字段如下。
+
+| 字段 | 含义与要求 |
+| --- | --- |
+| `padding` | 四边非负整数内缩量，作为绑定分组的共享内边距。分组省略 `layout.padding` 时采用此值，显式填写时须与共享值一致 |
+| `text_insets` | 四边非负整数内缩量，从分组外框计算文字安全范围 |
+| `hit_insets` | 四边整数内缩量，负值扩大该侧的点击范围 |
+| `pivot` | `{x,y}`，两个坐标各为 0 到 1 的数值，按分组外框换算枢轴位置 |
+| `required_states` | 非空列表，列出不重复的状态名称，与正式导出的 `state` 比对 |
+
+三个四边对象都须完整提供 `top`、`right`、`bottom`、`left`。边距须为实例留下正宽高。构建记录每个绑定分组的实际文字范围、点击范围、枢轴、规格摘要及导出状态。状态报告的 `available` 只包括来源仍有效的导出，`missing` 表示尚未登记的必需状态，`stale` 表示已有导出但全部来源过期的必需状态。点击范围和枢轴供静态检查和后续交付使用。
+
+### 文字节点与溢出策略
+
+文字节点使用 `text_style_id` 引用文字规范中的完整角色，另存文案、文本框和排版策略。字体、字号、颜色和效果由角色样式提供。
 
 ```json
 {"id":"confirm-label","kind":"text","text_style_id":"button-primary","text":"确认","x":40,"y":104,"width":224,"height":40,"align":"center","wrap":false,"overflow":"error"}
 ```
 
-`align` 支持 `left`、`center`、`right`，`wrap` 为布尔值，`overflow` 必须为 `error` 或 `clip`。保存和构建均解析当前样式，校验字体摘要及文案字形；布局本身保存引用，不复制外观参数。浏览器将描边和投影的预留空间纳入换行与边界检查，超出时按策略报错或裁切，不自动缩字。构建记录实际角色 ID、`text_style_sha256`、解析值、字体快照和渲染边界。描边总宽度沿字形内外展开，投影使用自己的颜色和透明度；效果预留范围是明确的版式约束，不是跨渲染器通用的像素测量值。
+`align` 支持 `left`、`center`、`right`，`wrap` 为布尔值。可排列分组内的不换行单行文字可用 `width: "content"`，由 Chromium 按实际字体、字距、字形和效果测量宽度，再安排相邻节点。该宽度策略不能与 `shrink` 同用。
+
+| `overflow` | 超出文本框或可选正整数 `max_lines` 时 |
+| --- | --- |
+| `error` | 报告节点及实际测量范围，构建失败 |
+| `clip` | 按节点框及行数限制裁切，记录实际溢出 |
+| `shrink` | 从角色字号逐个整数像素减小，行高按比例调整。必须显式提供正整数 `min_font_size`，不得大于角色字号。减至下限仍放不下时构建失败 |
+
+保存和构建均解析当前样式并校验字体摘要及文案字形。布局保存样式引用，构建记录实际角色 ID、`text_style_sha256`、解析值、字体快照和渲染边界。渲染报告另记录实测行数、实际字号、基线、溢出和效果范围。
 
 `effect_insets` 记录四边效果预留：可见描边占总宽度的一半；投影从字形产生，模糊值大于 0 时每侧预算为 `ceil(2 × blur) + 1` 像素，无模糊时为 0，再分别加减水平和垂直偏移。每侧取描边、投影和 0 的最大值。`effects_bounds` 联合实际断行宽度、CSS 行高及 Canvas 字形外伸，再扩展效果预算；负字距及字体负边距也参与检查。它是布局校验范围，精确像素以 PNG 为准，不能直接作为 Unity 的描边或投影参数。
 
 `project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像或实际使用的文字样式变化后显式重建。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时才校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
 
 构建中的图像快照按 `asset_id` 命名，字体快照按工程相对字体路径确定名称；内容 SHA-256 独立保存。节点插入、删除或重排不改变其余资源名称，同一身份的资源复用一份快照。字体文件内容变化保持名称，移动整个工程也保持名称；工程内字体路径变更表示新的字体资源身份。资源文件格式变化时扩展名随之变化。快照清单、节点引用及实际文件摘要须一致。
+
+### 浏览器检查与显示场景
+
+HTML 可缩放，并可显示安全区、布局框、内容框、可见范围和文字基线。分组绑定组件后也可检查文字范围、点击范围和枢轴。PNG 保存关闭辅助线时的同一页面。图像的 `visible_box_source` 为 `canvas_alpha`，边界来自 Canvas 的非透明像素；文字为 `estimated_text_ink`，边界依据实际显示行的字形与效果估计，裁切隐藏的行不计入。文字完整的 `effects_bounds` 仍用于诊断，不代表裁切后可见范围。无可见内容时 `visible_box` 为 `null`。
+
+渲染结果的 `warnings` 报告内容框重叠、组件文字效果越过文字范围、必需状态缺失或来源过期，以及低于配置阈值的实际字号。浏览器中可展开布局提示查看涉及的节点和原因。
+
+`project_save_layout` 可传入 `checks`。其中 `min_font_size` 为可选正整数，小于它的实际字号会产生警告。此阈值独立于单个节点用于缩字的同名参数。`allow_overlap` 为可选的节点 ID 对列表，允许为顶层同级节点或 `absolute` 分组的同级节点明确放行重叠。每对须引用两个不同的现存 ID，顺序无关且不可重复。`overlay` 本身允许其直接子节点叠放。自动警告帮助定位问题，视觉层级、文字可读性和目标状态仍须查看实际页面。
+
+`checks.visual_alignment_tolerance` 为可选非负整数像素。声明后，工具检查居中轴上各直接子节点的可见中心与分组内容中心的偏移：行分组检查纵向，列分组检查横向，叠放分组按 `align` 与 `justify` 各自启用。子分组采用其内容框中心，完全透明的图像不参与比较。超出容差时记录 `visual_alignment_offset` 提示，不自动移动节点。像素边界和文字估计都只辅助视觉复查；需要校正时可明确设置 `visual_offset`。
+
+`project_preview_layout_variants(project_root, expected_revision, layout_id, variants)` 用同一正式布局对比画布尺寸、安全区、译文、字体角色和图像状态。`variants` 为非空列表，场景 ID 不区分大小写且须唯一。每个场景提供 `id`、`width`、`height`、`texts`。`texts` 按现有文字节点 ID 替换非空文案，可传空对象。
+
+可选的 `safe_area` 覆盖内缩量。`text_styles` 将现有文字节点 ID 映射到已登记的文字角色 ID，可与 `texts` 一起检查译文和字体。`images` 将现有图像节点 ID 映射到已登记的资产 ID。对比组件状态时，可将场景命名为 `normal`、`pressed` 等，并给同一节点选用对应的资产。每个场景按实际引用校验资产来源、样式和字体，再按原布局约束排版。
+
+成功时在 `.smartui/previews/variants/<layout_id>/` 发布本机批次索引、报告及各场景的 HTML、PNG、检查报告。返回索引和报告路径、场景结果及所用项目 revision 和布局摘要。场景预览独立于正式布局、正式构建及项目版本记录。批次预检或渲染失败时保留上次成功结果，并报告失败阶段、场景及本机诊断目录。目录保存该布局最近一次成功批次，修改前后的正式产物可用 Git 对应版本复查。
+
+### 页面依赖与集中重建
+
+`project_page_dependencies(project_root)` 返回当前 `revision`，并按 ID 列出 `components`、`assets`、`text_styles`、`pages`。组件列出正式导出的 `asset_ids`、直接引用组件的分组位置、当前运行及复查状态。资产与文字样式列出实际引用它们的布局和节点；未构建页面也纳入查询。每个页面给出 `not_built`、`stale` 或 `current` 状态及对应原因。过期的正式导出会报告来源组件、导出所用的运行、当前运行及需要执行的动作。
+
+`page_status` 和读取快照的结果分别给出 `matches_layout`、`matches_images`、`matches_typography`、`matches_sources`、`matches_component_usage`。其中 `matches_bindings` 仍表示图像与文字样式均匹配，`is_current` 要求各项均匹配。图像来源过期时，仍能读取此前的快照。重建引用这类资产的页面前，须按当前组件输入重画并重新导出，或在已有当前绘制结果时直接重新导出。只绑定 `spec.usage` 的分组可直接应用当前规格。
+
+`project_rebuild_pages(project_root, expected_revision, layout_ids)` 接收非空且无重复的布局 ID 列表。工具先预检所有目标及其构建输入，再按指定顺序逐页发布。成功返回 `completed_layout_ids` 和当前 `revision`。预检失败时不会发布页面。渲染或发布中途失败时停止，错误报告给出失败页面、已完成页面、当前 revision 及原因，便于修正后从对应页面继续。
 
 ## 独立图像资产与静态组合预览
 

@@ -10,7 +10,7 @@ import pytest
 
 from smartui_mcp import typography
 from smartui_mcp.page_layouts import resolve_definition, validate_definition
-from smartui_mcp.projects import ProjectError
+from smartui_mcp.projects import ProjectError, spec_sha256
 from test_compositions import text_node
 from test_export_workflow import export_item
 from test_review_workflow import project, record_sample_run
@@ -186,7 +186,8 @@ def test_invalid_image_schema_never_saves_a_partial_layout(exported_project, cha
 
 
 @pytest.mark.parametrize("change,message", [
-    ({"overflow": "shrink"}, "overflow"), ({"wrap": 1}, "wrap"),
+    ({"overflow": "shrink"}, "min_font_size"), ({"wrap": 1}, "wrap"),
+    ({"max_lines": 0}, "max_lines"), ({"min_font_size": 12}, "min_font_size"),
     ({"align": "justify"}, "align"), ({"text_style_id": "../invalid"}, "text_style_id"),
     ({"text": ""}, "text"), ({"text": "A\tA"}, "控制字符"),
     ({"unknown": 1}, "字段"), ({"font_path": "fixture.ttf"}, "font_path"),
@@ -216,6 +217,12 @@ def test_unknown_text_style_is_rejected(typography_project, label):
     with pytest.raises(ValueError, match="label.*不存在的文字样式.*unknown"):
         save(store, context, [{**label, "text_style_id": "unknown"}])
     assert project_bytes(context) == before
+
+
+def test_shrink_minimum_is_bounded_by_the_project_role_size(typography_project, label):
+    store, context = typography_project
+    with pytest.raises(ValueError, match="min_font_size.*字号 20"):
+        save(store, context, [{**label, "overflow": "shrink", "min_font_size": 21}])
 
 
 @pytest.mark.parametrize("failure", ["missing", "missing_character"])
@@ -355,3 +362,94 @@ def test_validation_preserves_the_input_objects(label):
     assert nodes == before
     assert definition["nodes"] == before
     assert definition["nodes"][1] is not label
+
+
+def test_group_relative_geometry_roundtrips_and_moves_as_a_unit(exported_project):
+    store, context = exported_project
+    group = {"id": "panel", "kind": "group", "x": 2, "y": 4, "width": 37, "height": 26,
+             "layout": {"direction": "absolute", "padding": 2},
+             "children": [image_node("first", x=1, y=1), image_node("second", x=15, y=10)]}
+    saved = save(store, context, [group])
+    definition = store.get_layout(context["project_root"], "screen")["layout"]["definition"]
+    assert definition["nodes"] == [group]
+    state = store.context(context["project_root"])["data"]
+    before = resolve_definition(state, definition)
+    moved = {**definition["nodes"][0], "x": 7, "y": 6}
+    updated = save(store, saved, [moved])
+    after = resolve_definition(state, updated["layout"]["definition"])
+    assert after["layout_groups"][0]["content_box"] == [9, 8, 33, 22]
+    assert [(node["id"], node["x"], node["y"]) for node in before["nodes"]] == [("first", 5, 7), ("second", 19, 16)]
+    assert [(node["id"], node["x"], node["y"]) for node in after["nodes"]] == [("first", 10, 9), ("second", 24, 18)]
+    assert [node["sha256"] for node in after["nodes"]] == [node["sha256"] for node in before["nodes"]]
+
+
+def test_nested_asset_reference_and_impossible_layout_are_checked_before_save(exported_project):
+    store, context = exported_project
+    node = image_node("action", width="fill")
+    node.pop("x")
+    node.pop("y")
+    group = {"id": "buttons", "kind": "group", "x": 2, "y": 2, "width": 40, "height": 16,
+             "layout": {"direction": "row", "gap": 3, "padding": 2},
+             "children": [node]}
+    before = project_bytes(context)
+    with pytest.raises(ValueError, match="action.*不存在的资产"):
+        save(store, context, [{**group, "children": [{**node, "asset_id": "missing"}]}])
+    with pytest.raises(ValueError, match="buttons.*width.*gap"):
+        save(store, context, [{**group, "width": 20,
+                               "children": [node, {**node, "id": "close", "width": 18}]}])
+    assert project_bytes(context) == before
+
+
+def test_chromium_content_width_reflows_adjacent_icon_and_elastic_region(typography_project, label):
+    _, context = typography_project
+    caption = {**label, "text": "A", "width": "content", "wrap": False}
+    icon = image_node("icon")
+    elastic = image_node("elastic", width="fill")
+    for child in (caption, icon, elastic):
+        del child["x"], child["y"]
+    group = {"id": "action", "kind": "group", "x": 2, "y": 2, "width": 90, "height": 42,
+             "layout": {"direction": "row", "padding": 2, "gap": 3, "align": "center"},
+             "children": [caption, icon, elastic]}
+
+    def resolve():
+        definition = validate_definition(96, 48, "#123456", [group])
+        return resolve_definition(context["data"], definition)["nodes"]
+
+    short_label, short_icon, short_elastic = resolve()
+    caption["text"] = "AAA"
+    long_label, long_icon, long_elastic = resolve()
+    # 测试字体 A 的字宽为字号的 60%，字号为 20 px。
+    assert long_label["width"] - short_label["width"] == 24
+    assert long_icon["x"] - short_icon["x"] == 24
+    assert short_elastic["width"] - long_elastic["width"] == 24
+    assert short_elastic["x"] + short_elastic["width"] == long_elastic["x"] + long_elastic["width"] == 90
+    assert short_icon["sha256"] == long_icon["sha256"]
+
+
+def test_component_group_uses_current_shared_padding_and_exposes_usage_geometry(exported_project):
+    _, context = exported_project
+    state = deepcopy(context["data"])
+    usage = {
+        "padding": {"top": 2, "right": 3, "bottom": 4, "left": 5},
+        "text_insets": {"top": 3, "right": 4, "bottom": 5, "left": 6},
+        "hit_insets": {"top": -1, "right": -2, "bottom": -1, "left": -2},
+        "pivot": {"x": 0.5, "y": 0.5}, "required_states": ["normal", "pressed"],
+    }
+    state["components"]["sample"]["spec"]["usage"] = usage
+    group = {"id": "action", "kind": "group", "component_id": "sample",
+             "x": 2, "y": 4, "width": 40, "height": 34, "layout": {"direction": "absolute"},
+             "children": [image_node("face", x=0, y=0)]}
+    definition = validate_definition(64, 48, "#123456", [group])
+    resolved = resolve_definition(state, definition)
+    assert definition["nodes"][0]["layout"] == {"direction": "absolute"}
+    assert resolved["layout_groups"][0]["content_box"] == [7, 6, 32, 28]
+    assert resolved["nodes"][0]["x"] == 7 and resolved["nodes"][0]["y"] == 6
+    assert resolved["component_usage"]["action"] == {
+        "component_id": "sample", "usage_sha256": spec_sha256(usage), "padding": usage["padding"],
+        "text_rect": [8, 7, 30, 26], "hit_rect": [0, 3, 44, 36], "pivot": {"x": 22, "y": 21},
+        "required_states": ["normal", "pressed"],
+        "states": {"required": ["normal", "pressed"], "missing": ["pressed"], "stale": ["normal"], "available": []},
+    }
+    definition["nodes"][0]["layout"]["padding"] = 1
+    with pytest.raises(ValueError, match="action.layout.padding.*sample.*共享使用规范"):
+        resolve_definition(state, definition)

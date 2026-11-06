@@ -30,6 +30,7 @@ TOOL_NAMES = {
     "project_export_assets", "project_get_export",
     "project_save_layout", "project_get_layout",
     "project_build_layout", "project_get_page_build",
+    "project_page_dependencies", "project_rebuild_pages", "project_preview_layout_variants",
     "project_create_composition", "project_get_composition",
 }
 

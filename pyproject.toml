@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartui-mcp"
-version = "0.11.0"
+version = "0.12.0"
 description = "使用 PhotoCraft 制作可编辑组件和组合页面的 MCP 服务"
 requires-python = ">=3.12"
 dependencies = [

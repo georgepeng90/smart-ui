@@ -334,10 +334,20 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_save_layout(project_root: str, expected_revision: str, layout_id: StrictStr, name: StrictStr,
                                   width: StrictInt, height: StrictInt, background: StrictStr,
-                                  nodes: list[dict[str, Any]]) -> Any:
+                                  nodes: list[dict[str, Any]], safe_area: dict[str, Any] | None = None,
+                                  checks: dict[str, Any] | None = None) -> Any:
         """覆盖当前布局定义；图像引用 asset_id，文字引用 text_style_id 并独立指定文案与文本框。"""
         return await asyncio.to_thread(projects.save_layout, project_root, expected_revision, layout_id, name,
-                                       width, height, background, nodes)
+                                       width, height, background, nodes, safe_area, checks)
+
+    @server.tool()
+    async def project_preview_layout_variants(project_root: str, expected_revision: str, layout_id: StrictStr,
+                                               variants: list[dict[str, Any]]) -> Any:
+        """按文案、画布尺寸和安全区批量预览场景，保存本机检查资料，保持正式布局不变。"""
+        from .page_variants import preview_layout_variants
+
+        return await asyncio.to_thread(preview_layout_variants, projects, project_root, expected_revision,
+                                       layout_id, variants)
 
     @server.tool()
     async def project_get_layout(project_root: str, layout_id: StrictStr) -> Any:
@@ -357,6 +367,16 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         result = await asyncio.to_thread(projects.get_page_build, project_root, build_id)
         return [json.dumps(result, ensure_ascii=False),
                 await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
+
+    @server.tool()
+    async def project_page_dependencies(project_root: str) -> Any:
+        """查询组件导出、图像和文字样式在当前布局中的使用位置，以及页面过期原因。"""
+        return await asyncio.to_thread(projects.page_dependencies, project_root)
+
+    @server.tool()
+    async def project_rebuild_pages(project_root: str, expected_revision: str, layout_ids: list[StrictStr]) -> Any:
+        """预检指定页面后按顺序重建；失败时保留已完成页面，报告页面 ID、原因和当前 revision。"""
+        return await asyncio.to_thread(projects.rebuild_pages, project_root, expected_revision, layout_ids)
 
     @server.tool()
     async def project_record_feedback(project_root: str, expected_revision: str, comparison_id: str,

@@ -19,4 +19,6 @@ description: 使用 PhotoCraft 执行项目 Python 程序，制作可编辑 .pcr
 
 基础组件保留 Python 程序及 `.pcraft`。独立图标通过宿主图像工具制作，登记真实来源和当前图像，不强制转换为组件程序。已有组件外观满足任务时，直接在页面中复用，参见 [page-composition](../page-composition/SKILL.md)。
 
+组件会用于页面分组时，可在 `spec.usage` 声明共享内边距、文字范围、点击范围、枢轴及所需状态。更新组件外观后，用 `project_page_dependencies` 查找需要重新导出的资产和受影响页面，再从当前产物导出对应状态。字段要求见[组件使用规格](../../docs/project-tools.md#组件使用规格)。
+
 展示实际 PNG、可编辑源文件、实际使用的程序和风格依据、技术检查和待修正的视觉偏差。工具成功、模型判断和用户确认分别报告。程序是可信本机代码，不是安全沙箱；失败或超时后先核对 `.smartui/` 中的诊断和当前持久资料，不自动重放。项目参数见[项目工具](../../docs/project-tools.md)，后端边界见[PhotoCraft 接口](../../docs/photocraft-contract.md)。

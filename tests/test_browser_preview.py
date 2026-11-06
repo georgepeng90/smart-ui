@@ -293,7 +293,9 @@ def test_transparent_effects_leave_text_layout_and_pixels_unchanged(tmp_path, pa
     assert invisible["overview"]["sha256"] == baseline["overview"]["sha256"]
     text_node["fill"]["opacity"] = 0
     no_visible_text = render_page(tmp_path / "no-visible-text", page)
-    assert no_visible_text["renderer"]["nodes"] == baseline["renderer"]["nodes"]
+    assert no_visible_text["renderer"]["nodes"] == [
+        measurement | {"visible_box": None} for measurement in baseline["renderer"]["nodes"]
+    ]
     with Image.open(no_visible_text["overview"]["path"]) as image:
         assert image.convert("RGB").getcolors() == [(page["width"] * page["height"], (18, 52, 86))]
 

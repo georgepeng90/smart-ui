@@ -12,6 +12,19 @@ from .layout import ProjectLayout
 from .page_layouts import _identifier, resolve_definition
 from .references import _sha256, _temporary_directory
 
+LAYOUT_METADATA = ("layout_groups", "baseline_groups", "safe_area", "component_usage", "checks")
+
+
+def snapshot_key(root, node, source):
+    """用图像资产 ID 或工程内字体路径命名预览资源。"""
+    suffix = source.suffix.lower()
+    if node["kind"] == "image":
+        return f"image-{node['asset_id']}{suffix}"
+    font_path = source.relative_to(root).as_posix()
+    # 文件名编码工程内字体路径；字体内容摘要单独校验。
+    font_key = hashlib.sha256(font_path.encode("utf-8")).hexdigest()
+    return f"font-{font_key}{suffix}"
+
 
 def build_page(project_root, build_id, layout_id, layout_sha256, definition, state, *, commit=None):
     """从解析后的输入创建可独立读取的 HTML、PNG、字体及图像证据。"""
@@ -33,13 +46,7 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
             field = "source" if node["kind"] == "image" else "font_path"
             hash_field = "sha256" if node["kind"] == "image" else "font_sha256"
             source = _file_path(node[field], f"节点 {node['id']} 来源")
-            if node["kind"] == "image":
-                name = f"image-{node['asset_id']}{source.suffix.lower()}"
-            else:
-                font_path = source.relative_to(root).as_posix()
-                # 文件名编码工程内字体路径；字体内容摘要单独校验。
-                font_key = hashlib.sha256(font_path.encode("utf-8")).hexdigest()
-                name = f"font-{font_key}{source.suffix.lower()}"
+            name = snapshot_key(root, node, source)
             copy = staging / name
             if name not in files:
                 copy.write_bytes(source.read_bytes())
@@ -66,6 +73,7 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
         record = {"id": build_id, "layout_id": layout_id, "layout_sha256": layout_sha256,
                   "width": definition["width"], "height": definition["height"], "background": definition["background"],
                   "nodes": resolved["nodes"], "files": files, "renderer": rendered["renderer"]}
+        record.update({key: deepcopy(resolved[key]) for key in LAYOUT_METADATA if key in resolved})
         return _replace_directory(layout, staging, destination,
                                   lambda: commit(record) if commit is not None else record)
 
@@ -113,6 +121,7 @@ def verify_build(record):
         if _sha256(path) != item["sha256"]:
             raise ValueError(f"页面快照 SHA-256 不符：{path}")
     expected = {field: deepcopy(record[field]) for field in ("width", "height", "background", "nodes")}
+    expected.update({key: deepcopy(record[key]) for key in LAYOUT_METADATA if key in record})
     for node in expected["nodes"]:
         node["source" if node["kind"] == "image" else "font_path"] = node["snapshot_key"]
     actual = json.loads(Path(record["files"]["inputs"]["path"]).read_text(encoding="utf-8"))

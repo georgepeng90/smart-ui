@@ -157,13 +157,14 @@ class ProjectStore:
 
     def update_typography(self, project_root: str, expected_revision: str, typography: dict) -> dict:
         """保存当前文字规范，拒绝悬空引用；只使使用变化样式的页面构建过期。"""
+        from .page_layouts import iter_layout_nodes
         from .typography import resolve_style, validate_font, validate_typography
 
         root = self._root(project_root)
         def change(state):
             current = validate_typography(typography, root, state["references"])
             for layout_id, page in state["layouts"].items():
-                for node in page["definition"]["nodes"]:
+                for node in iter_layout_nodes(page["definition"]["nodes"]):
                     if node["kind"] != "text":
                         continue
                     style_id = node["text_style_id"]
@@ -177,10 +178,17 @@ class ProjectStore:
 
     def define_component(self, project_root: str, expected_revision: str,
                          component_id: str, name: str, spec: dict) -> dict:
+        from .component_usage import validate_usage
+
         _identifier(component_id, "component_id")
         _text(name, "name")
         if not isinstance(spec, dict):
             raise ProjectError("spec 必须是 JSON 对象")
+        if "usage" in spec:
+            try:
+                validate_usage(spec["usage"])
+            except ValueError as error:
+                raise ProjectError(f"组件 {component_id}：{error}") from error
         def change(state):
             self._component_program(state, spec)
             self._check_id_collision(state["components"], component_id, "component_id")
@@ -521,7 +529,8 @@ class ProjectStore:
             updated = build_composition(str(root), composition_id, width, height, background, resolved, commit=commit)
             return self._composition_result(updated, composition_id)
 
-    def save_layout(self, project_root, expected_revision, layout_id, name, width, height, background, nodes):
+    def save_layout(self, project_root, expected_revision, layout_id, name, width, height, background, nodes,
+                    safe_area=None, checks=None):
         from .page_layouts import validate_definition, resolve_definition
         _identifier(layout_id, "layout_id")
         _text(name, "name")
@@ -530,7 +539,7 @@ class ProjectStore:
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
             self._check_id_collision(state["layouts"], layout_id, "layout_id")
-            definition = validate_definition(width, height, background, nodes)
+            definition = validate_definition(width, height, background, nodes, safe_area=safe_area, checks=checks)
             resolve_definition(state, definition)
             digest = spec_sha256(definition)
             state.setdefault("layouts", {})[layout_id] = {"id": layout_id, "name": name, "definition": definition, "sha256": digest}
@@ -541,20 +550,74 @@ class ProjectStore:
         return self._layout_result(self.context(project_root), layout_id)
 
     def build_layout(self, project_root, expected_revision, layout_id):
-        from .page_builds import build_page
+        from .page_dependencies import asset_source_issues, require_current_page_sources
+
         _identifier(layout_id, "layout_id")
         root = self._root(project_root)
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
-            page = state["layouts"][layout_id]
-            def commit(record):
-                record.update(created_at=datetime.now(timezone.utc).isoformat())
-                state.setdefault("page_builds", {})[layout_id] = record
-                return self._write(root, state)
+            page = state["layouts"].get(layout_id)
+            if page is None:
+                raise ProjectError(f"页面布局不存在：{layout_id}")
+            require_current_page_sources(state, page, asset_source_issues(state))
+            return self._build_layout_locked(root, state, page)
 
-            context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state, commit=commit)
-            return self._page_build_result(context, layout_id)
+    def _build_layout_locked(self, root, state, page):
+        from .page_builds import build_page
+
+        layout_id = page["id"]
+
+        def commit(record):
+            record.update(created_at=datetime.now(timezone.utc).isoformat())
+            state.setdefault("page_builds", {})[layout_id] = record
+            return self._write(root, state)
+
+        context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state, commit=commit)
+        return self._page_build_result(context, layout_id)
+
+    def page_dependencies(self, project_root):
+        from .page_dependencies import page_dependencies
+
+        return page_dependencies(self.context(project_root))
+
+    def rebuild_pages(self, project_root, expected_revision, layout_ids):
+        from .page_dependencies import asset_source_issues, require_current_page_sources
+        from .page_layouts import resolve_definition
+
+        if not isinstance(layout_ids, list) or not layout_ids:
+            raise ProjectError("layout_ids 必须是非空的页面布局 ID 列表")
+        for layout_id in layout_ids:
+            _identifier(layout_id, "layout_ids 中的 ID")
+        if len(set(layout_ids)) != len(layout_ids):
+            raise ProjectError("layout_ids 不能包含重复的页面布局 ID")
+
+        root = self._root(project_root)
+        with self._lock(root):
+            state, revision = self._read(root)
+            self._revision(root, expected_revision, revision)
+            missing = [layout_id for layout_id in layout_ids if layout_id not in state["layouts"]]
+            if missing:
+                raise ProjectError(f"页面布局不存在：{', '.join(missing)}")
+            asset_issues = asset_source_issues(state)
+            for layout_id in layout_ids:
+                page = state["layouts"][layout_id]
+                require_current_page_sources(state, page, asset_issues)
+                try:
+                    resolve_definition(state, page["definition"])
+                except (ValueError, OSError) as error:
+                    raise ProjectError(f"页面 {layout_id} 的构建输入未通过预检：{error}") from error
+
+            completed = []
+            for layout_id in layout_ids:
+                try:
+                    result = self._build_layout_locked(root, state, state["layouts"][layout_id])
+                except (ValueError, OSError, RuntimeError) as error:
+                    raise ProjectError(f"重建页面 {layout_id} 失败；已完成 layout_ids：{completed}；"
+                                       f"当前 revision：{revision}；{error}") from error
+                completed.append(layout_id)
+                revision = result["revision"]
+            return {"project_root": str(root), "revision": revision, "completed_layout_ids": completed}
 
     def get_page_build(self, project_root: str, build_id: str) -> dict:
         """读取已保存构建，只依赖快照，不要求原始图像和字体继续存在。"""
@@ -575,10 +638,11 @@ class ProjectStore:
         if record is None:
             raise ProjectError(f"页面构建不存在：{build_id}")
         return {"project_root": context["project_root"], "revision": context["revision"], "page_build": deepcopy(record),
-                **ProjectStore._page_status(state, record)}
+                **state["page_status"][build_id]}
 
     @staticmethod
-    def _page_status(state, record):
+    def _page_status(state, record, asset_issues):
+        from .page_dependencies import matches_component_usage, page_source_issues
         from .page_layouts import image_geometry
         from .typography import style_digest
 
@@ -594,8 +658,12 @@ class ProjectStore:
 
         images = all(matches_image(node) for node in record["nodes"] if node["kind"] == "image")
         text = all(matches_text(node) for node in record["nodes"] if node["kind"] == "text")
-        return {"matches_layout": state["layouts"][record["layout_id"]]["sha256"] == record["layout_sha256"],
-                "matches_images": images, "matches_typography": text, "matches_bindings": images and text}
+        matches_layout = state["layouts"][record["layout_id"]]["sha256"] == record["layout_sha256"]
+        issues = page_source_issues(state, record["nodes"], asset_issues)
+        usage = matches_component_usage(state, record, asset_issues)
+        return {"matches_layout": matches_layout, "matches_images": images, "matches_typography": text,
+                "matches_bindings": images and text, "matches_sources": not issues, "source_issues": issues,
+                "matches_component_usage": usage, "is_current": matches_layout and images and text and not issues and usage}
 
     @staticmethod
     def _layout_result(context, layout_id):
@@ -799,8 +867,14 @@ class ProjectStore:
             self._references(state, state["style"]["reference_ids"], "style.reference_ids")
             self._rule_references(state, state["style"]["rules"])
             self._validate_programs(root, state["programs"], state["paths"])
-            for component in state["components"].values():
+            from .component_usage import validate_usage
+            for component_id, component in state["components"].items():
                 self._component_program(state, component["spec"])
+                if "usage" in component["spec"]:
+                    try:
+                        validate_usage(component["spec"]["usage"])
+                    except ValueError as error:
+                        raise ProjectError(f"组件 {component_id}：{error}") from error
             for key, page in state["layouts"].items():
                 if page["sha256"] != spec_sha256(page["definition"]):
                     raise ProjectError(f"页面布局定义摘要不一致：{key}")
@@ -808,10 +882,10 @@ class ProjectStore:
             if resolved["typography"] is not None:
                 from .typography import validate_typography
                 validate_typography(resolved["typography"], root, resolved["references"], verify_fonts=False)
-            from .page_layouts import validate_definition
+            from .page_layouts import iter_layout_nodes, validate_definition
             for key, page in resolved["layouts"].items():
                 validate_definition(**page["definition"])
-                for node in page["definition"]["nodes"]:
+                for node in iter_layout_nodes(page["definition"]["nodes"]):
                     if node["kind"] == "text" and (resolved["typography"] is None or
                             node["text_style_id"] not in resolved["typography"]["styles"]):
                         raise ProjectError(f"页面 {key} 节点 {node['id']} 引用不存在的文字样式：{node['text_style_id']}")
@@ -890,6 +964,9 @@ class ProjectStore:
 
     @staticmethod
     def _context(root, state, revision):
+        from .page_dependencies import asset_source_issues, component_needs_review
+        from .page_layouts import iter_layout_nodes
+
         data = deepcopy(state)
         current_style_sha256 = style_sha256(data["style"])
 
@@ -900,13 +977,7 @@ class ProjectStore:
                         and latest["artifact_hashes"].get("preview") == sha256)
 
         for component_id, component in data["components"].items():
-            latest = component["latest_run"]
-            program = data["programs"][component["spec"]["program_id"]]
-            component["needs_review"] = (latest is None or
-                latest["style_sha256"] != current_style_sha256 or
-                latest["spec_sha256"] != spec_sha256(component["spec"]) or
-                latest.get("program_id") != program["id"] or
-                latest.get("program_sha256") != program["sha256"])
+            component["needs_review"] = component_needs_review(data, component, current_style_sha256)
             component["open_feedback_count"] = sum(
                 item["status"] == "open" and data["comparisons"][item["comparison_id"]]["component_id"] == component_id
                 for item in data.get("feedback", {}).values())
@@ -936,11 +1007,12 @@ class ProjectStore:
             composition["is_current"] = all(node["is_current"] for node in composition["nodes"] if node["kind"] != "text")
         usage = {key: [] for key in data["typography"]["styles"]} if data["typography"] is not None else {}
         for layout_id, page in data.get("layouts", {}).items():
-            for node in page["definition"]["nodes"]:
+            for node in iter_layout_nodes(page["definition"]["nodes"]):
                 if node["kind"] == "text":
                     usage[node["text_style_id"]].append({"layout_id": layout_id, "node_id": node["id"]})
         data["typography_usage"] = usage
-        data["page_status"] = {key: ProjectStore._page_status(state, record)
+        asset_issues = asset_source_issues(state)
+        data["page_status"] = {key: ProjectStore._page_status(state, record, asset_issues)
                                for key, record in data.get("page_builds", {}).items()}
         return {"project_root": str(root), "revision": revision, "data": data}
 
