@@ -120,6 +120,8 @@ def _composition_content(result):
 def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     renderer = client if client is not None else PhotoCraftClient()
     projects = ProjectStore()
+    from .unity import UnityStore
+    unity = UnityStore(projects)
     server = FastMCP(
         "SmartUI PhotoCraft",
         instructions=(
@@ -397,5 +399,36 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         """更新当前反馈状态和复查说明，不保留历史流水；resolved 必须基于已变化的产物，技术检查不等于用户美术确认。"""
         return await asyncio.to_thread(projects.update_feedback, project_root, expected_revision, feedback_id,
                                         status, comment, comparison_id, source)
+
+    @server.tool()
+    async def unity_protocol_schema() -> Any:
+        """读取 Unity 控件定义、实例交付请求及输出清单的当前 JSON Schema，不连接 Editor。"""
+        from .unity_contract import protocol_schema
+        return protocol_schema()
+
+    @server.tool()
+    async def project_unity_context(project_root: str) -> Any:
+        """读取控件目录、有效继承、使用位置及预制体文件问题；返回独立 Unity revision。"""
+        return await asyncio.to_thread(unity.context, project_root)
+
+    @server.tool()
+    async def project_define_unity_control(project_root: str, expected_revision: StrictStr | None,
+                                           control_id: StrictStr, definition: dict[str, Any]) -> Any:
+        """定义或更新基础控件及使用说明，校验引用与继承并同步生成文档；首次 revision 为 null。"""
+        return await asyncio.to_thread(unity.define_control, project_root, expected_revision, control_id, definition)
+
+    @server.tool()
+    async def project_register_unity_prefab(project_root: str, expected_revision: StrictStr | None,
+                                            control_id: StrictStr, path: StrictStr, guid: StrictStr,
+                                            slot_bindings: dict[str, StrictInt]) -> Any:
+        """核对 Assets 下真实文本预制体与 meta，登记公开槽位和源连接；不表示 Unity 导入或运行通过。"""
+        return await asyncio.to_thread(unity.register_prefab, project_root, expected_revision,
+                                       control_id, path, guid, slot_bindings)
+
+    @server.tool()
+    async def project_prepare_unity_handoff(project_root: str, expected_revision: StrictStr | None,
+                                            handoff_id: StrictStr, request: dict[str, Any]) -> Any:
+        """校验控件实例及真实来源，保存含直接输入与传递依赖摘要的交付清单；不创建 Unity 页面。"""
+        return await asyncio.to_thread(unity.prepare_handoff, project_root, expected_revision, handoff_id, request)
 
     return server

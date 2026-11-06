@@ -1,6 +1,6 @@
 # SmartUI PhotoCraft 本地制作插件
 
-SmartUI PhotoCraft v0.12.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。
+SmartUI PhotoCraft v0.13.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护基础控件目录、核对已有文本预制体并准备静态控件实例清单。
 
 ## 安装
 
@@ -22,7 +22,7 @@ codex plugin add smartui-photocraft@smartui-local
 
 使用 `reference-style` 分析参考；使用 `photocraft-drawing` 制作与修改基础组件；独立图标使用 `icon-assets`；已有资产排版、移动实例和改文案使用 `page-composition`。
 
-先调用 `project_context` 读取已有项目。新项目创建后登记并查看参考，保存风格、共用参数和 Python 程序，定义组件后制作并查看预览。首次编写或需诊断时单独预检计划；绘制入口自身也会严格预检，已明确的参数调整无需重复调用。所有写入使用最近返回的 `revision`。技术检查、模型视觉判断和用户确认分别表达。
+先调用 `project_context` 读取已有项目。新项目创建后登记并查看参考，保存风格、共用参数和 Python 程序，定义组件后制作并查看预览。首次编写或需诊断时单独预检计划；绘制入口自身也会严格预检，已明确的参数调整无需重复调用。写入使用对应工具最近返回的 `revision`。技术检查、模型视觉判断和用户确认分别表达。
 
 先用少量代表组件校准参考匹配度，必要时合成一个典型小区域。发现具体偏差且有可执行的改法时再修改。整页检查在实际页面任务中复用已有构建快照。检查与记录方法见[参考复现与视觉自审](docs/style-reproduction-validation.md)。
 
@@ -42,7 +42,9 @@ codex plugin add smartui-photocraft@smartui-local
 
 文字默认使用项目规范的固定字号。需要有限缩字时显式声明最小字号，工具先按可用空间换行，再按策略处理溢出；无法完整显示时明确报错。浏览器预览可显示内容框、可见边界、辅助线和基线，并报告几何与组件约定问题。`project_preview_layout_variants` 批量检查文案、画布和安全区组合，本机检查资料保存到 `.smartui/`，正式页面构建仍保存在 `smart-ui/`。
 
-`project_page_dependencies` 查询组件、图像、文字样式的页面使用位置及过期原因，`project_rebuild_pages` 集中重建指定页面。源组件变化而导出未更新时，先重新制作和导出再重建。业务交互和 Unity 预制体交付属于后续工程接入阶段。接口见[项目工具说明](docs/project-tools.md)。
+`project_page_dependencies` 查询组件、图像、文字样式的页面使用位置及过期原因，`project_rebuild_pages` 集中重建指定页面。源组件变化而导出未更新时，先重新制作和导出再重建。接口见[项目工具说明](docs/project-tools.md)。
+
+使用 `unity-integration` 查询和定义控件、核对并登记已有的 Unity 文本预制体、生成控件使用文档和接入清单。控件登记有独立的 `revision`。清单使用显式提供的静态实例矩形，生成前核对预制体和制作来源，生成时记录各页面的输入与依赖签名。浏览器布局中的控件实例、Unity 导入、运行时布局和业务接入仍待实现。接口与示例见 [Unity 接入工具](docs/unity-tools.md)。
 
 工具仓库只保存通用代码、Skill、文档、测试及示例。具体项目的参考、程序、源文件和当前制作资料留在项目中，`projects/` 保持忽略。
 

@@ -17,6 +17,7 @@ def main():
     files = ["plugin.json", "mcp.json", "pyproject.toml", "uv.lock", "README.md",
              "docs/photocraft-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
              "docs/toolchain-roadmap.md", "docs/typography-plan.md", "docs/style-reproduction-validation.md", "docs/asset-geometry.md",
+             "docs/unity-integration-plan.md", "docs/unity-tools.md",
              "examples/drawing-programs/semantic_palette.py",
              "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py", "scripts/adopt_typography.py"]
     for directory in ("smartui_mcp",):

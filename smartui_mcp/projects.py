@@ -159,6 +159,7 @@ class ProjectStore:
         """保存当前文字规范，拒绝悬空引用；只使使用变化样式的页面构建过期。"""
         from .page_layouts import iter_layout_nodes
         from .typography import resolve_style, validate_font, validate_typography
+        from .unity import REGISTRY, UnityStore
 
         root = self._root(project_root)
         def change(state):
@@ -173,6 +174,14 @@ class ProjectStore:
                     style = resolve_style(current, style_id)
                     validate_font(style["font_path"], style["font_sha256"], text=node["text"],
                                   label=f"页面 {layout_id} 节点 {node['id']} 的文字样式 {style_id}")
+            previous = state["typography"]
+            removed = previous["styles"].keys() - current["styles"].keys() if previous is not None else set()
+            if removed and ProjectLayout(root).resolve(REGISTRY).exists():
+                _, _, registry, _ = UnityStore(self)._read(root)
+                for control_id, record in sorted(registry["controls"].items()):
+                    for style_id in record["definition"]["text_style_ids"]:
+                        if style_id in removed:
+                            raise ProjectError(f"不能移除文字样式 {style_id}：Unity 控件 {control_id} 仍在引用")
             state["typography"] = current
         return self._update(project_root, expected_revision, change)
 

@@ -80,7 +80,7 @@
 
 ### 4.1 保存规范与引用角色
 
-使用 `reference-style` Skill 分析参考、划分角色并校准样片。用 `project_update_typography` 和当前 `expected_revision` 保存完整文字规范。工具校验参数、参考、字体和引用，并生成受管文档。被角色引用的字号档位或被页面使用的角色须先解除引用才能删除，报错会指出引用位置。
+使用 `reference-style` Skill 分析参考、划分角色并校准样片。用 `project_update_typography` 和当前 `expected_revision` 保存完整文字规范。工具校验参数、参考、字体和引用，并生成受管文档。被角色引用的字号档位或被页面、Unity 控件使用的角色须先解除引用才能删除，报错会指出引用位置。Unity 控件的角色引用通过 `project_define_unity_control` 调整。
 
 使用 `page-composition` Skill，通过 `project_context` 读取规范，为正式页面的文字节点指定 `text_style_id`。保存和构建使用相同的样式解析与字体校验。角色是否符合文案用途和页面层级由设计者判断，并以实际页面复查。
 

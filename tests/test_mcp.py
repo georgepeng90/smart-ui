@@ -32,6 +32,8 @@ TOOL_NAMES = {
     "project_build_layout", "project_get_page_build",
     "project_page_dependencies", "project_rebuild_pages", "project_preview_layout_variants",
     "project_create_composition", "project_get_composition",
+    "unity_protocol_schema", "project_unity_context", "project_define_unity_control",
+    "project_register_unity_prefab", "project_prepare_unity_handoff",
 }
 
 CUSTOM_PROGRAM = '''def build(parameters, spec, component_id):
@@ -70,6 +72,62 @@ class FakeClient:
 
 
 class MCPToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unity_catalog_and_handoff_work_over_stdio_without_renderer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            parameters = StdioServerParameters(
+                command=sys.executable, args=["-m", "smartui_mcp"],
+                cwd=str(Path(__file__).resolve().parents[1]),
+                env={**os.environ, "SMARTUI_PHOTOCRAFT_CLI": str(root / "missing-cli.exe")},
+            )
+            async with stdio_client(parameters) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+
+                    async def call(tool_name, **arguments):
+                        response = await session.call_tool(tool_name, arguments)
+                        self.assertFalse(response.isError, response.content)
+                        return json.loads(response.content[0].text)
+
+                    await call("project_create", project_root=str(root), project_id="unity-example", name="协议测试")
+                    schema = await call("unity_protocol_schema")
+                    self.assertIn("handoff_manifest", schema)
+                    initial = await call("project_unity_context", project_root=str(root))
+                    self.assertIsNone(initial["revision"])
+                    definition = {
+                        "name": "面板", "description": "仅用于协议测试的合成控件", "control_type": "panel",
+                        "base_control_id": None, "dependencies": [], "source_component_ids": [],
+                        "asset_ids": [], "text_style_ids": [], "preview_asset_id": None,
+                        "layout": {"min_width": 1, "min_height": 1, "max_width": None, "max_height": None},
+                        "slots": {}, "parameters": {}, "states": {},
+                    }
+                    defined = await call("project_define_unity_control", project_root=str(root),
+                                         expected_revision=None, control_id="panel", definition=definition)
+                    self.assertEqual(defined["controls"]["panel"]["file_status"], "not_registered")
+                    prefab = root / "Assets/UI/Panel.prefab"
+                    prefab.parent.mkdir(parents=True)
+                    # 合成文本只验证协议往返，没有经过 Unity 导入。
+                    prefab.write_text("%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+                                      "--- !u!1 &10\nGameObject:\n  m_Name: SyntheticPanel\n", encoding="utf-8")
+                    guid = "ab" * 16
+                    prefab.with_suffix(".prefab.meta").write_text(f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8")
+                    registered = await call("project_register_unity_prefab", project_root=str(root),
+                                            expected_revision=defined["revision"], control_id="panel",
+                                            path="Assets/UI/Panel.prefab", guid=guid, slot_bindings={})
+                    request = {"schema_version": 1, "adapter_id": "test", "adapter_version": "1",
+                               "pages": [{"id": "home", "name": "主页", "width": 100, "height": 100,
+                                          "instances": [{"id": "content", "control_id": "panel", "x": 0, "y": 0,
+                                                         "width": 100, "height": 100, "parameters": {}, "bindings": {}}]}]}
+                    prepared = await call("project_prepare_unity_handoff", project_root=str(root),
+                                          expected_revision=registered["revision"], handoff_id="ui", request=request)
+                    self.assertEqual(prepared["handoff"]["unity_validation"], "not_performed")
+                    self.assertEqual(prepared["handoff"]["controls"]["panel"]["prefab"]["guid"], guid)
+                    self.assertTrue(Path(prepared["handoff_path"]).is_file())
+                    self.assertIn("面板", Path(prepared["document"]).read_text(encoding="utf-8"))
+                    reopened = await call("project_unity_context", project_root=str(root))
+                    self.assertEqual(reopened["revision"], prepared["revision"])
+                    self.assertEqual(reopened["controls"]["panel"]["unity_validation"], "not_performed")
+
     async def test_visual_check_tools_require_strict_options(self):
         server = create_server(FakeClient(Path("unused.png")))
         tools = {tool.name: tool for tool in await server.list_tools()}

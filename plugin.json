@@ -1,14 +1,14 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "smartui-photocraft",
-  "version": "0.12.0",
-  "description": "分析参考、绘制可编辑组件，登记独立图像资产，并组合检查 UI 效果。",
+  "version": "0.13.0",
+  "description": "制作可编辑组件与页面，维护 Unity 控件目录、预制体登记和交付协议。",
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "SmartUI PhotoCraft",
-        "shortDescription": "制作可编辑组件，登记图像资产并组合页面",
-        "longDescription": "分析参考并维护项目风格，执行 Python 程序，通过 PhotoCraft 原生形状、图层、蒙版和效果制作组件。保存可编辑源文件及当前制作依据，登记独立图像，导出资源并构建浏览器页面预览。"
+        "shortDescription": "制作组件与页面，维护 Unity 控件目录",
+        "longDescription": "分析参考并维护项目风格，执行 Python 程序，通过 PhotoCraft 制作可编辑组件。登记图像、导出资源并构建浏览器页面预览；维护 Unity 基础控件及使用说明，核对预制体文件并准备接入清单。"
       }
     }
   }
