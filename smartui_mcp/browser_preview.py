@@ -306,7 +306,7 @@ function addOverlays(groups, measurements, usages) {
     overlay.append(layer);
     layers.set(input.dataset.layer, layer);
   }
-  function mark(layer, id, type, box) {
+  function mark(layer, id, type, box, text = id) {
     if (!box) return;
     const [x, y, width, height] = box;
     const shape = document.createElement('div');
@@ -315,6 +315,12 @@ function addOverlays(groups, measurements, usages) {
     Object.assign(shape.style, {
       left: `${x}px`, top: `${y}px`, width: `${width}px`, height: `${height}px`
     });
+    if (layer === 'guides' && type === 'rect') {
+      const label = document.createElement('span');
+      label.className = 'overlay-label';
+      label.textContent = text;
+      shape.append(label);
+    }
     layers.get(layer).append(shape);
   }
   mark('guides', 'canvas-center-x', 'vertical-line', [data.width / 2, 0, 0, data.height]);
@@ -324,7 +330,9 @@ function addOverlays(groups, measurements, usages) {
     mark('guides', 'safe-area', 'rect', [left, top, data.width - left - right, data.height - top - bottom]);
   }
   for (const group of groups) {
-    mark('guides', group.id, 'rect', group.box);
+    if (!Object.hasOwn(data.unity_adaptation || {}, group.id)) {
+      mark('guides', group.id, 'rect', group.box);
+    }
     mark('content', group.id, 'rect', group.content_box);
     if (!Object.hasOwn(usages, group.id)) continue;
     const {text_rect, hit_rect, pivot} = usages[group.id];
@@ -338,6 +346,19 @@ function addOverlays(groups, measurements, usages) {
     if (node.kind === 'text') {
       mark('baselines', node.id, 'line', [node.box[0], node.baseline, node.box[2], 0]);
     }
+  }
+  for (const [id, settings] of Object.entries(data.unity_adaptation || {})) {
+    const box = groups.find(group => group.id === id)?.box || measurements.get(id)?.layout_box;
+    const details = [id];
+    if (settings.anchor_min) details.push(`anchor [${settings.anchor_min}]–[${settings.anchor_max}]`);
+    if (settings.pivot) details.push(`pivot [${settings.pivot}]`);
+    for (const [key, name] of [['viewport_insets', 'viewport'], ['content_insets', 'content']]) {
+      if (settings[key]) {
+        const {top, right, bottom, left} = settings[key];
+        details.push(`${name} [${top},${right},${bottom},${left}]`);
+      }
+    }
+    mark('guides', id, 'rect', box, details.join(' · '));
   }
 }
 window.smartuiReady = (async () => {
@@ -581,7 +602,8 @@ def _html(page):
         nodes.append(item)
     data = {"width": page["width"], "height": page["height"], "background": page["background"],
             "nodes": nodes, "fonts": list(fonts.values())}
-    data.update({key: page[key] for key in ("layout_groups", "baseline_groups", "safe_area", "component_usage", "checks") if key in page})
+    data.update({key: page[key] for key in ("layout_groups", "baseline_groups", "safe_area", "component_usage",
+                                          "checks", "unity_adaptation") if key in page})
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     for raw, escaped in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"),
                          ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
@@ -606,6 +628,7 @@ body { margin: 0; background: #282828; }
 #overlay { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
 .overlay-layer { position: absolute; inset: 0; }
 .overlay-mark { position: absolute; }
+.overlay-label { display: inline-block; background: #171d27; color: #fff; font: 11px sans-serif; }
 .overlay-guides { color: #33d6ff; }
 .overlay-content { color: #e6cf3d; }
 .overlay-visible { color: #ff74e1; }
@@ -620,7 +643,7 @@ body { margin: 0; background: #282828; }
 .overlay-pivot::after { top: -5px; width: 1px; height: 11px; }
 body.screenshot { background: transparent; }
 body.screenshot #host { margin: 0; }
-body.screenshot #overlay { display: none; }
+body.screenshot:not(.annotated) #overlay { display: none; }
 </style></head><body>
 <div id="toolbar"><span>SmartUI 页面预览</span><label>缩放 <select id="zoom" disabled><option value="0.25">25%</option><option value="0.5">50%</option><option value="1" selected>100%</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
 <label><input type="checkbox" data-layer="guides"> 辅助线</label>
@@ -631,7 +654,7 @@ body.screenshot #overlay { display: none; }
 <script type="application/json" id="page-data">""" + payload + "</script>\n<script>" + _SCRIPT + "</script></body></html>\n"
 
 
-def _capture(html_path, png_path, width, height):
+def _capture(html_path, png_path, width, height, annotation_path):
     try:
         from playwright.sync_api import Error, sync_playwright
     except ImportError as error:
@@ -650,6 +673,15 @@ def _capture(html_path, png_path, width, height):
             evidence = tab.evaluate("() => window.smartuiForScreenshot()")
             environment = tab.evaluate("() => ({device_scale_factor: devicePixelRatio, user_agent: navigator.userAgent})")
             tab.screenshot(path=str(png_path), type="png", omit_background=True, animations="disabled")
+            if annotation_path is not None:
+                tab.evaluate("""() => {
+                  document.body.classList.add('annotated');
+                  for (const input of document.querySelectorAll('[data-layer="guides"], [data-layer="content"]')) {
+                    input.checked = true;
+                    input.dispatchEvent(new Event('change'));
+                  }
+                }""")
+                tab.screenshot(path=str(annotation_path), type="png", omit_background=True, animations="disabled")
             return {"engine": "chromium", "version": browser.version, "viewport": {"width": width, "height": height},
                     **environment, **evidence}
         except Error as error:
@@ -658,14 +690,19 @@ def _capture(html_path, png_path, width, height):
             browser.close()
 
 
-def render_page(directory: Path, page: dict) -> dict:
+def render_page(directory: Path, page: dict, *, annotate=False) -> dict:
     """保存可离线打开的 HTML，以同一页面输出参考尺寸的 PNG 和渲染证据。"""
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     html_path = directory / "preview.html"
     png_path = directory / "overview.png"
     html_path.write_text(_html(page), encoding="utf-8", newline="\n")
-    renderer = _capture(html_path, png_path, page["width"], page["height"])
-    return {"html": {"path": str(html_path), "sha256": _sha(html_path.read_bytes())},
+    annotation_path = directory / "annotated.png" if annotate else None
+    renderer = _capture(html_path, png_path, page["width"], page["height"], annotation_path)
+    result = {"html": {"path": str(html_path), "sha256": _sha(html_path.read_bytes())},
             "overview": {"path": str(png_path), "sha256": _sha(png_path.read_bytes()),
                          "size": [page["width"], page["height"]]}, "renderer": renderer}
+    if annotation_path is not None:
+        result["annotated"] = {"path": str(annotation_path), "sha256": _sha(annotation_path.read_bytes()),
+                               "size": [page["width"], page["height"]]}
+    return result

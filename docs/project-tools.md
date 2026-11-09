@@ -153,6 +153,14 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 
 静态页面无需滚动设置。浏览器的不同尺寸预览继续使用场景尺寸。滚动行为在 Unity 验收。
 
+页面构建传入 `annotate=true` 时，`project_build_layout` 额外保存 `files.annotated`。
+标注图和干净稿来自同一次 Chromium 渲染。标注图复用分组框、安全区、内容框和已声明的组件枢轴，
+与构建记录中的布局摘要和 `inputs.json` 一起用于 Unity 接入核对。
+保存布局时可用 `unity_adaptation` 按节点 ID 声明接入约束。
+`anchor_min` 和 `anchor_max` 成对提供，`pivot` 可单独提供，坐标为 Unity 约定的两个 0 到 1 的值。
+`viewport_insets` 和 `content_insets` 使用布局像素，分别表示遮罩视口和滚动内容的四边内缩。
+这些字段随构建快照交付，供 Unity 实施读取。浏览器与通用静态 Prefab 构建仍按各自已有的布局规则运行。
+
 ## 项目文字规范
 
 文字规范独立于组件绘制参数。`project_update_typography(project_root, expected_revision, typography)` 保存完整当前规范，并生成 `smart-ui/docs/typography.md`。`project_context` 返回规范、`typography_usage` 和 `page_status`。新项目可以暂不定义文字规范，但保存含文字的正式页面前必须定义所引用的角色样式。参考分析和样片校准方法见[文字设计规范](typography-plan.md)。

@@ -345,10 +345,11 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     async def project_save_layout(project_root: str, expected_revision: str, layout_id: StrictStr, name: StrictStr,
                                   width: StrictInt, height: StrictInt, background: StrictStr,
                                   nodes: list[dict[str, Any]], safe_area: dict[str, Any] | None = None,
-                                  checks: dict[str, Any] | None = None) -> Any:
+                                  checks: dict[str, Any] | None = None,
+                                  unity_adaptation: dict[str, Any] | None = None) -> Any:
         """覆盖当前布局定义；图像引用 asset_id，文字引用 text_style_id 并独立指定文案与文本框。"""
         return await asyncio.to_thread(projects.save_layout, project_root, expected_revision, layout_id, name,
-                                       width, height, background, nodes, safe_area, checks)
+                                       width, height, background, nodes, safe_area, checks, unity_adaptation)
 
     @server.tool()
     async def project_preview_layout_variants(project_root: str, expected_revision: str, layout_id: StrictStr,
@@ -365,9 +366,11 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         return await asyncio.to_thread(projects.get_layout, project_root, layout_id)
 
     @server.tool(structured_output=False)
-    async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr) -> list[Any]:
-        """覆盖当前布局的离线 HTML 和 PNG，保留当前输入摘要。"""
-        result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id)
+    async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr,
+                                   annotate: bool = False) -> list[Any]:
+        """覆盖当前布局的离线 HTML 和 PNG；annotate 同时输出适配标注图。"""
+        result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id,
+                                         annotate=annotate)
         return [json.dumps(result, ensure_ascii=False),
                 await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
 

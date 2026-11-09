@@ -12,7 +12,8 @@ from .layout import ProjectLayout
 from .page_layouts import _identifier, resolve_definition
 from .references import _sha256, _temporary_directory
 
-LAYOUT_METADATA = ("layout_groups", "baseline_groups", "safe_area", "component_usage", "control_dependencies", "checks")
+LAYOUT_METADATA = ("layout_groups", "baseline_groups", "safe_area", "component_usage", "control_dependencies",
+                   "checks", "unity_adaptation")
 
 
 def snapshot_key(root, node, source):
@@ -26,7 +27,7 @@ def snapshot_key(root, node, source):
     return f"font-{font_key}{suffix}"
 
 
-def build_page(project_root, build_id, layout_id, layout_sha256, definition, state, *, commit=None):
+def build_page(project_root, build_id, layout_id, layout_sha256, definition, state, *, commit=None, annotate=False):
     """从解析后的输入创建可独立读取的 HTML、PNG、字体及图像证据。"""
     from .browser_preview import render_page
 
@@ -57,8 +58,8 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
                 raise ValueError(f"节点 {node['id']} 的同一快照资源摘要不一致：{source}")
             node[field] = str(copy)
             node["snapshot_key"] = name
-        rendered = render_page(staging, resolved)
-        for key in ("html", "overview"):
+        rendered = render_page(staging, resolved, annotate=True) if annotate else render_page(staging, resolved)
+        for key in ("html", "overview", "annotated") if annotate else ("html", "overview"):
             item = deepcopy(rendered[key])
             item["path"] = str(destination / Path(item["path"]).name)
             files[key] = item
@@ -93,6 +94,8 @@ def validate_build_record(record):
             if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise ValueError(f"页面构建 {label} 的控件 {control_id} 缺少有效依赖摘要")
     required = {"html", "overview", "inputs"}
+    if "annotated" in files:
+        required.add("annotated")
     for node in nodes:
         if not isinstance(node, dict) or node.get("kind") not in ("image", "text"):
             raise ValueError(f"页面构建节点无效：{label}")
@@ -104,7 +107,8 @@ def validate_build_record(record):
                 raise ValueError(f"{node_label} 缺少有效 text_style_sha256")
         key = node.get("snapshot_key")
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key) or key in {
-                "html", "overview", "inputs", "preview.html", "overview.png", "inputs.json"}:
+                "html", "overview", "inputs", "annotated", "preview.html", "overview.png", "inputs.json",
+                "annotated.png"}:
             raise ValueError(f"页面构建节点缺少有效 snapshot_key：{label}")
         required.add(key)
         field = "source" if node["kind"] == "image" else "font_path"

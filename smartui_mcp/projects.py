@@ -569,7 +569,7 @@ class ProjectStore:
             return self._composition_result(updated, composition_id)
 
     def save_layout(self, project_root, expected_revision, layout_id, name, width, height, background, nodes,
-                    safe_area=None, checks=None):
+                    safe_area=None, checks=None, unity_adaptation=None):
         from .page_layouts import validate_definition, resolve_definition
         _identifier(layout_id, "layout_id")
         _text(name, "name")
@@ -578,7 +578,8 @@ class ProjectStore:
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
             self._check_id_collision(state["layouts"], layout_id, "layout_id")
-            definition = validate_definition(width, height, background, nodes, safe_area=safe_area, checks=checks)
+            definition = validate_definition(width, height, background, nodes, safe_area=safe_area,
+                                             checks=checks, unity_adaptation=unity_adaptation)
             resolve_definition(state, definition)
             digest = spec_sha256(definition)
             state.setdefault("layouts", {})[layout_id] = {"id": layout_id, "name": name, "definition": definition, "sha256": digest}
@@ -588,7 +589,7 @@ class ProjectStore:
         _identifier(layout_id, "layout_id")
         return self._layout_result(self.context(project_root), layout_id)
 
-    def build_layout(self, project_root, expected_revision, layout_id):
+    def build_layout(self, project_root, expected_revision, layout_id, *, annotate=False):
         from .page_dependencies import asset_source_issues, require_current_page_sources
 
         _identifier(layout_id, "layout_id")
@@ -600,9 +601,9 @@ class ProjectStore:
             if page is None:
                 raise ProjectError(f"页面布局不存在：{layout_id}")
             require_current_page_sources(state, page, asset_source_issues(state))
-            return self._build_layout_locked(root, state, page)
+            return self._build_layout_locked(root, state, page, annotate=annotate)
 
-    def _build_layout_locked(self, root, state, page):
+    def _build_layout_locked(self, root, state, page, *, annotate=False):
         from .page_builds import build_page
 
         layout_id = page["id"]
@@ -612,7 +613,8 @@ class ProjectStore:
             state.setdefault("page_builds", {})[layout_id] = record
             return self._write(root, state)
 
-        context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state, commit=commit)
+        context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state,
+                             commit=commit, annotate=annotate)
         return self._page_build_result(context, layout_id)
 
     def page_dependencies(self, project_root):
