@@ -5,6 +5,9 @@ description: 维护 Unity 控件目录与制作定义，通过 Unity CLI 构建�
 
 # 制作 Unity 控件并构建嵌套页面
 
+交付前执行[设计稿和 Unity 交付检查](../../docs/ui-delivery-checklists.md)。
+人工调整后先用只读请求核对差异。采纳的变化写入对应设计来源，重新构建预览后按清单更新同步基线。
+
 1. 读取 `unity_protocol_schema`、`project_context`、`project_unity_context` 和 `project_unity_build_context`，确认来源、公开目录、制作定义和各自的 revision。公开目录与构建资料独立版本化，首次写入各自使用 `null`。字段及当前限制见 [Unity 接入工具](../../docs/unity-tools.md)。
 2. 用 `project_define_unity_control` 维护用途、公开槽位、参数、状态和继承关系，用 `project_define_unity_recipe` 明确内部节点与槽位目标。已有制作定义的状态或接口需要一起修改时，在制作工具中同时传完整 `definition`、`recipe` 及两份资料的 revision，原子保存。基础控件用 `base`；变体用 `variant` 和显式属性差异；引用现有工程资产用 `external` 预览定义。省略实例参数表示继承，显式等值参数仍需保留覆盖意图。不要从 PNG 或说明文字猜测组件层级。
 3. 在用户指定的当前工程目录和分支接入 Editor 包及 Unity Pipeline，启用 Force Text 资源序列化。等待 Editor 编译完成，再确认 CLI 的实际命令目录包含 `smartui execute` 和必填字符串参数 `request_path`。通过 `project_configure_unity_build` 映射输出目录、现有 TMP 字体与材质。尚未选择工程时，可维护通用定义和预览。

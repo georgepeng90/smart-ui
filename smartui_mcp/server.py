@@ -471,10 +471,53 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_prepare_unity_build(project_root: str, expected_revision: StrictStr | None,
                                           control_ids: list[StrictStr], page_ids: list[StrictStr],
-                                          operation: Literal["plan", "apply", "verify"] = "plan") -> Any:
+                                          operation: Literal["plan", "apply", "verify"] = "plan",
+                                          adopt_matching: bool = False) -> Any:
         """从当前控件及正式页面生成持久化请求；不启动 Unity。构建控件并登记后再准备引用它们的页面。"""
         return await asyncio.to_thread(unity_builds.prepare, project_root, expected_revision,
-                                       control_ids, page_ids, operation)
+                                       control_ids, page_ids, operation, adopt_matching)
+
+    @server.tool(structured_output=False)
+    async def project_compare_unity_screenshot(project_root: str, build_id: StrictStr,
+                                                screenshot_path: StrictStr) -> list[Any]:
+        """将已核验的设计稿与同尺寸 Unity 截图并排显示，返回两侧内容摘要。"""
+        def compare():
+            from io import BytesIO
+            from PIL import Image as PillowImage
+
+            result = projects.get_page_build(project_root, build_id)
+            build = result["page_build"]
+            overview = build["files"]["overview"]
+            design = Path(overview["path"]).read_bytes()
+            if hashlib.sha256(design).hexdigest() != overview["sha256"]:
+                raise ProjectError("读取期间设计预览摘要变化")
+            screenshot = Path(screenshot_path)
+            if not screenshot.is_absolute():
+                raise ProjectError("Unity 截图必须使用绝对路径")
+            unity_image = screenshot.read_bytes()
+            with PillowImage.open(BytesIO(design)) as left, PillowImage.open(BytesIO(unity_image)) as right:
+                if left.size != right.size:
+                    raise ProjectError(f"设计稿尺寸 {left.size} 与 Unity 截图尺寸 {right.size} 不一致")
+                combined = PillowImage.new("RGBA", (left.width * 2, left.height))
+                combined.paste(left.convert("RGBA"), (0, 0))
+                combined.paste(right.convert("RGBA"), (left.width, 0))
+                with BytesIO() as buffer:
+                    combined.save(buffer, format="PNG")
+                    return [
+                        json.dumps({"layout_sha256": build["layout_sha256"], "design_sha256": overview["sha256"],
+                                    "unity_sha256": hashlib.sha256(unity_image).hexdigest(), "size": left.size}),
+                        Image(data=buffer.getvalue(), format="png"),
+                    ]
+
+        return await asyncio.to_thread(compare)
+
+    @server.tool()
+    async def project_check_localization(keys: list[StrictStr], source: dict[str, StrictStr],
+                                         generated: dict[str, StrictStr],
+                                         placeholders: list[StrictStr] | None = None) -> Any:
+        """比对项目适配器为同一语言读取的源表与生成文案，报告缺项、不一致及占位 Key。"""
+        from .unity_builds import check_localization
+        return check_localization(keys, source, generated, set(placeholders or ()))
 
     @server.tool()
     async def project_execute_unity_build(project_root: str, request_id: StrictStr) -> Any:

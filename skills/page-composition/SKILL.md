@@ -40,6 +40,8 @@ description: 使用已有组件和图像制作页面布局，检查分组、文�
 
 ## 对照参考与集中修正
 
+完成页面后执行[设计稿检查](../../docs/ui-delivery-checklists.md#设计稿)，记录不适用及待验证项。
+
 需要向 Unity 交付当前布局时，使用 `project_build_layout` 的 `annotate=true` 取得标注图，
 并附上同一构建的结构化输入。按节点 ID 核对安全区、分组框、内容框及已声明的组件枢轴。
 

@@ -437,7 +437,10 @@ def test_generated_dependency_must_apply_current_recipe_before_page_prepare(buil
     adaptation = {"anchor_min": [0, 0], "anchor_max": [1, 1], "pivot": [0.5, 0.5]}
     save(store, store.context(root), [control("start", "button", x=2, y=2, width=18, height=12)],
          unity_adaptation={"start": adaptation})
-    page_before = prepare(builder, root, [], ["screen"], "plan")["request"]["targets"][0]
+    store.update_ui_settings(root, store.context(root)["revision"], {"reference_size": {"width": 64, "height": 48}})
+    planned = prepare(builder, root, [], ["screen"], "plan")
+    assert planned["reference_size_checks"]["screen"]["status"] == "match"
+    page_before = planned["request"]["targets"][0]
     assert page_before["background"] == store.context(root)["data"]["layouts"]["screen"]["definition"]["background"]
     assert {key: page_before["nodes"][0][key] for key in adaptation} == adaptation
 

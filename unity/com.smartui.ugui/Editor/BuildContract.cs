@@ -10,6 +10,7 @@ namespace SmartUI.UGUI.Editor
     {
         public int SchemaVersion;
         public string RequestId, Operation, ProjectId, ResultPath;
+        public bool AdoptMatching;
         public Target[] Targets;
         public Dictionary<string, ImageAsset> Assets;
         public Dictionary<string, TextStyle> Fonts;
@@ -120,6 +121,7 @@ namespace SmartUI.UGUI.Editor
         public Dictionary<string, long> SlotBindings = new();
         public Dictionary<string, Dictionary<string, SlotFileId>> Instances = new();
         public string[] SourceGuids = System.Array.Empty<string>();
+        public JObject ManagedDifferences;
     }
 
     internal sealed class SlotFileId
