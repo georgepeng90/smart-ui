@@ -23,6 +23,18 @@ _RESULT_TARGET_STATES = {
 }
 
 
+def check_localization(keys, source, generated, placeholders):
+    """比对同一 locale 下实际使用的文案键。"""
+    unique = sorted(set(keys))
+    return {
+        "missing_source": [key for key in unique if key not in source],
+        "missing_generated": [key for key in unique if key not in generated],
+        "different": {key: {"source": source[key], "generated": generated[key]}
+                      for key in unique if key in source and key in generated and source[key] != generated[key]},
+        "placeholders": [key for key in unique if key in placeholders],
+    }
+
+
 def _bytes(value):
     return (_json(value) + "\n").encode("utf-8")
 
@@ -141,6 +153,7 @@ def _flat_nodes(state, definition):
     if resolved.get("baseline_groups"):
         raise ProjectError("Unity 静态构建暂不支持基线排列")
     result = []
+    adaptation = resolved.get("unity_adaptation", {})
 
     def visit(nodes, parent=None, x=0, y=0):
         for node in nodes:
@@ -148,6 +161,9 @@ def _flat_nodes(state, definition):
                 "id", "kind", "width", "height", "asset_id", "text", "text_style_id", "align", "wrap", "overflow",
                 "control_id", "parameters") if key in node}
             item.update(parent_id=parent, x=node["x"] - x, y=node["y"] - y)
+            for field in ("anchor_min", "anchor_max", "pivot"):
+                if field in adaptation.get(node["id"], {}):
+                    item[field] = adaptation[node["id"]][field]
             result.append(item)
             if node["kind"] == "group":
                 visit(node["children"], node["id"], node["x"], node["y"])
@@ -279,10 +295,12 @@ class UnityBuildStore:
                         raise ProjectError(f"页面 {page_id}/{instance}/{slot} 缺少必需业务绑定")
         return deepcopy(bindings)
 
-    def prepare(self, project_root, expected_revision, control_ids, page_ids, operation="plan"):
+    def prepare(self, project_root, expected_revision, control_ids, page_ids, operation="plan", adopt_matching=False):
         root = self.projects._root(project_root)
         if operation not in ("plan", "apply", "verify"):
             raise ProjectError("operation 必须是 plan、apply 或 verify")
+        if adopt_matching and operation != "apply":
+            raise ProjectError("adopt_matching 仅适用于 apply")
         for values, label in ((control_ids, "control_ids"), (page_ids, "page_ids")):
             if not isinstance(values, list) or not all(isinstance(item, str) for item in values) or len(set(values)) != len(values):
                 raise ProjectError(f"{label} 必须是无重复 ID 的列表")
@@ -298,6 +316,8 @@ class UnityBuildStore:
             self._ensure_idle(root)
             request_id = uuid4().hex
             request = self._request(root, source, registry, construction, control_ids, page_ids, operation, request_id)
+            if adopt_matching:
+                request["adopt_matching"] = True
             request_path = f"{OPERATIONS}/{request_id}/request.json"
             record = {"schema_version": 1, "request_id": request_id, "operation": operation, "status": "prepared",
                       "request_sha256": _sha(_bytes(request)), "source_revision": source_revision,
@@ -306,7 +326,18 @@ class UnityBuildStore:
                       "error": None, "result_sha256": None}
             self.projects._publish_batch(ProjectLayout(root), {
                 root / request_path: _bytes(request), root / OPERATIONS / request_id / "operation.json": _bytes(record)})
+            reference = source.get("ui_settings", {}).get("reference_size")
+            size_checks = {}
+            for target in request["targets"]:
+                if target["kind"] != "page":
+                    continue
+                actual = {axis: target[axis] for axis in ("width", "height")}
+                size_checks[target["id"]] = {
+                    "reference": reference, "actual": actual,
+                    "status": "not_configured" if reference is None else "match" if reference == actual else "different",
+                }
             return {"request_id": request_id, "request_path": str(root / request_path), "request": request,
+                    "reference_size_checks": size_checks,
                     "status": "prepared", "unity_execution": "not_performed"}
 
     def _request(self, root, source, registry, construction, control_ids, page_ids, operation, request_id,

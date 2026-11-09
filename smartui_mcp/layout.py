@@ -13,6 +13,7 @@ DEFAULT_PATHS = {
 }
 
 IGNORE_RULES = "# SmartUI 本机缓存、临时文件和诊断\n/.smartui/\n"
+SCHEMA_MIGRATION_BACKUPS = ".smartui/migrations"
 
 RUN_PATH_FIELDS = (
     "document", "preview", "style_snapshot_path", "plan_path",

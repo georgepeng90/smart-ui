@@ -2,7 +2,7 @@
 
 import json
 
-from .layout import DEFAULT_PATHS, ProjectLayout, map_state_paths
+from .layout import DEFAULT_PATHS, SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
 from .page_builds import validate_build_record
 from .page_layouts import resolve_definition, validate_definition
 from .projects import ProjectError, ProjectStore, _identifier, _json, _sha, spec_sha256
@@ -170,21 +170,25 @@ def _prepare(store, layout, typography, layout_styles, *, expected_revision=None
     revision = spec_sha256(old)
     if expected_revision is not None:
         store._revision(layout.root, expected_revision, revision)
-    backup = layout.root / "smart-ui/adoptions/typography" / revision
+    target_schema_version = 5
+    transition = f"{old['schema_version']}-to-{target_schema_version}"
+    backup = layout.root / SCHEMA_MIGRATION_BACKUPS / transition / revision
     layout._check_managed_path(backup)
     if backup.exists():
         raise ProjectError(f"转换备份已存在，不能覆盖：{backup}")
-    for parent in (backup.parent, backup.parent.parent):
+    for parent in backup.parents:
+        if parent == layout.root:
+            break
         if parent.exists() and not parent.is_dir():
             raise ProjectError(f"转换备份的目录已被文件占用：{parent}")
     artifacts, builds, retired = _backup_builds(old, layout, backup)
 
     state = map_state_paths(old, layout.resolve)
-    state["schema_version"] = 5
+    state["schema_version"] = target_schema_version
     state["typography"] = validate_typography(typography, layout.root, state["references"])
     _convert_layouts(state, layout, layout_styles)
     converted = sorted(layout_styles)
-    manifest = {"previous_schema_version": 4, "revision": revision, "layout_styles": layout_styles,
+    manifest = {"previous_schema_version": old["schema_version"], "revision": revision, "layout_styles": layout_styles,
                 "converted_layouts": converted, "page_builds": builds}
     artifacts[backup / "project.json"] = project_bytes
     artifacts[backup / "manifest.json"] = (_json(manifest) + "\n").encode("utf-8")

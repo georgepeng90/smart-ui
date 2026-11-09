@@ -116,7 +116,7 @@ Chromium 正式页面支持纯色填充、字距、单层描边和单层字形�
 python scripts/adopt_typography.py --project-root <工程根目录> --typography <文字规范 JSON> --layout-styles <页面角色映射 JSON>
 ```
 
-应用后，工程使用格式 5，文字节点引用已分配的角色。原项目索引、相关布局定义、构建记录以及含文字页面的原 HTML 和 PNG 归档到 `smart-ui/adoptions/typography/<revision>/`。需要继续维护的文字页面使用当前布局显式构建，并在目标尺寸下复查。
+应用后，工程使用格式 5，文字节点引用已分配的角色。原项目索引、相关布局定义、构建记录以及含文字页面的原 HTML 和 PNG 归档到业务工程的本机目录 `.smartui/migrations/4-to-5/<revision>/`。历史备份留在原位置，由项目维护者按需移动。需要继续维护的文字页面使用当前布局显式构建，并在目标尺寸下复查。
 
 ## 6. 验证范围
 

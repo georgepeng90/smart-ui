@@ -9,6 +9,8 @@ description: 使用宿主图像工具生成或编辑独立 UI 图标，将图像
 
 调用图像资产和组合工具前，先阅读[项目工具说明](../../docs/project-tools.md#独立图像资产与静态组合预览)。
 
+生成新图标前用 `project_search_reusable` 查同用途的公共图素，按需查看候选预览。
+
 任务主要是用已有组件和图像排页面、移动实例或修改文案时，使用 [page-composition Skill](../page-composition/SKILL.md)。组合不限于 ICON 检查；只有需要生成或编辑独立图像时才进入本制作流程。
 
 ## 工作流程

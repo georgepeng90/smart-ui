@@ -13,6 +13,40 @@ from smartui_mcp.layout_constraints import arrange_definition
 from test_browser_preview import _sha, image_node, page, text_node
 
 
+def test_review_annotation_keeps_design_and_extends_device_regions(tmp_path, page, text_node):
+    page.update(width=540, height=780, background="#273448", nodes=[
+        text_node | dict(id=key, x=x, y=y, width=w, height=h, text=label, align="center")
+        for key, x, y, w, h, label in (
+            ("ordinary", 30, 45, 210, 65, "Account overview"),
+            ("edge", 350, 45, 150, 65, "Settings"),
+            ("horizontal", 30, 180, 470, 65, "Notifications"),
+            ("both", 30, 310, 470, 360, "Activity"),
+        )
+    ], unity_adaptation={
+        "edge": {"anchor_min": [1, 1], "anchor_max": [1, 1], "pivot": [1, 1]},
+        "horizontal": {"anchor_min": [0, 1], "anchor_max": [1, 1], "pivot": [0, 1]},
+        "both": {"anchor_min": [0, 0], "anchor_max": [1, 1], "pivot": [0, 0]},
+    })
+    result = render_page(tmp_path, page, annotate=True, annotation_device={
+        "top": 40, "bottom": 30, "label": "Illustrative device", "extend_background": True,
+    })
+    annotation = result["annotated"]
+    assert annotation["missing"] == [
+        {"field": "safe_area"}, {"node_id": "ordinary", "field": "anchor_min"},
+        {"node_id": "ordinary", "field": "anchor_max"}, {"node_id": "ordinary", "field": "pivot"},
+    ]
+    with Image.open(annotation["path"]) as marked, Image.open(result["overview"]["path"]) as clean:
+        marked, clean = marked.convert("RGB"), clean.convert("RGB")
+        assert marked.height > clean.height + 70
+        assert marked.getpixel((12, 12)) == clean.getpixel((12, 12))
+        assert marked.crop((45, 100, 195, 137)).tobytes() == clean.crop((45, 60, 195, 97)).tobytes()
+        assert marked.getpixel((30, 85)) == (153, 153, 153)
+        assert marked.getpixel((501, 87)) == (255, 190, 50)
+        assert marked.getpixel((250, 212)) == (73, 170, 255)
+        assert marked.getpixel((22, 500)) == (73, 170, 255)
+        assert marked.getpixel((30, 709)) == (73, 229, 146)
+
+
 def test_different_font_sizes_align_on_the_rendered_baseline(tmp_path, page, text_node):
     small = text_node | dict(id="small", x=10, y=30, width=36, height=34, text="A", wrap=False,
                              font_size=16, line_height=24)

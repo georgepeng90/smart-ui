@@ -44,13 +44,13 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 | `smart-ui/exports/` | 正式 PNG 导出资料 |
 | `smart-ui/previews/` | 当前组件预览、对照、视觉检查、静态组合及页面构建 |
 | `smart-ui/unity/` | 已启用项目的 Unity 控件登记和当前接入清单，独立于项目索引 |
-| `.smartui/` | 本机缓存、临时文件、诊断和锁 |
+| `.smartui/` | 本机缓存、临时文件、诊断、锁和schema 升级迁移备份 |
 
 提交业务工程的 `smart-ui/` 及项目实际使用的交付文件。项目内路径以相对业务工程根目录的形式保存，使用 `/` 分隔；调用工具时可以用返回的绝对路径打开文件。项目引用的字体等必要资源也应能从业务工程取得。程序、组件、布局和资产按 ID 保存当前状态，历史变更通过 Git 查阅。受管 Markdown 展示项目摘要，通过工具更新结构化资料。
 
 项目写入时在 `smart-ui/.gitattributes` 确保 `* -text` 生效，避免 Git 转换换行后导致文件摘要不匹配。
 
-创建项目时，工具在业务工程根目录的 `.gitignore` 添加 `/.smartui/`。停止工具后可清空它；读取项目、继续修改组件、导出和构建页面依赖的是提交的资料以及正常安装的运行环境。项目锁只协调同一工程目录，revision 用来拒绝过期写入。各自检出的分支仍通过 Git 协商合并，工具不会自动合并 JSON 冲突或 PhotoCraft 文件。
+创建项目时，工具在业务工程根目录的 `.gitignore` 添加 `/.smartui/`。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。读取项目、继续修改组件、导出和构建页面依赖的是提交的资料以及正常安装的运行环境。项目锁只协调同一工程目录，revision 用来拒绝过期写入。各自检出的分支仍通过 Git 协商合并，工具不会自动合并 JSON 冲突或 PhotoCraft 文件。
 ## 参考区域与规则依据
 
 `region` 和取样 `rect` 都是 `[x, y, width, height]`，相对完整参考图。省略 `coordinate_size` 使用原图坐标；若按 1080 × 1920 整图预览测量，传 `[1080,1920]`，工具映射到原图。
@@ -139,6 +139,43 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 
 `region` 相对来源预览，`geometry` 相对裁切后的 PNG，约束见[内容区域与伸缩几何](asset-geometry.md)。`output_path` 是 `smart-ui/exports/` 下的工程相对 PNG 路径，`manifests/` 保留给清单。已登记的正式资产需沿用对应输出路径。导出记录包括来源组件、区域、文件摘要、状态、用途和几何。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
 
+## 页面制作的项目约定
+
+视觉规则在项目风格中维护，字体和字号复用文字角色，控件尺寸和使用条件复用组件使用约定。
+图集、本地化和资源加载路径沿用工程约定。布局对齐、边距及适配检查见页面布局和构建说明。
+
+`project_update_ui_settings(project_root, expected_revision, settings)` 保存完整的项目 UI 设置。
+两个字段均按任务需要填写，`project_context` 返回已保存的 `ui_settings`。
+
+- `reference_size` 包含正整数 `width` 与 `height`，作为正式页面的项目参考尺寸。
+- `scroll` 包含 `movement`（`Elastic` 或 `Clamped`）和布尔值 `drag_short_content`。
+  普通列表继承此约定，特殊列表在交付记录中声明覆盖值及原因。
+
+静态页面无需滚动设置。浏览器的不同尺寸预览继续使用场景尺寸。滚动行为在 Unity 验收。
+
+## 查询可复用的控件与图素
+
+`project_set_public_images(project_root, expected_revision, asset_ids)` 设置公开图素 ID 集合。
+图像文件、来源和伸缩几何沿用现有资产登记及导出清单。
+`project_search_reusable(project_root, query)` 按 ID、名称和用途检索公共图素与控件目录，
+空查询返回全部候选。结果包含预览路径、资产尺寸和几何、页面使用位置、图素来源过期原因及控件登记状态。
+选定候选后，页面按 `asset_id` 或 `control_id` 引用。
+
+页面设计稿和整页预览默认交付干净稿、适配标注图和同版 `inputs.json`。
+`project_build_layout` 默认保存 `files.annotated` 并返回两张图，内部快速预览可传 `annotate=false`。
+标注图以同次 Chromium 渲染的干净稿为底图。灰虚线表示元素范围，金点表示贴边锚定，
+两轴均贴边时，金点位于对应角。绿十字表示枢轴，蓝色双向箭头表示拉伸轴。
+箭头优先放在避开可见文字的外缘，再尝试内缘。无合适位置的箭头列在 `files.annotated.omitted_stretch`。
+英文图例使用实际标记。精确值保留在 `inputs.json`，缺项列在 `files.annotated.missing`。
+传入 `annotation_device` 可在完整设计区上下扩展设备绘制区域。用 `top`、`bottom` 指定像素，
+并用 `label` 说明设备或标明示意用途。显式设置 `extend_background=true` 可延伸页面底色，
+或用 `background_node` 指定铺满全屏的图像节点。设备扩展仅影响标注图，输入快照记录这些参数。
+保存布局时可用 `unity_adaptation` 按节点 ID 声明接入约束。
+`anchor_min` 和 `anchor_max` 成对提供，`pivot` 可单独提供，坐标为 Unity 约定的两个 0 到 1 的值。
+`viewport_insets` 和 `content_insets` 使用布局像素，分别表示遮罩视口和滚动内容的四边内缩。
+这些字段随构建快照交付。Unity 构建将锚点和枢轴映射为受管 RectTransform 属性，并保持参考尺寸下的布局。
+滚动内缩供工程配置 ScrollRect。浏览器仍按现有布局规则渲染。
+
 ## 项目文字规范
 
 文字规范独立于组件绘制参数。`project_update_typography(project_root, expected_revision, typography)` 保存完整当前规范，并生成 `smart-ui/docs/typography.md`。`project_context` 返回规范、`typography_usage` 和 `page_status`。新项目可以暂不定义文字规范，但保存含文字的正式页面前必须定义所引用的角色样式。参考分析和样片校准方法见[文字设计规范](typography-plan.md)。
@@ -186,7 +223,7 @@ uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example
 uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example --typography D:/Art/typography.json --layout-styles D:/Art/layout-styles.json --apply --expected-revision <预检返回的revision>
 ```
 
-第一条命令只预检，返回 revision、转换页面、需重建页面和备份目录。应用前校验原受管文档、布局、原字体摘要、新规范与全部映射。应用一次发布新规范及引用，归档原索引、受影响布局、旧构建记录和含文字页面的独立 HTML/PNG，目录为 `smart-ui/adoptions/typography/<revision>/`。含文字的旧构建从当前索引移出，页面需重建；纯图像构建保留。已有备份或文字规范文件不会被覆盖。脚本不支持其他格式，也不为正常接口保留旧文字字段。
+schema 升级的本机备份按 `.smartui/migrations/<源版本>-to-<目标版本>/<revision>/` 组织。本次 4 → 5 升级引入文字角色规范，预检和应用结果的 `backup_directory` 均为相对业务工程根目录的路径 `.smartui/migrations/4-to-5/<revision>`。预检只返回结果，不创建备份目录或写入文件。应用前校验 revision、原受管文档、布局、原字体摘要、新规范与全部映射。应用一次发布新规范及引用，归档原索引、受影响布局、旧构建记录和含文字页面的独立 HTML/PNG。含文字的旧构建从当前索引移出，页面需重建。纯图像构建保留。目标目录已有同 revision 的备份或项目已有文字规范文件时，转换会拒绝覆盖。历史备份留在原位置，由项目维护者按需移动。
 
 ## 可更新的页面布局
 

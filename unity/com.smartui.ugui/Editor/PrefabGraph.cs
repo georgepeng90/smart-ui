@@ -223,14 +223,17 @@ namespace SmartUI.UGUI.Editor
                 Own(properties, "root/background", background, "m_RaycastTarget", false);
             }
             var siblingCounts = new Dictionary<string, int>();
+            var referenceSizes = new Dictionary<string, Vector2> { ["root"] = new(target.Width, target.Height) };
             foreach (var node in target.Nodes)
             {
                 var item = nodes[node.Id];
                 var rect = new Rect(node.X, node.Y, node.Width, node.Height);
                 if (node.Kind == "image")
                     rect = BuildResources.ImageRect(resources.Image(node.AssetId), rect);
-                RectFields(properties, node.Id, RequireSingle<RectTransform>(item), rect);
                 string parent = node.ParentId ?? "root";
+                properties.RectLayout(node.Id + "/rect", RequireSingle<RectTransform>(item),
+                    Point(node.AnchorMin), Point(node.AnchorMax), Point(node.Pivot), rect, referenceSizes[parent]);
+                referenceSizes.Add(node.Id, rect.size);
                 siblingCounts.TryGetValue(parent, out int order);
                 properties.SiblingOrder(node.Id + "/order", item.transform, order);
                 siblingCounts[parent] = order + 1;
@@ -260,6 +263,8 @@ namespace SmartUI.UGUI.Editor
 
         static void Own(ManagedProperties fields, string key, Object value, string path, object desired, bool localRef = false) =>
             fields.Own(key + "/" + path, value, path, desired, localRef);
+
+        static Vector2 Point(float[] value) => value == null ? TopLeft : new Vector2(value[0], value[1]);
 
         static void RectFields(ManagedProperties fields, string key, RectTransform value, Rect rect, bool stretch = false)
         {

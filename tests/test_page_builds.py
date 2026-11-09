@@ -35,7 +35,10 @@ def files(record):
 def test_build_uses_real_browser_and_replaces_the_current_preview(typography_project, label):
     store, context = typography_project
     other_label = {**label, "id": "second-label", "y": 18}
-    saved = save(store, context, [image_node("first"), image_node("second", x=25), label, other_label])
+    adaptation = {"first": {"anchor_min": [0, 1], "anchor_max": [0, 1], "pivot": [0, 1]}}
+    saved = store.save_layout(
+        context["project_root"], context["revision"], "screen", "Screen", 64, 48, "#000000",
+        [image_node("first"), image_node("second", x=25), label, other_label], unity_adaptation=adaptation)
     before_assets = deepcopy(store.context(context["project_root"])["data"]["images"])
     first = build(store, saved)
     record = first["page_build"]
@@ -59,6 +62,7 @@ def test_build_uses_real_browser_and_replaces_the_current_preview(typography_pro
         assert screenshot.size == (64, 48)
     inputs = json.loads(Path(record["files"]["inputs"]["path"]).read_text(encoding="utf-8"))
     assert inputs["nodes"][0]["source"] == record["nodes"][0]["snapshot_key"]
+    assert inputs["unity_adaptation"] == record["unity_adaptation"] == adaptation
     assert inputs["nodes"][2]["font_path"] == record["nodes"][2]["snapshot_key"]
     assert [node["text_style_id"] for node in inputs["nodes"][2:]] == ["button-label", "button-label"]
     assert inputs["nodes"][2]["text_style_sha256"] == inputs["nodes"][3]["text_style_sha256"]
@@ -79,6 +83,12 @@ def test_build_uses_real_browser_and_replaces_the_current_preview(typography_pro
     assert current["data"]["images"] == before_assets
     assert current["data"]["layouts"]["screen"] == saved["layout"]
     assert set(current["data"]["page_builds"]) == {"screen"}
+    annotated = store.build_layout(current["project_root"], current["revision"], "screen", annotate=True)["page_build"]
+    assert annotated["layout_sha256"] == record["layout_sha256"]
+    assert annotated["files"]["overview"]["sha256"] == record["files"]["overview"]["sha256"]
+    assert annotated["files"]["annotated"]["sha256"] != record["files"]["overview"]["sha256"]
+    verified = store.get_page_build(current["project_root"], "screen")
+    assert verified["page_build"]["files"]["annotated"] == annotated["files"]["annotated"]
 
 
 def test_rebuild_uses_the_new_asset_at_every_instance(exported_project):
@@ -340,11 +350,14 @@ def test_build_and_get_over_real_stdio_return_the_current_png_bytes(exported_pro
             overview = Path(result["page_build"]["files"]["overview"]["path"])
             expected = overview.read_bytes()
             assert base64.b64decode(image.data) == expected
+            annotation = Path(result["page_build"]["files"]["annotated"]["path"]).read_bytes()
+            assert base64.b64decode(response.content[2].data) == annotation != expected
             fetched = await session.call_tool("project_get_page_build", {
                 "project_root": context["project_root"], "build_id": result["page_build"]["id"],
             })
             assert not fetched.isError, fetched
             assert json.loads(fetched.content[0].text) == result
             assert base64.b64decode(fetched.content[1].data) == expected
+            assert base64.b64decode(fetched.content[2].data) == annotation
 
     asyncio.run(scenario())

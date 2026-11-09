@@ -73,7 +73,7 @@ namespace SmartUI.UGUI.Editor
             try
             {
                 ValidateRequest();
-                resources.ValidateImages(IsVerify);
+                resources.ValidateImages(IsVerify || request.AdoptMatching);
                 foreach (var id in request.Fonts.Keys)
                     resources.Font(id);
                 var states = new TargetState[request.Targets.Length];
@@ -96,7 +96,7 @@ namespace SmartUI.UGUI.Editor
                 if (IsPlan)
                     return;
 
-                if (!IsVerify)
+                if (!IsVerify && !request.AdoptMatching)
                     resources.ImportImages();
                 for (int i = 0; i < request.Targets.Length; i++)
                 {
@@ -226,6 +226,13 @@ namespace SmartUI.UGUI.Editor
                     float.IsNaN(node.X) || float.IsNaN(node.Y) || float.IsInfinity(node.X) || float.IsInfinity(node.Y))
                     throw new InvalidOperationException($"'{target.Id}' has an invalid node '{node.Id}', parent or rectangle.");
 
+                if ((node.AnchorMin == null) != (node.AnchorMax == null) ||
+                    !NormalizedPoint(node.AnchorMin) || !NormalizedPoint(node.AnchorMax) ||
+                    !NormalizedPoint(node.Pivot) ||
+                    (node.AnchorMin != null &&
+                     (node.AnchorMin[0] > node.AnchorMax[0] || node.AnchorMin[1] > node.AnchorMax[1])))
+                    throw new InvalidOperationException($"'{target.Id}' has invalid anchors or pivot on '{node.Id}'.");
+
                 switch (node.Kind)
                 {
                     case "group": break;
@@ -288,6 +295,9 @@ namespace SmartUI.UGUI.Editor
             }
         }
 
+        static bool NormalizedPoint(float[] value) =>
+            value == null || value.Length == 2 && value.All(axis => axis >= 0 && axis <= 1);
+
         static Rect NodeRect(Node node) => new(node.X, node.Y, node.Width, node.Height);
 
         (TargetState state, string action) Preflight(Target target, TargetResult result)
@@ -302,6 +312,8 @@ namespace SmartUI.UGUI.Editor
             var state = BuildFiles.Read<TargetState>(statePath);
             if (state == null)
             {
+                if (request.AdoptMatching)
+                    throw new InvalidOperationException($"'{target.Path}' has no baseline to adopt.");
                 if (files.Sha256 != null || files.MetaSha256 != null)
                     throw new InvalidOperationException($"'{target.Path}' already exists without a SmartUI baseline.");
                 if (IsVerify)
@@ -313,9 +325,14 @@ namespace SmartUI.UGUI.Editor
             RequireSameStructure(target, state.Declaration);
             if (target.Kind != "page")
                 UpdateControl(target, state.Guid, state.Identities);
-            var old = Inspect(target, state.Guid, result, false);
-            ManagedProperties.RequireEqual(old.managed, state.Managed, target.Path);
+            var old = Inspect(target, state.Guid, result, false, state.Managed);
             ManagedProperties.RequireEqual(old.identities, state.Identities, target.Path + " identity");
+            if (request.AdoptMatching && request.Operation == "apply")
+            {
+                Inspect(target, state.Guid, result, true);
+                return (state, "verify");
+            }
+            ManagedProperties.RequireEqual(old.managed, state.Managed, target.Path);
             if (state.DirectSha256 != target.DirectSha256)
             {
                 if (IsVerify)
@@ -416,7 +433,8 @@ namespace SmartUI.UGUI.Editor
             }
         }
 
-        (JObject managed, JObject identities) Inspect(Target target, string guid, TargetResult result, bool verifyDesired)
+        (JObject managed, JObject identities) Inspect(Target target, string guid, TargetResult result,
+            bool verifyDesired, JObject baseline = null)
         {
             var asset = PrefabAssets.RequirePrefab(target.Path, guid);
             PrefabAssets.RequireClean(target.Path, asset);
@@ -438,6 +456,23 @@ namespace SmartUI.UGUI.Editor
                 var graph = new PrefabGraph(request, resources, target, loaded, false);
                 var properties = graph.Properties(verifyDesired);
                 var managed = properties.Snapshot();
+                if (baseline != null && !JToken.DeepEquals(baseline, managed))
+                {
+                    var desired = graph.Properties(true).Desired();
+                    result.ManagedDifferences = new JObject();
+                    foreach (string key in baseline.Properties().Select(item => item.Name)
+                                 .Union(managed.Properties().Select(item => item.Name)))
+                    {
+                        if (JToken.DeepEquals(baseline[key], managed[key]))
+                            continue;
+                        result.ManagedDifferences[key] = new JObject
+                        {
+                            ["baseline"] = baseline[key]?.DeepClone(),
+                            ["unity"] = managed[key]?.DeepClone(),
+                            ["design"] = desired[key]?.DeepClone()
+                        };
+                    }
+                }
                 if (verifyDesired)
                 {
                     ManagedProperties.RequireEqual(managed, properties.Desired(), target.Path);

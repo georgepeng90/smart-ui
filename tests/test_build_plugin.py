@@ -17,7 +17,10 @@ def test_distribution_includes_unity_editor_package(tmp_path):
     local_cache.write_text("local", encoding="utf-8")
 
     subprocess.run([sys.executable, str(tmp_path / "scripts" / "build_plugin.py")], check=True)
-    packaged = tmp_path / "dist" / "smartui-photocraft" / package
+    distribution = tmp_path / "dist" / "smartui-photocraft"
+    for filename in ("ui-delivery-plan.md", "ui-delivery-checklists.md"):
+        assert (distribution / "docs" / filename).is_file()
+    packaged = distribution / package
     assert (packaged / "package.json").read_bytes() == (source / package / "package.json").read_bytes()
     assert (packaged / "Editor" / "SmartUI.UGUI.Editor.asmdef").is_file()
     assert (packaged / "Editor" / "Pipeline" / "SmartUI.UGUI.Pipeline.Editor.asmdef").is_file()

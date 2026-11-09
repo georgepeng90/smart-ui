@@ -12,7 +12,7 @@ import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
-from .layout import DEFAULT_PATHS, ProjectLayout, map_state_paths
+from .layout import DEFAULT_PATHS, SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
 
 
 class ProjectError(RuntimeError):
@@ -52,6 +52,22 @@ def _text(value, field):
         raise ProjectError(f"{field} 必须是非空字符串")
 
 
+def _validate_ui_settings(settings):
+    if not isinstance(settings, dict) or settings.keys() - {"reference_size", "scroll"}:
+        raise ProjectError("ui_settings 仅支持 reference_size 和 scroll")
+    if "reference_size" in settings:
+        size = settings["reference_size"]
+        if (not isinstance(size, dict) or size.keys() != {"width", "height"}
+                or any(type(value) is not int or value <= 0 for value in size.values())):
+            raise ProjectError("reference_size 必须包含正整数 width 和 height")
+    if "scroll" in settings:
+        scroll = settings["scroll"]
+        if (not isinstance(scroll, dict) or scroll.keys() != {"movement", "drag_short_content"}
+                or scroll["movement"] not in ("Elastic", "Clamped")
+                or type(scroll["drag_short_content"]) is not bool):
+            raise ProjectError("scroll 必须包含 Elastic 或 Clamped movement 和布尔值 drag_short_content")
+
+
 class ProjectStore:
     def create(self, project_root: str, project_id: str, name: str) -> dict:
         root = self._root(project_root)
@@ -84,6 +100,22 @@ class ProjectStore:
         with self._lock(root):
             state, revision = self._read(root)
             return self._context(root, state, revision)
+
+    def update_ui_settings(self, project_root: str, expected_revision: str, settings: dict) -> dict:
+        _validate_ui_settings(settings)
+
+        def change(state):
+            state["ui_settings"] = deepcopy(settings)
+
+        return self._update(project_root, expected_revision, change)
+
+    def set_public_images(self, project_root, expected_revision, asset_ids):
+        def change(state):
+            if len(asset_ids) != len(set(asset_ids)) or set(asset_ids) - state["images"].keys():
+                raise ProjectError("公共图素必须使用无重复的已登记资产 ID")
+            state["public_image_ids"] = sorted(asset_ids)
+
+        return self._update(project_root, expected_revision, change)
 
     def add_reference(self, project_root: str, expected_revision: str, reference: dict) -> dict:
         def change(state):
@@ -545,7 +577,7 @@ class ProjectStore:
             return self._composition_result(updated, composition_id)
 
     def save_layout(self, project_root, expected_revision, layout_id, name, width, height, background, nodes,
-                    safe_area=None, checks=None):
+                    safe_area=None, checks=None, unity_adaptation=None):
         from .page_layouts import validate_definition, resolve_definition
         _identifier(layout_id, "layout_id")
         _text(name, "name")
@@ -554,7 +586,8 @@ class ProjectStore:
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
             self._check_id_collision(state["layouts"], layout_id, "layout_id")
-            definition = validate_definition(width, height, background, nodes, safe_area=safe_area, checks=checks)
+            definition = validate_definition(width, height, background, nodes, safe_area=safe_area,
+                                             checks=checks, unity_adaptation=unity_adaptation)
             resolve_definition(state, definition)
             digest = spec_sha256(definition)
             state.setdefault("layouts", {})[layout_id] = {"id": layout_id, "name": name, "definition": definition, "sha256": digest}
@@ -564,7 +597,7 @@ class ProjectStore:
         _identifier(layout_id, "layout_id")
         return self._layout_result(self.context(project_root), layout_id)
 
-    def build_layout(self, project_root, expected_revision, layout_id):
+    def build_layout(self, project_root, expected_revision, layout_id, *, annotate=False, annotation_device=None):
         from .page_dependencies import asset_source_issues, require_current_page_sources
 
         _identifier(layout_id, "layout_id")
@@ -576,9 +609,9 @@ class ProjectStore:
             if page is None:
                 raise ProjectError(f"页面布局不存在：{layout_id}")
             require_current_page_sources(state, page, asset_source_issues(state))
-            return self._build_layout_locked(root, state, page)
+            return self._build_layout_locked(root, state, page, annotate=annotate, annotation_device=annotation_device)
 
-    def _build_layout_locked(self, root, state, page):
+    def _build_layout_locked(self, root, state, page, *, annotate=False, annotation_device=None):
         from .page_builds import build_page
 
         layout_id = page["id"]
@@ -588,7 +621,8 @@ class ProjectStore:
             state.setdefault("page_builds", {})[layout_id] = record
             return self._write(root, state)
 
-        context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state, commit=commit)
+        context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state,
+                             commit=commit, annotate=annotate, annotation_device=annotation_device)
         return self._page_build_result(context, layout_id)
 
     def page_dependencies(self, project_root):
@@ -859,6 +893,8 @@ class ProjectStore:
                 raise ProjectError(f"项目状态必须是 schema_version=5 的对象：{layout.project_file}；已有项目请先显式转换文字规范与页面样式引用")
             if state["paths"] != DEFAULT_PATHS:
                 raise ProjectError("项目目录必须使用 smart-ui/ 固定结构")
+            if "ui_settings" in state:
+                _validate_ui_settings(state["ui_settings"])
             for collection, directory in self._collections().items():
                 records = {}
                 for key, relative in state[collection].items():
@@ -869,6 +905,11 @@ class ProjectStore:
                         raise ProjectError(f"{collection}.{key} 路径必须为 {expected}")
                     records[key] = json.loads(layout.resolve(relative).read_bytes())
                 state[collection] = records
+            if "public_image_ids" in state:
+                public_ids = state["public_image_ids"]
+                if (not isinstance(public_ids, list) or any(not isinstance(key, str) for key in public_ids)
+                        or len(public_ids) != len(set(public_ids)) or set(public_ids) - state["images"].keys()):
+                    raise ProjectError("公共图素必须使用无重复的已登记资产 ID")
             if state["typography"] is not None:
                 if state["typography"] != "smart-ui/typography.json":
                     raise ProjectError("typography 路径必须为 smart-ui/typography.json")
@@ -1165,13 +1206,14 @@ class ProjectStore:
         """先校验并备齐整批文件，发布失败后恢复已替换的文件。"""
         root = layout.root
         persistent = root / "smart-ui"
+        migration_backups = root / SCHEMA_MIGRATION_BACKUPS
         temporary = root / ".smartui/temp"
         pending = {}
         try:
             for destination, content in files.items():
                 layout._check_managed_path(destination)
-                if not destination.is_relative_to(persistent) or destination == persistent:
-                    raise ProjectError(f"项目发布路径必须位于 smart-ui/：{destination}")
+                if not any(directory in destination.parents for directory in (persistent, migration_backups)):
+                    raise ProjectError(f"项目发布路径必须位于 smart-ui/ 或 {SCHEMA_MIGRATION_BACKUPS}/：{destination}")
                 if destination.exists() and not destination.is_file():
                     raise ProjectError(f"项目发布路径已存在但不是文件：{destination}")
                 for parent in destination.parents:

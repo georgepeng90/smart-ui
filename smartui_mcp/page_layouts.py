@@ -39,7 +39,7 @@ def iter_layout_nodes(nodes):
             yield from iter_layout_nodes(node["children"])
 
 
-def validate_definition(width, height, background, nodes, safe_area=None, checks=None):
+def validate_definition(width, height, background, nodes, safe_area=None, checks=None, unity_adaptation=None):
     """校验页面结构与节点字段，保留文案和布局信息。"""
     _integer(width, "width", 1)
     _integer(height, "height", 1)
@@ -186,6 +186,27 @@ def validate_definition(width, height, background, nodes, safe_area=None, checks
                     raise ValueError(f"checks.allow_overlap 含重复节点对：{pair}")
                 seen.add(key)
         definition["checks"] = deepcopy(checks)
+    if unity_adaptation is not None:
+        if not isinstance(unity_adaptation, dict) or unity_adaptation.keys() - identifiers:
+            raise ValueError("unity_adaptation 必须按现有布局节点 ID 声明")
+        for node_id, settings in unity_adaptation.items():
+            label = f"unity_adaptation.{node_id}"
+            if not isinstance(settings, dict) or not settings or settings.keys() - {
+                    "anchor_min", "anchor_max", "pivot", "viewport_insets", "content_insets"}:
+                raise ValueError(f"{label} 包含无效适配字段")
+            if ("anchor_min" in settings) != ("anchor_max" in settings):
+                raise ValueError(f"{label} 必须同时声明 anchor_min 和 anchor_max")
+            for key in settings.keys() & {"anchor_min", "anchor_max", "pivot"}:
+                point = settings[key]
+                if (not isinstance(point, list) or len(point) != 2
+                        or any(type(value) not in (int, float) or not 0 <= value <= 1 for value in point)):
+                    raise ValueError(f"{label}.{key} 必须包含两个 0 到 1 的坐标")
+            if "anchor_min" in settings and any(
+                    low > high for low, high in zip(settings["anchor_min"], settings["anchor_max"])):
+                raise ValueError(f"{label} 的 anchor_min 不得大于 anchor_max")
+            for key in settings.keys() & {"viewport_insets", "content_insets"}:
+                validate_insets(settings[key], f"{label}.{key}")
+        definition["unity_adaptation"] = deepcopy(unity_adaptation)
     return definition
 
 
@@ -337,6 +358,8 @@ def resolve_definition(state, definition, *, include_layout_tree=False):
         result["baseline_groups"] = baseline_groups
     if usages:
         result["component_usage"] = _resolve_component_usages(state, groups, usages)
+    if "unity_adaptation" in definition:
+        result["unity_adaptation"] = deepcopy(definition["unity_adaptation"])
     verified = set()
     for node in result["nodes"]:
         if node["kind"] != "image":

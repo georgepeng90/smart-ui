@@ -22,7 +22,10 @@ PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 TOOL_NAMES = {
     "photocraft_status", "photocraft_inspect_document", "photocraft_preview",
     "project_create", "project_context", "project_add_reference", "project_inspect_reference",
-    "project_update_style", "project_update_typography", "project_define_component", "project_draw_component",
+    "project_update_style", "project_update_typography", "project_update_ui_settings",
+    "project_check_localization", "project_compare_unity_screenshot",
+    "project_set_public_images", "project_search_reusable",
+    "project_define_component", "project_draw_component",
     "project_save_program", "project_get_program", "project_plan_component",
     "project_compare_component", "project_get_comparison", "project_create_visual_check", "project_get_visual_check",
     "project_record_feedback", "project_update_feedback",

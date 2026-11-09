@@ -94,6 +94,14 @@ def _comparison_image(result):
     return _verified_png(result["comparison"]["images"]["comparison"], "对照图片")
 
 
+def _page_build_content(result):
+    files = result["page_build"]["files"]
+    content = [json.dumps(result, ensure_ascii=False), _verified_png(files["overview"], "页面干净稿")]
+    if "annotated" in files:
+        content.append(_verified_png(files["annotated"], "页面适配标注图"))
+    return content
+
+
 def _visual_check_content(result):
     images = result["visual_check"]["images"]
     content = [json.dumps(result, ensure_ascii=False), _verified_png(images["overview"], "视觉检查总览图")]
@@ -173,6 +181,23 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     async def project_context(project_root: str) -> Any:
         """读取项目、参考、风格及组件摘要，返回后续写入必须提供的 revision。受管文档被手改时明确报错。"""
         return _project_summary(await asyncio.to_thread(projects.context, project_root))
+
+    @server.tool()
+    async def project_update_ui_settings(project_root: str, expected_revision: str, settings: dict[str, Any]) -> Any:
+        """保存项目参考尺寸和滚动默认行为；project_context 返回当前设置。"""
+        return _project_summary(await asyncio.to_thread(
+            projects.update_ui_settings, project_root, expected_revision, settings))
+
+    @server.tool()
+    async def project_set_public_images(project_root: str, expected_revision: str, asset_ids: list[StrictStr]) -> Any:
+        """设置项目中公开可复用的已登记图素 ID。"""
+        return _project_summary(await asyncio.to_thread(
+            projects.set_public_images, project_root, expected_revision, asset_ids))
+
+    @server.tool()
+    async def project_search_reusable(project_root: str, query: str = "") -> Any:
+        """按 ID、名称或用途搜索公共图素及 Unity 控件，返回来源、使用位置和检查状态。"""
+        return await asyncio.to_thread(unity.search_reusable, project_root, query)
 
     @server.tool()
     async def project_add_reference(project_root: str, expected_revision: str, reference_id: str, source_path: str) -> Any:
@@ -339,10 +364,11 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     async def project_save_layout(project_root: str, expected_revision: str, layout_id: StrictStr, name: StrictStr,
                                   width: StrictInt, height: StrictInt, background: StrictStr,
                                   nodes: list[dict[str, Any]], safe_area: dict[str, Any] | None = None,
-                                  checks: dict[str, Any] | None = None) -> Any:
+                                  checks: dict[str, Any] | None = None,
+                                  unity_adaptation: dict[str, Any] | None = None) -> Any:
         """覆盖当前布局定义；图像引用 asset_id，文字引用 text_style_id 并独立指定文案与文本框。"""
         return await asyncio.to_thread(projects.save_layout, project_root, expected_revision, layout_id, name,
-                                       width, height, background, nodes, safe_area, checks)
+                                       width, height, background, nodes, safe_area, checks, unity_adaptation)
 
     @server.tool()
     async def project_preview_layout_variants(project_root: str, expected_revision: str, layout_id: StrictStr,
@@ -359,18 +385,19 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         return await asyncio.to_thread(projects.get_layout, project_root, layout_id)
 
     @server.tool(structured_output=False)
-    async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr) -> list[Any]:
-        """覆盖当前布局的离线 HTML 和 PNG，保留当前输入摘要。"""
-        result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id)
-        return [json.dumps(result, ensure_ascii=False),
-                await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
+    async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr,
+                                   annotate: bool = True,
+                                   annotation_device: dict[str, Any] | None = None) -> list[Any]:
+        """默认交付干净稿、人工评审标注图和同版 inputs.json。annotation_device 可声明外部设备区域。"""
+        result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id,
+                                         annotate=annotate, annotation_device=annotation_device)
+        return await asyncio.to_thread(_page_build_content, result)
 
     @server.tool(structured_output=False)
     async def project_get_page_build(project_root: str, build_id: StrictStr) -> list[Any]:
         """校验并读取当前页面快照，分别检查布局、图像和文字样式是否符合当前定义。"""
         result = await asyncio.to_thread(projects.get_page_build, project_root, build_id)
-        return [json.dumps(result, ensure_ascii=False),
-                await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
+        return await asyncio.to_thread(_page_build_content, result)
 
     @server.tool()
     async def project_page_dependencies(project_root: str) -> Any:
@@ -462,10 +489,53 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_prepare_unity_build(project_root: str, expected_revision: StrictStr | None,
                                           control_ids: list[StrictStr], page_ids: list[StrictStr],
-                                          operation: Literal["plan", "apply", "verify"] = "plan") -> Any:
+                                          operation: Literal["plan", "apply", "verify"] = "plan",
+                                          adopt_matching: bool = False) -> Any:
         """从当前控件及正式页面生成持久化请求；不启动 Unity。构建控件并登记后再准备引用它们的页面。"""
         return await asyncio.to_thread(unity_builds.prepare, project_root, expected_revision,
-                                       control_ids, page_ids, operation)
+                                       control_ids, page_ids, operation, adopt_matching)
+
+    @server.tool(structured_output=False)
+    async def project_compare_unity_screenshot(project_root: str, build_id: StrictStr,
+                                                screenshot_path: StrictStr) -> list[Any]:
+        """将已核验的设计稿与同尺寸 Unity 截图并排显示，返回两侧内容摘要。"""
+        def compare():
+            from io import BytesIO
+            from PIL import Image as PillowImage
+
+            result = projects.get_page_build(project_root, build_id)
+            build = result["page_build"]
+            overview = build["files"]["overview"]
+            design = Path(overview["path"]).read_bytes()
+            if hashlib.sha256(design).hexdigest() != overview["sha256"]:
+                raise ProjectError("读取期间设计预览摘要变化")
+            screenshot = Path(screenshot_path)
+            if not screenshot.is_absolute():
+                raise ProjectError("Unity 截图必须使用绝对路径")
+            unity_image = screenshot.read_bytes()
+            with PillowImage.open(BytesIO(design)) as left, PillowImage.open(BytesIO(unity_image)) as right:
+                if left.size != right.size:
+                    raise ProjectError(f"设计稿尺寸 {left.size} 与 Unity 截图尺寸 {right.size} 不一致")
+                combined = PillowImage.new("RGBA", (left.width * 2, left.height))
+                combined.paste(left.convert("RGBA"), (0, 0))
+                combined.paste(right.convert("RGBA"), (left.width, 0))
+                with BytesIO() as buffer:
+                    combined.save(buffer, format="PNG")
+                    return [
+                        json.dumps({"layout_sha256": build["layout_sha256"], "design_sha256": overview["sha256"],
+                                    "unity_sha256": hashlib.sha256(unity_image).hexdigest(), "size": left.size}),
+                        Image(data=buffer.getvalue(), format="png"),
+                    ]
+
+        return await asyncio.to_thread(compare)
+
+    @server.tool()
+    async def project_check_localization(keys: list[StrictStr], source: dict[str, StrictStr],
+                                         generated: dict[str, StrictStr],
+                                         placeholders: list[StrictStr] | None = None) -> Any:
+        """比对项目适配器为同一语言读取的源表与生成文案，报告缺项、不一致及占位 Key。"""
+        from .unity_builds import check_localization
+        return check_localization(keys, source, generated, set(placeholders or ()))
 
     @server.tool()
     async def project_execute_unity_build(project_root: str, request_id: StrictStr) -> Any:
