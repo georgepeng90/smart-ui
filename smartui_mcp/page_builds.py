@@ -27,7 +27,8 @@ def snapshot_key(root, node, source):
     return f"font-{font_key}{suffix}"
 
 
-def build_page(project_root, build_id, layout_id, layout_sha256, definition, state, *, commit=None, annotate=False):
+def build_page(project_root, build_id, layout_id, layout_sha256, definition, state, *,
+               commit=None, annotate=False, annotation_device=None):
     """从解析后的输入创建可独立读取的 HTML、PNG、字体及图像证据。"""
     from .browser_preview import render_page
 
@@ -37,6 +38,12 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
     root = _file_path(str(project_root), "project_root")
     layout = ProjectLayout(root, state["paths"])
     resolved = resolve_definition(state, definition)
+    if annotation_device is not None:
+        from .annotation import validate_device
+
+        if not annotate:
+            raise ValueError("annotation_device 需要启用 annotate")
+        resolved["annotation_device"] = validate_device(annotation_device, resolved)
     destination = root / "smart-ui" / "previews" / "pages" / layout_id
     layout._check_managed_path(destination)
     with TemporaryDirectory(dir=_temporary_directory(layout.root)) as temporary:
@@ -58,7 +65,8 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
                 raise ValueError(f"节点 {node['id']} 的同一快照资源摘要不一致：{source}")
             node[field] = str(copy)
             node["snapshot_key"] = name
-        rendered = render_page(staging, resolved, annotate=True) if annotate else render_page(staging, resolved)
+        rendered = (render_page(staging, resolved, annotate=True, annotation_device=annotation_device)
+                    if annotate else render_page(staging, resolved))
         for key in ("html", "overview", "annotated") if annotate else ("html", "overview"):
             item = deepcopy(rendered[key])
             item["path"] = str(destination / Path(item["path"]).name)

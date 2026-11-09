@@ -350,11 +350,14 @@ def test_build_and_get_over_real_stdio_return_the_current_png_bytes(exported_pro
             overview = Path(result["page_build"]["files"]["overview"]["path"])
             expected = overview.read_bytes()
             assert base64.b64decode(image.data) == expected
+            annotation = Path(result["page_build"]["files"]["annotated"]["path"]).read_bytes()
+            assert base64.b64decode(response.content[2].data) == annotation != expected
             fetched = await session.call_tool("project_get_page_build", {
                 "project_root": context["project_root"], "build_id": result["page_build"]["id"],
             })
             assert not fetched.isError, fetched
             assert json.loads(fetched.content[0].text) == result
             assert base64.b64decode(fetched.content[1].data) == expected
+            assert base64.b64decode(fetched.content[2].data) == annotation
 
     asyncio.run(scenario())

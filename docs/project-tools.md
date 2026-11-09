@@ -161,9 +161,15 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 空查询返回全部候选。结果包含预览路径、资产尺寸和几何、页面使用位置、图素来源过期原因及控件登记状态。
 选定候选后，页面按 `asset_id` 或 `control_id` 引用。
 
-页面构建传入 `annotate=true` 时，`project_build_layout` 额外保存 `files.annotated`。
-标注图和干净稿来自同一次 Chromium 渲染。标注图复用分组框、安全区、内容框和已声明的组件枢轴，
-与构建记录中的布局摘要和 `inputs.json` 一起用于 Unity 接入核对。
+页面设计稿和整页预览默认交付干净稿、适配标注图和同版 `inputs.json`。
+`project_build_layout` 默认保存 `files.annotated` 并返回两张图，内部快速预览可传 `annotate=false`。
+标注图以同次 Chromium 渲染的干净稿为底图。灰虚线表示元素范围，金点表示贴边锚定，
+两轴均贴边时，金点位于对应角。绿十字表示枢轴，蓝色双向箭头表示拉伸轴。
+箭头优先放在避开可见文字的外缘，再尝试内缘。无合适位置的箭头列在 `files.annotated.omitted_stretch`。
+英文图例使用实际标记。精确值保留在 `inputs.json`，缺项列在 `files.annotated.missing`。
+传入 `annotation_device` 可在完整设计区上下扩展设备绘制区域。用 `top`、`bottom` 指定像素，
+并用 `label` 说明设备或标明示意用途。显式设置 `extend_background=true` 可延伸页面底色，
+或用 `background_node` 指定铺满全屏的图像节点。设备扩展仅影响标注图，输入快照记录这些参数。
 保存布局时可用 `unity_adaptation` 按节点 ID 声明接入约束。
 `anchor_min` 和 `anchor_max` 成对提供，`pivot` 可单独提供，坐标为 Unity 约定的两个 0 到 1 的值。
 `viewport_insets` 和 `content_insets` 使用布局像素，分别表示遮罩视口和滚动内容的四边内缩。

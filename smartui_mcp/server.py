@@ -94,6 +94,14 @@ def _comparison_image(result):
     return _verified_png(result["comparison"]["images"]["comparison"], "对照图片")
 
 
+def _page_build_content(result):
+    files = result["page_build"]["files"]
+    content = [json.dumps(result, ensure_ascii=False), _verified_png(files["overview"], "页面干净稿")]
+    if "annotated" in files:
+        content.append(_verified_png(files["annotated"], "页面适配标注图"))
+    return content
+
+
 def _visual_check_content(result):
     images = result["visual_check"]["images"]
     content = [json.dumps(result, ensure_ascii=False), _verified_png(images["overview"], "视觉检查总览图")]
@@ -378,19 +386,18 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
 
     @server.tool(structured_output=False)
     async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr,
-                                   annotate: bool = False) -> list[Any]:
-        """覆盖当前布局的离线 HTML 和 PNG；annotate 同时输出适配标注图。"""
+                                   annotate: bool = True,
+                                   annotation_device: dict[str, Any] | None = None) -> list[Any]:
+        """默认交付干净稿、人工评审标注图和同版 inputs.json。annotation_device 可声明外部设备区域。"""
         result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id,
-                                         annotate=annotate)
-        return [json.dumps(result, ensure_ascii=False),
-                await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
+                                         annotate=annotate, annotation_device=annotation_device)
+        return await asyncio.to_thread(_page_build_content, result)
 
     @server.tool(structured_output=False)
     async def project_get_page_build(project_root: str, build_id: StrictStr) -> list[Any]:
         """校验并读取当前页面快照，分别检查布局、图像和文字样式是否符合当前定义。"""
         result = await asyncio.to_thread(projects.get_page_build, project_root, build_id)
-        return [json.dumps(result, ensure_ascii=False),
-                await asyncio.to_thread(_verified_png, result["page_build"]["files"]["overview"], "页面构建")]
+        return await asyncio.to_thread(_page_build_content, result)
 
     @server.tool()
     async def project_page_dependencies(project_root: str) -> Any:

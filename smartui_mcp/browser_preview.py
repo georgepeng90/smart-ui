@@ -643,7 +643,7 @@ body { margin: 0; background: #282828; }
 .overlay-pivot::after { top: -5px; width: 1px; height: 11px; }
 body.screenshot { background: transparent; }
 body.screenshot #host { margin: 0; }
-body.screenshot:not(.annotated) #overlay { display: none; }
+body.screenshot #overlay { display: none; }
 </style></head><body>
 <div id="toolbar"><span>SmartUI 页面预览</span><label>缩放 <select id="zoom" disabled><option value="0.25">25%</option><option value="0.5">50%</option><option value="1" selected>100%</option><option value="1.5">150%</option><option value="2">200%</option></select></label>
 <label><input type="checkbox" data-layer="guides"> 辅助线</label>
@@ -654,7 +654,7 @@ body.screenshot:not(.annotated) #overlay { display: none; }
 <script type="application/json" id="page-data">""" + payload + "</script>\n<script>" + _SCRIPT + "</script></body></html>\n"
 
 
-def _capture(html_path, png_path, width, height, annotation_path):
+def _capture(html_path, png_path, width, height):
     try:
         from playwright.sync_api import Error, sync_playwright
     except ImportError as error:
@@ -673,15 +673,6 @@ def _capture(html_path, png_path, width, height, annotation_path):
             evidence = tab.evaluate("() => window.smartuiForScreenshot()")
             environment = tab.evaluate("() => ({device_scale_factor: devicePixelRatio, user_agent: navigator.userAgent})")
             tab.screenshot(path=str(png_path), type="png", omit_background=True, animations="disabled")
-            if annotation_path is not None:
-                tab.evaluate("""() => {
-                  document.body.classList.add('annotated');
-                  for (const input of document.querySelectorAll('[data-layer="guides"], [data-layer="content"]')) {
-                    input.checked = true;
-                    input.dispatchEvent(new Event('change'));
-                  }
-                }""")
-                tab.screenshot(path=str(annotation_path), type="png", omit_background=True, animations="disabled")
             return {"engine": "chromium", "version": browser.version, "viewport": {"width": width, "height": height},
                     **environment, **evidence}
         except Error as error:
@@ -690,7 +681,7 @@ def _capture(html_path, png_path, width, height, annotation_path):
             browser.close()
 
 
-def render_page(directory: Path, page: dict, *, annotate=False) -> dict:
+def render_page(directory: Path, page: dict, *, annotate=False, annotation_device=None) -> dict:
     """保存可离线打开的 HTML，以同一页面输出参考尺寸的 PNG 和渲染证据。"""
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
@@ -698,11 +689,14 @@ def render_page(directory: Path, page: dict, *, annotate=False) -> dict:
     png_path = directory / "overview.png"
     html_path.write_text(_html(page), encoding="utf-8", newline="\n")
     annotation_path = directory / "annotated.png" if annotate else None
-    renderer = _capture(html_path, png_path, page["width"], page["height"], annotation_path)
+    renderer = _capture(html_path, png_path, page["width"], page["height"])
     result = {"html": {"path": str(html_path), "sha256": _sha(html_path.read_bytes())},
             "overview": {"path": str(png_path), "sha256": _sha(png_path.read_bytes()),
                          "size": [page["width"], page["height"]]}, "renderer": renderer}
     if annotation_path is not None:
+        from .annotation import render_annotation
+
+        evidence = render_annotation(png_path, annotation_path, page, renderer, annotation_device or {})
         result["annotated"] = {"path": str(annotation_path), "sha256": _sha(annotation_path.read_bytes()),
-                               "size": [page["width"], page["height"]]}
+                               **evidence}
     return result

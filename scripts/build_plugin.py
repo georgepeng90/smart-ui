@@ -18,6 +18,7 @@ def main():
              "docs/photocraft-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
              "docs/toolchain-roadmap.md", "docs/typography-plan.md", "docs/style-reproduction-validation.md", "docs/asset-geometry.md",
              "docs/unity-integration-plan.md", "docs/unity-tools.md", "docs/unity-prefab-reuse-plan.md",
+             "docs/ui-delivery-plan.md", "docs/ui-delivery-checklists.md",
              "examples/drawing-programs/semantic_palette.py",
              "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py", "scripts/adopt_typography.py",
              "unity/com.smartui.ugui/package.json"]

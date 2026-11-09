@@ -597,7 +597,7 @@ class ProjectStore:
         _identifier(layout_id, "layout_id")
         return self._layout_result(self.context(project_root), layout_id)
 
-    def build_layout(self, project_root, expected_revision, layout_id, *, annotate=False):
+    def build_layout(self, project_root, expected_revision, layout_id, *, annotate=False, annotation_device=None):
         from .page_dependencies import asset_source_issues, require_current_page_sources
 
         _identifier(layout_id, "layout_id")
@@ -609,9 +609,9 @@ class ProjectStore:
             if page is None:
                 raise ProjectError(f"页面布局不存在：{layout_id}")
             require_current_page_sources(state, page, asset_source_issues(state))
-            return self._build_layout_locked(root, state, page, annotate=annotate)
+            return self._build_layout_locked(root, state, page, annotate=annotate, annotation_device=annotation_device)
 
-    def _build_layout_locked(self, root, state, page, *, annotate=False):
+    def _build_layout_locked(self, root, state, page, *, annotate=False, annotation_device=None):
         from .page_builds import build_page
 
         layout_id = page["id"]
@@ -622,7 +622,7 @@ class ProjectStore:
             return self._write(root, state)
 
         context = build_page(root, layout_id, layout_id, page["sha256"], page["definition"], state,
-                             commit=commit, annotate=annotate)
+                             commit=commit, annotate=annotate, annotation_device=annotation_device)
         return self._page_build_result(context, layout_id)
 
     def page_dependencies(self, project_root):
