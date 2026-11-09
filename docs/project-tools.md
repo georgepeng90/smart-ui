@@ -153,6 +153,14 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 
 静态页面无需滚动设置。浏览器的不同尺寸预览继续使用场景尺寸。滚动行为在 Unity 验收。
 
+## 查询可复用的控件与图素
+
+`project_set_public_images(project_root, expected_revision, asset_ids)` 设置公开图素 ID 集合。
+图像文件、来源和伸缩几何沿用现有资产登记及导出清单。
+`project_search_reusable(project_root, query)` 按 ID、名称和用途检索公共图素与控件目录，
+空查询返回全部候选。结果包含预览路径、资产尺寸和几何、页面使用位置、图素来源过期原因及控件登记状态。
+选定候选后，页面按 `asset_id` 或 `control_id` 引用。
+
 页面构建传入 `annotate=true` 时，`project_build_layout` 额外保存 `files.annotated`。
 标注图和干净稿来自同一次 Chromium 渲染。标注图复用分组框、安全区、内容框和已声明的组件枢轴，
 与构建记录中的布局摘要和 `inputs.json` 一起用于 Unity 接入核对。

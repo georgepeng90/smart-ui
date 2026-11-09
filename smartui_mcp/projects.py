@@ -109,6 +109,14 @@ class ProjectStore:
 
         return self._update(project_root, expected_revision, change)
 
+    def set_public_images(self, project_root, expected_revision, asset_ids):
+        def change(state):
+            if len(asset_ids) != len(set(asset_ids)) or set(asset_ids) - state["images"].keys():
+                raise ProjectError("公共图素必须使用无重复的已登记资产 ID")
+            state["public_image_ids"] = sorted(asset_ids)
+
+        return self._update(project_root, expected_revision, change)
+
     def add_reference(self, project_root: str, expected_revision: str, reference: dict) -> dict:
         def change(state):
             if not isinstance(reference, dict):
@@ -897,6 +905,11 @@ class ProjectStore:
                         raise ProjectError(f"{collection}.{key} 路径必须为 {expected}")
                     records[key] = json.loads(layout.resolve(relative).read_bytes())
                 state[collection] = records
+            if "public_image_ids" in state:
+                public_ids = state["public_image_ids"]
+                if (not isinstance(public_ids, list) or any(not isinstance(key, str) for key in public_ids)
+                        or len(public_ids) != len(set(public_ids)) or set(public_ids) - state["images"].keys()):
+                    raise ProjectError("公共图素必须使用无重复的已登记资产 ID")
             if state["typography"] is not None:
                 if state["typography"] != "smart-ui/typography.json":
                     raise ProjectError("typography 路径必须为 smart-ui/typography.json")

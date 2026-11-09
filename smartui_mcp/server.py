@@ -181,6 +181,17 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
             projects.update_ui_settings, project_root, expected_revision, settings))
 
     @server.tool()
+    async def project_set_public_images(project_root: str, expected_revision: str, asset_ids: list[StrictStr]) -> Any:
+        """设置项目中公开可复用的已登记图素 ID。"""
+        return _project_summary(await asyncio.to_thread(
+            projects.set_public_images, project_root, expected_revision, asset_ids))
+
+    @server.tool()
+    async def project_search_reusable(project_root: str, query: str = "") -> Any:
+        """按 ID、名称或用途搜索公共图素及 Unity 控件，返回来源、使用位置和检查状态。"""
+        return await asyncio.to_thread(unity.search_reusable, project_root, query)
+
+    @server.tool()
     async def project_add_reference(project_root: str, expected_revision: str, reference_id: str, source_path: str) -> Any:
         """登记 PNG/JPEG/WebP 参考，原图归档到 references 目录并计算摘要。
 

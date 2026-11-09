@@ -7,6 +7,8 @@ description: 使用 PhotoCraft 执行项目 Python 程序，制作可编辑 .pcr
 
 先读取项目上下文、参考和现有程序。通过 [reference-style](../reference-style/SKILL.md) 明确证据与适用规则，再按[绘制程序约定](../../docs/drawing-programs.md)编写项目画法。通用工具不强制某种按钮结构、材质或高光。
 
+新建组件前用 `project_search_reusable` 查同用途控件和图素，已有候选满足需求时直接引用。
+
 1. 查询 `photocraft_status`，核对实际安装路径与版本。缺失依赖明确报告，不自动下载或替换后端。
 2. 保存实现 `build(parameters, spec, component_id)` 的程序，定义引用 `program_id` 的组件。缺少必需参数明确报错，不能添加制作兜底。
 3. 首次编写或需要诊断计划时，用 `project_plan_component` 检查原生形状、分组、像素节点、效果及蒙版。`project_draw_component` 本身会执行程序并严格预检；已明确的参数调整无需为了固定顺序重复单独预检。预检不代表文件已经生成。

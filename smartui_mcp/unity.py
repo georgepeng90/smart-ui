@@ -246,6 +246,42 @@ class UnityStore:
             source, source_revision, registry, revision = self._read(root)
             return self._context(root, source, source_revision, registry, revision)
 
+    def search_reusable(self, project_root, query):
+        from .image_assets import verify_image_record
+        from .page_dependencies import page_dependencies
+        from .page_layouts import image_geometry
+
+        root = self.projects._root(project_root)
+        query = query.strip().casefold()
+        with self.projects._lock(root):
+            source, source_revision, registry, revision = self._read(root)
+            controls = self._context(root, source, source_revision, registry, revision)["controls"]
+            dependencies = page_dependencies(self.projects._context(root, source, source_revision))
+            images = {}
+            for key in source.get("public_image_ids", ()):
+                image = source["images"][key]
+                provenance = image["provenance"]
+                purpose = image.get("purpose") or provenance.get("description", "")
+                if query not in f"{key} {image['name']} {purpose}".casefold():
+                    continue
+                file_issue = None
+                try:
+                    verify_image_record(image)
+                except (OSError, ValueError) as error:
+                    file_issue = str(error)
+                images[key] = {"name": image["name"], "purpose": purpose, "preview_path": image["path"],
+                               "width": image["width"], "height": image["height"], "geometry": image_geometry(image),
+                               "provenance": provenance, "file_issue": file_issue, **dependencies["assets"][key]}
+            matches = {}
+            for key, entry in controls.items():
+                definition = entry["effective_definition"]
+                if query not in " ".join((key, definition["name"], definition["description"],
+                                          definition["control_type"])).casefold():
+                    continue
+                preview = source["images"].get(definition["preview_asset_id"])
+                matches[key] = {**entry, "preview_path": preview["path"] if preview else None}
+        return {"source_revision": source_revision, "registry_revision": revision, "images": images, "controls": matches}
+
     def define_control(self, project_root, expected_revision, control_id, definition):
         root = self.projects._root(project_root)
         _identifier(control_id, "control_id")

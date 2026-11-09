@@ -280,6 +280,11 @@ def test_handoff_validates_registered_source_asset_file(project, registered_butt
     source = projects.context(str(root))
     projects.register_image(str(root), source["revision"], "background", "背景", str(png),
                             {"kind": "imported", "description": "合成图像"})
+    current = projects.context(str(root))
+    projects.set_public_images(str(root), current["revision"], ["background"])
+    candidate = store.search_reusable(str(root), "合成图像")["images"]["background"]
+    assert candidate["width"] == 4 and candidate["source_issue"] is None
+    assert "button" in store.search_reusable(str(root), "button")["controls"]
     definition = button_definition() | {"asset_ids": ["background"]}
     edited = store.define_control(str(root), registered_button["revision"], "button", definition)
     registered = store.register_prefab(str(root), edited["revision"], "button", BUTTON_PATH,
