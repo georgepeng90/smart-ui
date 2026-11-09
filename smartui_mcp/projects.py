@@ -12,7 +12,7 @@ import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
-from .layout import DEFAULT_PATHS, ProjectLayout, map_state_paths
+from .layout import DEFAULT_PATHS, SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
 
 
 class ProjectError(RuntimeError):
@@ -1206,13 +1206,14 @@ class ProjectStore:
         """先校验并备齐整批文件，发布失败后恢复已替换的文件。"""
         root = layout.root
         persistent = root / "smart-ui"
+        migration_backups = root / SCHEMA_MIGRATION_BACKUPS
         temporary = root / ".smartui/temp"
         pending = {}
         try:
             for destination, content in files.items():
                 layout._check_managed_path(destination)
-                if not destination.is_relative_to(persistent) or destination == persistent:
-                    raise ProjectError(f"项目发布路径必须位于 smart-ui/：{destination}")
+                if not any(directory in destination.parents for directory in (persistent, migration_backups)):
+                    raise ProjectError(f"项目发布路径必须位于 smart-ui/ 或 {SCHEMA_MIGRATION_BACKUPS}/：{destination}")
                 if destination.exists() and not destination.is_file():
                     raise ProjectError(f"项目发布路径已存在但不是文件：{destination}")
                 for parent in destination.parents:

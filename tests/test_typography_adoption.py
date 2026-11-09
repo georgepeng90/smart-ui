@@ -112,15 +112,21 @@ def legacy(tmp_path, text_node):
 
 def test_preview_and_apply_preserve_content_and_allow_rebuild(legacy):
     root, state, typography, styles = legacy
+    revision = spec_sha256(state)
+    historical = root / "smart-ui/adoptions/typography" / revision
+    _write(historical / "old.txt", b"historical backup")
     original = _files(root)
     dry = adopt_typography(str(root), typography, styles)
     assert not dry["applied"]
-    assert dry["revision"] == spec_sha256(state)
+    assert dry["revision"] == revision
+    assert dry["backup_directory"] == f".smartui/migrations/4-to-5/{revision}"
     assert dry["converted_layouts"] == dry["retired_builds"] == ["screen"]
     assert _files(root) == original
     assert not (root / ".smartui").exists()
 
     applied = adopt_typography(str(root), typography, styles, apply=True, expected_revision=dry["revision"])
+    assert applied["backup_directory"] == dry["backup_directory"]
+    assert _files(historical) == {"old.txt": b"historical backup"}
     backup = root / applied["backup_directory"]
     store = ProjectStore()
     context = store.context(str(root))
@@ -206,7 +212,8 @@ def test_apply_requires_revision_and_never_overwrites_backup(legacy):
     with pytest.raises(ProjectError, match="revision 冲突"):
         adopt_typography(str(root), typography, styles, apply=True, expected_revision="outdated")
     assert _files(root) == before
-    _write(root / result["backup_directory"] / "old.txt", b"earlier backup")
+    backup = root / ".smartui/migrations/4-to-5" / result["revision"]
+    _write(backup / "old.txt", b"earlier backup")
     before = _files(root)
     with pytest.raises(ProjectError, match="备份已存在"):
         adopt_typography(str(root), typography, styles, apply=True, expected_revision=result["revision"])
@@ -221,7 +228,7 @@ def test_publication_failure_restores_legacy_project_and_backups(legacy, monkeyp
     def fail_index_write(source, destination):
         if destination == root / "smart-ui/project.json":
             assert (root / "smart-ui/typography.json").is_file()
-            assert (root / "smart-ui/adoptions/typography" / spec_sha256(state) / "manifest.json").is_file()
+            assert (root / ".smartui/migrations/4-to-5" / spec_sha256(state) / "manifest.json").is_file()
             raise OSError("模拟转换发布中断")
         return replace(source, destination)
 
@@ -241,7 +248,11 @@ def test_cli_preflight_and_apply(legacy):
                  "--project-root", str(root), "--typography", str(root / "new-typography.json"),
                  "--layout-styles", str(root / "layout-styles.json")]
     dry = subprocess.run(arguments, capture_output=True, check=True)
-    revision = json.loads(dry.stdout)["revision"]
+    preflight = json.loads(dry.stdout)
+    revision = preflight["revision"]
+    assert preflight["backup_directory"] == f".smartui/migrations/4-to-5/{revision}"
     applied = subprocess.run([*arguments, "--apply", "--expected-revision", revision],
                              capture_output=True, check=True)
-    assert json.loads(applied.stdout)["applied"]
+    result = json.loads(applied.stdout)
+    assert result["applied"]
+    assert result["backup_directory"] == preflight["backup_directory"]

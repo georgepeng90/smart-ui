@@ -44,13 +44,13 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 | `smart-ui/exports/` | 正式 PNG 导出资料 |
 | `smart-ui/previews/` | 当前组件预览、对照、视觉检查、静态组合及页面构建 |
 | `smart-ui/unity/` | 已启用项目的 Unity 控件登记和当前接入清单，独立于项目索引 |
-| `.smartui/` | 本机缓存、临时文件、诊断和锁 |
+| `.smartui/` | 本机缓存、临时文件、诊断、锁和schema 升级迁移备份 |
 
 提交业务工程的 `smart-ui/` 及项目实际使用的交付文件。项目内路径以相对业务工程根目录的形式保存，使用 `/` 分隔；调用工具时可以用返回的绝对路径打开文件。项目引用的字体等必要资源也应能从业务工程取得。程序、组件、布局和资产按 ID 保存当前状态，历史变更通过 Git 查阅。受管 Markdown 展示项目摘要，通过工具更新结构化资料。
 
 项目写入时在 `smart-ui/.gitattributes` 确保 `* -text` 生效，避免 Git 转换换行后导致文件摘要不匹配。
 
-创建项目时，工具在业务工程根目录的 `.gitignore` 添加 `/.smartui/`。停止工具后可清空它；读取项目、继续修改组件、导出和构建页面依赖的是提交的资料以及正常安装的运行环境。项目锁只协调同一工程目录，revision 用来拒绝过期写入。各自检出的分支仍通过 Git 协商合并，工具不会自动合并 JSON 冲突或 PhotoCraft 文件。
+创建项目时，工具在业务工程根目录的 `.gitignore` 添加 `/.smartui/`。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。读取项目、继续修改组件、导出和构建页面依赖的是提交的资料以及正常安装的运行环境。项目锁只协调同一工程目录，revision 用来拒绝过期写入。各自检出的分支仍通过 Git 协商合并，工具不会自动合并 JSON 冲突或 PhotoCraft 文件。
 ## 参考区域与规则依据
 
 `region` 和取样 `rect` 都是 `[x, y, width, height]`，相对完整参考图。省略 `coordinate_size` 使用原图坐标；若按 1080 × 1920 整图预览测量，传 `[1080,1920]`，工具映射到原图。
@@ -217,7 +217,7 @@ uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example
 uv run --locked python scripts/adopt_typography.py --project-root D:/Art/example --typography D:/Art/typography.json --layout-styles D:/Art/layout-styles.json --apply --expected-revision <预检返回的revision>
 ```
 
-第一条命令只预检，返回 revision、转换页面、需重建页面和备份目录。应用前校验原受管文档、布局、原字体摘要、新规范与全部映射。应用一次发布新规范及引用，归档原索引、受影响布局、旧构建记录和含文字页面的独立 HTML/PNG，目录为 `smart-ui/adoptions/typography/<revision>/`。含文字的旧构建从当前索引移出，页面需重建；纯图像构建保留。已有备份或文字规范文件不会被覆盖。脚本不支持其他格式，也不为正常接口保留旧文字字段。
+schema 升级的本机备份按 `.smartui/migrations/<源版本>-to-<目标版本>/<revision>/` 组织。本次 4 → 5 升级引入文字角色规范，预检和应用结果的 `backup_directory` 均为相对业务工程根目录的路径 `.smartui/migrations/4-to-5/<revision>`。预检只返回结果，不创建备份目录或写入文件。应用前校验 revision、原受管文档、布局、原字体摘要、新规范与全部映射。应用一次发布新规范及引用，归档原索引、受影响布局、旧构建记录和含文字页面的独立 HTML/PNG。含文字的旧构建从当前索引移出，页面需重建。纯图像构建保留。目标目录已有同 revision 的备份或项目已有文字规范文件时，转换会拒绝覆盖。历史备份留在原位置，由项目维护者按需移动。
 
 ## 可更新的页面布局
 
