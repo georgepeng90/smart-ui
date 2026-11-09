@@ -52,6 +52,22 @@ def _text(value, field):
         raise ProjectError(f"{field} 必须是非空字符串")
 
 
+def _validate_ui_settings(settings):
+    if not isinstance(settings, dict) or settings.keys() - {"reference_size", "scroll"}:
+        raise ProjectError("ui_settings 仅支持 reference_size 和 scroll")
+    if "reference_size" in settings:
+        size = settings["reference_size"]
+        if (not isinstance(size, dict) or size.keys() != {"width", "height"}
+                or any(type(value) is not int or value <= 0 for value in size.values())):
+            raise ProjectError("reference_size 必须包含正整数 width 和 height")
+    if "scroll" in settings:
+        scroll = settings["scroll"]
+        if (not isinstance(scroll, dict) or scroll.keys() != {"movement", "drag_short_content"}
+                or scroll["movement"] not in ("Elastic", "Clamped")
+                or type(scroll["drag_short_content"]) is not bool):
+            raise ProjectError("scroll 必须包含 Elastic 或 Clamped movement 和布尔值 drag_short_content")
+
+
 class ProjectStore:
     def create(self, project_root: str, project_id: str, name: str) -> dict:
         root = self._root(project_root)
@@ -84,6 +100,14 @@ class ProjectStore:
         with self._lock(root):
             state, revision = self._read(root)
             return self._context(root, state, revision)
+
+    def update_ui_settings(self, project_root: str, expected_revision: str, settings: dict) -> dict:
+        _validate_ui_settings(settings)
+
+        def change(state):
+            state["ui_settings"] = deepcopy(settings)
+
+        return self._update(project_root, expected_revision, change)
 
     def add_reference(self, project_root: str, expected_revision: str, reference: dict) -> dict:
         def change(state):
@@ -859,6 +883,8 @@ class ProjectStore:
                 raise ProjectError(f"项目状态必须是 schema_version=5 的对象：{layout.project_file}；已有项目请先显式转换文字规范与页面样式引用")
             if state["paths"] != DEFAULT_PATHS:
                 raise ProjectError("项目目录必须使用 smart-ui/ 固定结构")
+            if "ui_settings" in state:
+                _validate_ui_settings(state["ui_settings"])
             for collection, directory in self._collections().items():
                 records = {}
                 for key, relative in state[collection].items():

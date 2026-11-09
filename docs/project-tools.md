@@ -139,6 +139,20 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 
 `region` 相对来源预览，`geometry` 相对裁切后的 PNG，约束见[内容区域与伸缩几何](asset-geometry.md)。`output_path` 是 `smart-ui/exports/` 下的工程相对 PNG 路径，`manifests/` 保留给清单。已登记的正式资产需沿用对应输出路径。导出记录包括来源组件、区域、文件摘要、状态、用途和几何。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
 
+## 页面制作的项目约定
+
+视觉规则在项目风格中维护，字体和字号复用文字角色，控件尺寸和使用条件复用组件使用约定。
+图集、本地化和资源加载路径沿用工程约定。布局对齐、边距及适配检查见页面布局和构建说明。
+
+`project_update_ui_settings(project_root, expected_revision, settings)` 保存完整的项目 UI 设置。
+两个字段均按任务需要填写，`project_context` 返回已保存的 `ui_settings`。
+
+- `reference_size` 包含正整数 `width` 与 `height`，作为正式页面的项目参考尺寸。
+- `scroll` 包含 `movement`（`Elastic` 或 `Clamped`）和布尔值 `drag_short_content`。
+  普通列表继承此约定，特殊列表在交付记录中声明覆盖值及原因。
+
+静态页面无需滚动设置。浏览器的不同尺寸预览继续使用场景尺寸。滚动行为在 Unity 验收。
+
 ## 项目文字规范
 
 文字规范独立于组件绘制参数。`project_update_typography(project_root, expected_revision, typography)` 保存完整当前规范，并生成 `smart-ui/docs/typography.md`。`project_context` 返回规范、`typography_usage` 和 `page_status`。新项目可以暂不定义文字规范，但保存含文字的正式页面前必须定义所引用的角色样式。参考分析和样片校准方法见[文字设计规范](typography-plan.md)。

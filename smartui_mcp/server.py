@@ -175,6 +175,12 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         return _project_summary(await asyncio.to_thread(projects.context, project_root))
 
     @server.tool()
+    async def project_update_ui_settings(project_root: str, expected_revision: str, settings: dict[str, Any]) -> Any:
+        """保存项目参考尺寸和滚动默认行为；project_context 返回当前设置。"""
+        return _project_summary(await asyncio.to_thread(
+            projects.update_ui_settings, project_root, expected_revision, settings))
+
+    @server.tool()
     async def project_add_reference(project_root: str, expected_revision: str, reference_id: str, source_path: str) -> Any:
         """登记 PNG/JPEG/WebP 参考，原图归档到 references 目录并计算摘要。
 
