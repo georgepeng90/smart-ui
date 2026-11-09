@@ -434,9 +434,12 @@ def test_generated_dependency_must_apply_current_recipe_before_page_prepare(buil
     cli.callback = lambda _, path: write_result(path, prepared_result(path, ["created"]))
     control_build = prepare(builder, root, ["button"])
     assert builder.execute(root, control_build["request_id"])["status"] == "completed"
-    save(store, store.context(root), [control("start", "button", x=2, y=2, width=18, height=12)])
+    adaptation = {"anchor_min": [0, 0], "anchor_max": [1, 1], "pivot": [0.5, 0.5]}
+    save(store, store.context(root), [control("start", "button", x=2, y=2, width=18, height=12)],
+         unity_adaptation={"start": adaptation})
     page_before = prepare(builder, root, [], ["screen"], "plan")["request"]["targets"][0]
     assert page_before["background"] == store.context(root)["data"]["layouts"]["screen"]["definition"]["background"]
+    assert {key: page_before["nodes"][0][key] for key in adaptation} == adaptation
 
     construction = builder.context(root)
     recipe = construction["construction"]["recipes"]["button"]

@@ -159,7 +159,8 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 保存布局时可用 `unity_adaptation` 按节点 ID 声明接入约束。
 `anchor_min` 和 `anchor_max` 成对提供，`pivot` 可单独提供，坐标为 Unity 约定的两个 0 到 1 的值。
 `viewport_insets` 和 `content_insets` 使用布局像素，分别表示遮罩视口和滚动内容的四边内缩。
-这些字段随构建快照交付，供 Unity 实施读取。浏览器与通用静态 Prefab 构建仍按各自已有的布局规则运行。
+这些字段随构建快照交付。Unity 构建将锚点和枢轴映射为受管 RectTransform 属性，并保持参考尺寸下的布局。
+滚动内缩供工程配置 ScrollRect。浏览器仍按现有布局规则渲染。
 
 ## 项目文字规范
 

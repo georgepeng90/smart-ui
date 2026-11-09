@@ -141,6 +141,7 @@ def _flat_nodes(state, definition):
     if resolved.get("baseline_groups"):
         raise ProjectError("Unity 静态构建暂不支持基线排列")
     result = []
+    adaptation = resolved.get("unity_adaptation", {})
 
     def visit(nodes, parent=None, x=0, y=0):
         for node in nodes:
@@ -148,6 +149,9 @@ def _flat_nodes(state, definition):
                 "id", "kind", "width", "height", "asset_id", "text", "text_style_id", "align", "wrap", "overflow",
                 "control_id", "parameters") if key in node}
             item.update(parent_id=parent, x=node["x"] - x, y=node["y"] - y)
+            for field in ("anchor_min", "anchor_max", "pivot"):
+                if field in adaptation.get(node["id"], {}):
+                    item[field] = adaptation[node["id"]][field]
             result.append(item)
             if node["kind"] == "group":
                 visit(node["children"], node["id"], node["x"], node["y"])

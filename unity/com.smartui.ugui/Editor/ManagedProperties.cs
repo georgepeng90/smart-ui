@@ -82,21 +82,27 @@ namespace SmartUI.UGUI.Editor
         internal void SiblingOrder(string key, Transform value, int order) =>
             fields.Add(key, (() => Token(value.GetSiblingIndex()), Token(order), () => value.SetSiblingIndex(order)));
 
-        internal void RectLayout(string key, RectTransform transform, Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot, Rect rect)
+        internal void RectLayout(string key, RectTransform transform, Vector2 anchorMin, Vector2 anchorMax,
+            Vector2 pivot, Rect rect, Vector2 parentSize = default)
         {
             JArray Layout(Vector2 min, Vector2 max, Vector2 p, Vector2 size, Vector3 position, Quaternion rotation, Vector3 scale) =>
                 new(Token(min), Token(max), Token(p), Token(size), Token(position), Token(rotation), Token(scale));
-            var position = new Vector3(rect.x, -rect.y, 0);
+            // 将参考尺寸下的左上角矩形换算成 Unity 的锚点空间。
+            var anchor = anchorMin + Vector2.Scale(anchorMax - anchorMin, pivot);
+            var anchorOffset = Vector2.Scale(parentSize, anchor - new Vector2(0, 1));
+            var pivotOffset = Vector2.Scale(rect.size, pivot - new Vector2(0, 1));
+            Vector3 position = new Vector2(rect.x, -rect.y) + pivotOffset - anchorOffset;
+            var sizeDelta = rect.size - Vector2.Scale(parentSize, anchorMax - anchorMin);
             fields.Add(key, (
                 () => Layout(transform.anchorMin, transform.anchorMax, transform.pivot, transform.sizeDelta,
                     transform.anchoredPosition3D, transform.localRotation, transform.localScale),
-                Layout(anchorMin, anchorMax, pivot, rect.size, position, Quaternion.identity, Vector3.one),
+                Layout(anchorMin, anchorMax, pivot, sizeDelta, position, Quaternion.identity, Vector3.one),
                 () =>
                 {
                     transform.anchorMin = anchorMin;
                     transform.anchorMax = anchorMax;
                     transform.pivot = pivot;
-                    transform.sizeDelta = rect.size;
+                    transform.sizeDelta = sizeDelta;
                     transform.anchoredPosition3D = position;
                     transform.localRotation = Quaternion.identity;
                     transform.localScale = Vector3.one;

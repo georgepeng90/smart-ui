@@ -32,6 +32,7 @@ namespace SmartUI.UGUI.Editor
         public string Id, ParentId, Kind, AssetId, Text, TextStyleId, Align, Overflow, ControlId;
         public bool? Wrap;
         public float X, Y, Width, Height;
+        public float[] AnchorMin, AnchorMax, Pivot;
         public Dictionary<string, JToken> Parameters;
         public Dictionary<string, string> Bindings;
     }

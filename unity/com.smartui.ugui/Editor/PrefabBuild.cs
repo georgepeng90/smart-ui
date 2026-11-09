@@ -226,6 +226,13 @@ namespace SmartUI.UGUI.Editor
                     float.IsNaN(node.X) || float.IsNaN(node.Y) || float.IsInfinity(node.X) || float.IsInfinity(node.Y))
                     throw new InvalidOperationException($"'{target.Id}' has an invalid node '{node.Id}', parent or rectangle.");
 
+                if ((node.AnchorMin == null) != (node.AnchorMax == null) ||
+                    !NormalizedPoint(node.AnchorMin) || !NormalizedPoint(node.AnchorMax) ||
+                    !NormalizedPoint(node.Pivot) ||
+                    (node.AnchorMin != null &&
+                     (node.AnchorMin[0] > node.AnchorMax[0] || node.AnchorMin[1] > node.AnchorMax[1])))
+                    throw new InvalidOperationException($"'{target.Id}' has invalid anchors or pivot on '{node.Id}'.");
+
                 switch (node.Kind)
                 {
                     case "group": break;
@@ -287,6 +294,9 @@ namespace SmartUI.UGUI.Editor
                 }
             }
         }
+
+        static bool NormalizedPoint(float[] value) =>
+            value == null || value.Length == 2 && value.All(axis => axis >= 0 && axis <= 1);
 
         static Rect NodeRect(Node node) => new(node.X, node.Y, node.Width, node.Height);
 
