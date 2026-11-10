@@ -411,7 +411,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
 
     @server.tool()
     async def project_rebuild_pages(project_root: str, expected_revision: str, layout_ids: list[StrictStr]) -> Any:
-        """预检指定页面后按顺序重建；失败时保留已完成页面，报告页面 ID、原因和当前 revision。"""
+        """预检并顺序重建，保留已有标注设置，首次默认标注；失败时报告已完成页面、原因和当前 revision。"""
         return await asyncio.to_thread(projects.rebuild_pages, project_root, expected_revision, layout_ids)
 
     @server.tool()

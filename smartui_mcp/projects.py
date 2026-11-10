@@ -616,7 +616,7 @@ class ProjectStore:
             require_current_page_sources(state, page, asset_source_issues(state))
             return self._build_layout_locked(root, state, page, annotate=annotate, annotation_device=annotation_device)
 
-    def _build_layout_locked(self, root, state, page, *, annotate=False, annotation_device=None):
+    def _build_layout_locked(self, root, state, page, *, annotate, annotation_device=None):
         from .page_builds import build_page
 
         layout_id = page["id"]
@@ -636,6 +636,7 @@ class ProjectStore:
         return page_dependencies(self.context(project_root))
 
     def rebuild_pages(self, project_root, expected_revision, layout_ids):
+        from .annotation import validate_device
         from .page_dependencies import asset_source_issues, require_current_page_sources
         from .page_layouts import resolve_definition
 
@@ -654,18 +655,27 @@ class ProjectStore:
             if missing:
                 raise ProjectError(f"页面布局不存在：{', '.join(missing)}")
             asset_issues = asset_source_issues(state)
+            build_options = {}
             for layout_id in layout_ids:
                 page = state["layouts"][layout_id]
                 require_current_page_sources(state, page, asset_issues)
                 try:
-                    resolve_definition(state, page["definition"])
+                    resolved = resolve_definition(state, page["definition"])
+                    previous = state.get("page_builds", {}).get(layout_id)
+                    annotate = previous is None or "annotated" in previous["files"]
+                    device = previous.get("annotation_device") if previous is not None else None
+                    build_options[layout_id] = {
+                        "annotate": annotate,
+                        "annotation_device": validate_device(device, resolved) if annotate else None,
+                    }
                 except (ValueError, OSError) as error:
                     raise ProjectError(f"页面 {layout_id} 的构建输入未通过预检：{error}") from error
 
             completed = []
             for layout_id in layout_ids:
                 try:
-                    result = self._build_layout_locked(root, state, state["layouts"][layout_id])
+                    result = self._build_layout_locked(root, state, state["layouts"][layout_id],
+                                                      **build_options[layout_id])
                 except (ValueError, OSError, RuntimeError) as error:
                     raise ProjectError(f"重建页面 {layout_id} 失败；已完成 layout_ids：{completed}；"
                                        f"当前 revision：{revision}；{error}") from error

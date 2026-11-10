@@ -181,14 +181,18 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 `project_build_layout` 默认保存 `files.annotated` 并返回两张图，内部快速预览可传 `annotate=false`。
 标注图以同次 Chromium 渲染的干净稿为底图。灰虚线表示元素范围，金点表示贴边锚定，
 两轴均贴边时，金点位于对应角。绿十字表示枢轴，蓝色双向箭头表示拉伸轴。
+设备示意开启时，浅色虚线 Design Area 表示完整设计区；绿色虚线 Safe Area 始终表示配置的四边内缩范围。
+未声明 `safe_area` 时仍报告缺项，不将设计区边界当作安全区。
 箭头优先放在避开可见文字的外缘，再尝试内缘。无合适位置的箭头列在 `files.annotated.omitted_stretch`。
 英文图例使用实际标记。精确值保留在 `inputs.json`，缺项列在 `files.annotated.missing`。
 默认在完整设计区上下扩展设计宽度的 6% 和 4%，展示刘海和手势区并标明 Illustrative device。
 这是示意，不能作为真实机型验收。参数保存到 inputs.json。
-传入 `annotation_device` 可覆盖设备绘制区域；明确无需示意时将 top、bottom 均设为 0。
-紫色虚线 Layout Group 表示真实分组边界，包括无背景区块，且不受 annotate=false 隐藏。用 `top`、`bottom` 指定像素，
-并用 `label` 说明设备或标明示意用途。显式设置 `extend_background=true` 可延伸页面底色，
+传入 `annotation_device` 可覆盖设备绘制区域，用 `top`、`bottom` 指定像素，
+并用非空 `label` 说明设备或示意用途。明确无需设备示意时可传入 `{"top": 0, "bottom": 0, "label": "No device"}`。
+显式设置 `extend_background=true` 可延伸页面底色，
 或用 `background_node` 指定铺满全屏的图像节点。设备扩展仅影响标注图，输入快照记录这些参数。
+紫色虚线 Layout Group 表示真实分组边界，包括无背景区块，且不受该分组的 `unity_adaptation.<节点ID>.annotate=false` 隐藏。
+设计区、安全区和分组边界重合时，虚线片段错开显示，以保留各自的颜色。
 保存布局时可用 `unity_adaptation` 按节点 ID 声明接入约束。
 `anchor_min` 和 `anchor_max` 成对提供，`pivot` 可单独提供，坐标为 Unity 约定的两个 0 到 1 的值。
 `viewport_insets` 和 `content_insets` 使用布局像素，分别表示遮罩视口和滚动内容的四边内缩。
@@ -369,6 +373,8 @@ HTML 可缩放，并可显示安全区、布局框、内容框、可见范围和
 `page_status` 和读取快照的结果分别给出 `matches_layout`、`matches_images`、`matches_typography`、`matches_sources`、`matches_component_usage` 和 `matches_unity_controls`。`matches_bindings` 表示图像与文字样式均匹配，`is_current` 要求各项均匹配。图像来源过期时，仍能读取此前的快照。重建引用这类资产的页面前，须按当前组件输入重画并重新导出，或在已有当前绘制结果时直接重新导出。只绑定 `spec.usage` 的分组可直接应用当前规格。
 
 `project_rebuild_pages(project_root, expected_revision, layout_ids)` 接收非空且无重复的布局 ID 列表。工具先预检所有目标及其构建输入，再按指定顺序逐页发布。成功返回 `completed_layout_ids` 和当前 `revision`。预检失败时不会发布页面。渲染或发布中途失败时停止，错误报告给出失败页面、已完成页面、当前 revision 及原因，便于修正后从对应页面继续。
+
+已有页面沿用上次构建的标注开关和 `annotation_device`，包括明确关闭设备示意或只输出干净稿的设置；首次构建默认输出标注及设备示意。保留的设备背景节点在预检时按当前布局校验，引用失效会明确报错。需要改变交付设置时，通过 `project_build_layout` 显式指定后再批量更新。
 
 ## 独立图像资产与静态组合预览
 

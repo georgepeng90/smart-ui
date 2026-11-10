@@ -8,6 +8,7 @@ from PIL import Image
 from playwright.sync_api import sync_playwright
 import pytest
 
+from smartui_mcp.annotation import render_annotation
 from smartui_mcp.browser_preview import render_page
 from smartui_mcp.layout_constraints import arrange_definition
 from test_browser_preview import _sha, image_node, page, text_node
@@ -45,6 +46,107 @@ def test_review_annotation_keeps_design_and_extends_device_regions(tmp_path, pag
         assert marked.getpixel((250, 212)) == (73, 170, 255)
         assert marked.getpixel((22, 500)) == (73, 170, 255)
         assert marked.getpixel((30, 709)) == (73, 229, 146)
+
+
+@pytest.mark.parametrize("device,top,bottom,has_safe_area", [
+    (None, 32, 22, True),
+    ({"top": 40, "bottom": 30, "label": "Test device"}, 40, 30, True),
+    ({"top": 0, "bottom": 0, "label": "Design only"}, 0, 0, True),
+    (None, 32, 22, False),
+], ids=["default-device", "explicit-device", "no-device-regions", "missing-safe-area"])
+def test_annotation_distinguishes_safe_area_from_design_area(tmp_path, device, top, bottom, has_safe_area):
+    width, height = 540, 780
+    page = {"width": width, "height": height, "background": "#273448", "nodes": []}
+    safe_area = {"top": 17, "right": 13, "bottom": 21, "left": 11}
+    if has_safe_area:
+        page["safe_area"] = safe_area
+    clean = tmp_path / "clean.png"
+    output = tmp_path / "annotation.png"
+    Image.new("RGB", (width, height), page["background"]).save(clean)
+    clean_bytes = clean.read_bytes()
+
+    result = render_annotation(clean, output, page, {"nodes": []}, device)
+
+    assert result["missing"] == ([] if has_safe_area else [{"field": "safe_area"}])
+    assert clean.read_bytes() == clean_bytes
+    with Image.open(output) as output_image:
+        marked = output_image.convert("RGB")
+    background = (39, 52, 72)
+    safe_color = (73, 229, 146)
+    left, right = safe_area["left"], width - safe_area["right"] - 1
+    safe_top = top + safe_area["top"]
+    safe_bottom = top + height - safe_area["bottom"] - 1
+    for y in (safe_top, safe_bottom):
+        colors = {marked.getpixel((x, y)) for x in range(left + 1, left + 13)}
+        assert (safe_color in colors) == has_safe_area
+    for x in (left, right):
+        colors = {marked.getpixel((x, y)) for y in range(safe_top + 1, safe_top + 13)}
+        assert (safe_color in colors) == has_safe_area
+    assert marked.getpixel((1, top)) == ((227, 232, 239) if top or bottom else background)
+    assert marked.getpixel((width // 2, top + height // 2)) == background
+    if top:
+        assert marked.getpixel((width // 2, 1)) == (9, 14, 22)
+    if bottom:
+        gesture_y = top + height + bottom - bottom // 3
+        assert marked.getpixel((width // 2, gesture_y)) == (227, 232, 239)
+
+
+@pytest.mark.parametrize("inset,canvas_trim,safe_trim", [
+    (0, 0, 0),
+    (16, 0, 0),
+    (16, 4, 8),
+], ids=["coincident-boundaries", "inset-safe-area", "partially-overlapping-edges"])
+def test_annotation_keeps_overlapping_boundary_colors_visible(tmp_path, inset, canvas_trim, safe_trim):
+    width, height, top = 540, 780, 32
+    page = {
+        "width": width, "height": height, "background": "#273448", "nodes": [],
+        "safe_area": dict.fromkeys(("top", "right", "bottom", "left"), inset),
+        "layout_groups": [
+            {"id": "canvas", "box": [canvas_trim, 0, width - canvas_trim, height]},
+            {"id": "safe", "box": [inset + safe_trim, inset, width - 2 * inset - safe_trim, height - 2 * inset]},
+        ],
+    }
+    clean = tmp_path / "clean.png"
+    output = tmp_path / "annotation.png"
+    Image.new("RGB", (width, height), page["background"]).save(clean)
+
+    render_annotation(clean, output, page, {"nodes": []}, None)
+
+    with Image.open(output) as output_image:
+        marked = output_image.convert("RGB")
+    design, safe, group = (227, 232, 239), (73, 229, 146), (207, 145, 255)
+    for edge_inset, trim, expected in ((0, canvas_trim, {design, group}), (inset, safe_trim, {safe, group})):
+        for y in (top + edge_inset, top + height - edge_inset - 1):
+            colors = {marked.getpixel((x, y)) for x in range(100, 140)}
+            assert expected <= colors
+        shared_vertical_edges = [width - edge_inset - 1]
+        if not trim:
+            shared_vertical_edges.append(edge_inset)
+        for x in shared_vertical_edges:
+            colors = {marked.getpixel((x, y)) for y in range(100, 140)}
+            assert expected <= colors
+
+
+def test_annotation_keeps_small_group_visible_between_dashes(tmp_path):
+    width, height = 2160, 780
+    page = {
+        "width": width, "height": height, "background": "#273448", "nodes": [],
+        "layout_groups": [{"id": "small", "box": [240, 14, 24, 24]}],
+    }
+    clean = tmp_path / "clean.png"
+    output = tmp_path / "annotation.png"
+    Image.new("RGB", (width, height), page["background"]).save(clean)
+
+    render_annotation(clean, output, page, {"nodes": []}, None)
+
+    with Image.open(output) as output_image:
+        marked = output_image.convert("RGB")
+    x, y, right, bottom = 240, 144, 263, 167
+    group_color = (207, 145, 255)
+    for edge in (y, bottom):
+        assert any(marked.getpixel((column, edge)) == group_color for column in range(x + 4, right - 3))
+    for edge in (x, right):
+        assert any(marked.getpixel((edge, row)) == group_color for row in range(y + 4, bottom - 3))
 
 
 def test_different_font_sizes_align_on_the_rendered_baseline(tmp_path, page, text_node):

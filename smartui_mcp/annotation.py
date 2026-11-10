@@ -32,7 +32,15 @@ def render_annotation(clean, output, page, renderer, device):
     scale = max(1, round(width / 540))
     font = ImageFont.load_default(size=13 * scale)
     legend = ("Element Bounds", "Anchor Side", "Pivot", "Stretch Direction", "Safe Area", "Layout Group")
+    if top or bottom:
+        legend += ("Design Area",)
     gray, gold, green, blue = "#999999", "#ffbe32", "#49e592", "#49aaff"
+    outline_styles = {
+        "Element Bounds": (gray, None),
+        "Safe Area": (green, 4),
+        "Layout Group": ("#cf91ff", 8),
+        "Design Area": ("#e3e8ef", 0),
+    }
     legend_width = round(max(font.getlength(label) for label in legend)) + 35 * scale
     columns = min(len(legend), max(1, width // legend_width))
     row_height = 22 * scale
@@ -50,14 +58,26 @@ def render_annotation(clean, output, page, renderer, device):
         sheet.paste(source.convert("RGBA"), (0, top))
     draw = ImageDraw.Draw(sheet)
 
-    def dashed(box, color):
+    def dashed(box, color, phase=None):
         x, y, right, bottom_edge = box
-        for start in range(x, right, 7 * scale):
-            end = min(start + 3 * scale, right)
+        period = (7 if phase is None else 12) * scale
+        dash_length = 3 * scale
+
+        def segments(start, end):
+            # Align design, safe area, and group dashes to the same grid so shared edges show each color.
+            first = start if phase is None else start - (start - phase * scale) % period
+            # Short edges that lie in a gap still need a visible dash.
+            if first + dash_length < start and first + period >= end:
+                first = start
+            for offset in range(first, end, period):
+                near, far = max(offset, start), min(offset + dash_length, end)
+                if near <= far:
+                    yield near, far
+
+        for start, end in segments(x, right):
             for edge in (y, bottom_edge):
                 draw.line((start, edge, end, edge), fill=color, width=scale)
-        for start in range(y, bottom_edge, 7 * scale):
-            end = min(start + 3 * scale, bottom_edge)
+        for start, end in segments(y, bottom_edge):
             for edge in (x, right):
                 draw.line((edge, start, edge, end), fill=color, width=scale)
 
@@ -107,11 +127,12 @@ def render_annotation(clean, output, page, renderer, device):
     missing = []
     omitted_stretch = []
     if top or bottom:
-        dashed((0, top, width - 1, top + height - 1), green)
-    elif "safe_area" in page:
+        dashed((0, top, width - 1, top + height - 1), *outline_styles["Design Area"])
+    if "safe_area" in page:
         safe = page["safe_area"]
-        dashed((safe["left"], safe["top"], width - safe["right"] - 1, height - safe["bottom"] - 1), green)
-    if "safe_area" not in page:
+        dashed((safe["left"], top + safe["top"], width - safe["right"] - 1,
+                top + height - safe["bottom"] - 1), *outline_styles["Safe Area"])
+    else:
         missing.append({"field": "safe_area"})
     if top:
         draw.rounded_rectangle((width * .37, -top, width * .63, top * .65), radius=top // 3, fill="#090e16")
@@ -127,7 +148,8 @@ def render_annotation(clean, output, page, renderer, device):
     for node_id, (x, y, w, h) in bounds.items():
         x, y, w, h = round(x), top + round(y), round(w), round(h)
         if node_id in groups or adaptations.get(node_id, {}).get("annotate", True):
-            dashed((x, y, x + w - 1, y + h - 1), "#cf91ff" if node_id in groups else gray)
+            label = "Layout Group" if node_id in groups else "Element Bounds"
+            dashed((x, y, x + w - 1, y + h - 1), *outline_styles[label])
     for node_id, (x, y, w, h) in bounds.items():
         x, y, w, h = round(x), top + round(y), round(w), round(h)
         settings = adaptations.get(node_id, {})
@@ -164,7 +186,7 @@ def render_annotation(clean, output, page, renderer, device):
         elif index == 3:
             arrow(x, mid, 20 * scale, False)
         else:
-            dashed((x, mid - 5 * scale, x + 20 * scale, mid + 5 * scale), gray if index == 0 else "#cf91ff" if index == 5 else green)
+            dashed((x, mid - 5 * scale, x + 20 * scale, mid + 5 * scale), *outline_styles[label])
         draw.text((x + 27 * scale, y), label, fill="#e3e8ef", font=font)
     caption = f"Design Area: {width} x {height}"
     if top or bottom:
