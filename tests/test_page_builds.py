@@ -56,14 +56,16 @@ def test_build_uses_real_browser_and_replaces_the_current_preview(typography_pro
     assert len({node["snapshot_key"] for node in record["nodes"]}) == 2
     for item in record["files"].values():
         path = Path(item["path"])
-        assert path.is_relative_to(Path(context["project_root"]) / "smart-ui/previews/pages" / record["id"])
+        preview_root = Path(context["project_root"]) / "smart-ui/previews"
+        assert path.parent == (preview_root / "fonts" if path.suffix == ".font"
+                               else preview_root / "pages" / record["id"])
         assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
     with Image.open(record["files"]["overview"]["path"]) as screenshot:
         assert screenshot.size == (64, 48)
     inputs = json.loads(Path(record["files"]["inputs"]["path"]).read_text(encoding="utf-8"))
     assert inputs["nodes"][0]["source"] == record["nodes"][0]["snapshot_key"]
     assert inputs["unity_adaptation"] == record["unity_adaptation"] == adaptation
-    assert inputs["nodes"][2]["font_path"] == record["nodes"][2]["snapshot_key"]
+    assert inputs["nodes"][2]["font_path"] == f"../../fonts/{record['nodes'][2]['font_sha256']}.font"
     assert [node["text_style_id"] for node in inputs["nodes"][2:]] == ["button-label", "button-label"]
     assert inputs["nodes"][2]["text_style_sha256"] == inputs["nodes"][3]["text_style_sha256"]
     assert inputs["nodes"][2]["text_style_sha256"] == record["nodes"][2]["text_style_sha256"]
@@ -163,7 +165,8 @@ def test_preview_resource_names_follow_identity_through_layout_edits(typography_
     record = rebuilt["page_build"]
     assert record["renderer"]["fonts"][0]["family"] == first_family
     assert record["files"][surviving[label["id"]]]["sha256"] != digests[label["id"]]
-    assert not Path(inserted_record["files"][keys[second_label["id"]]]["path"]).exists()
+    assert Path(inserted_record["files"][keys[second_label["id"]]]["path"]).is_file()
+    assert inserted_record["files"][keys[second_label["id"]]] == inserted_record["files"][keys[label["id"]]]
     assert store.get_page_build(root, record["id"]) == rebuilt
 
 
@@ -183,7 +186,7 @@ def test_export_geometry_change_marks_the_preview_stale_even_when_pixels_match(e
     assert rebuilt["page_build"]["nodes"][0]["geometry"] == item["geometry"]
 
 
-def test_rebuild_replaces_changed_layout_and_removes_unused_input_files(typography_project, label):
+def test_rebuild_replaces_changed_layout_and_retains_shared_font(typography_project, label):
     store, context = typography_project
     first = build(store, save(store, context, [image_node(x=2), label]))
     previous = first["page_build"]
@@ -197,7 +200,7 @@ def test_rebuild_replaces_changed_layout_and_removes_unused_input_files(typograp
     assert rebuilt["page_build"]["layout_sha256"] == saved["layout"]["sha256"]
     assert rebuilt["page_build"]["nodes"][0]["x"] == 20
     assert rebuilt["matches_layout"] and rebuilt["matches_bindings"]
-    assert not copied_font.exists()
+    assert copied_font.is_file()
 
 
 def test_current_preview_files_are_independent_of_the_original_image_and_font(typography_project, label, project_font):
