@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "smartui-photocraft",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "制作可编辑组件与页面，通过 Unity CLI 构建基础控件、变体和嵌套页面。",
   "extensions": {
     "com.openai": {
