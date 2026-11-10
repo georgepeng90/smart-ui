@@ -11,8 +11,8 @@ from .unity_contract import (ControlDefinition, HandoffManifest, HandoffRequest,
 from .unity_prefabs import inspect_prefab, verify_prefab
 
 
-REGISTRY = "smart-ui/unity/registry.json"
-DOCUMENT = "smart-ui/docs/unity-controls.md"
+REGISTRY = "unity/registry.json"
+DOCUMENT = "docs/unity-controls.md"
 
 
 def _fields(value, expected, label):
@@ -76,9 +76,9 @@ class UnityStore:
     def _read(self, root):
         source, source_revision = self.projects._read(root)
         layout = ProjectLayout(root)
-        path = layout.resolve(REGISTRY)
+        path = layout.persistent(REGISTRY)
         if not path.exists():
-            if layout.resolve(DOCUMENT).exists():
+            if layout.persistent(DOCUMENT).exists():
                 raise ProjectError(f"Unity 目录文档未登记，不能覆盖：{DOCUMENT}")
             return source, source_revision, {"schema_version": 1, "controls": {}, "handoffs": {},
                                             "document_sha256": None}, None
@@ -112,7 +112,7 @@ class UnityStore:
                 _fields(record, {"request", "manifest", "page_signatures"}, f"接入计划 {key}")
                 _model(HandoffRequest, record["request"], f"接入计划 {key}")
                 _fields(record["manifest"], {"path", "sha256"}, f"接入计划 {key} 清单")
-                expected = f"smart-ui/unity/handoffs/{key}.json"
+                expected = layout.persistent_relative(f"unity/handoffs/{key}.json")
                 if record["manifest"]["path"] != expected:
                     raise ProjectError(f"接入计划 {key} 清单路径必须为 {expected}")
                 manifest_bytes = layout.resolve(expected).read_bytes()
@@ -137,7 +137,7 @@ class UnityStore:
                     raise ProjectError(f"接入计划 {key} 的请求或页面签名与清单不一致")
                 if manifest["handoff_id"] != key or manifest["project_id"] != source["project_id"]:
                     raise ProjectError(f"接入清单 {key} 的项目或交付标识不一致")
-            document = layout.resolve(DOCUMENT).read_bytes()
+            document = layout.persistent(DOCUMENT).read_bytes()
             if _sha(document) != registry["document_sha256"]:
                 raise ProjectError(f"受管文档已被修改：{DOCUMENT}；请通过控件工具维护")
             if document != self._render(root, registry, self._effective(registry, source)).encode("utf-8"):
@@ -238,7 +238,7 @@ class UnityStore:
         return {"project_root": str(root), "revision": revision, "source_revision": source_revision,
                 "schema_version": 1, "configured": revision is not None, "controls": controls,
                 "handoffs": deepcopy(registry["handoffs"]),
-                "document": str(root / DOCUMENT) if revision is not None else None}
+                "document": str(ProjectLayout(root).persistent(DOCUMENT)) if revision is not None else None}
 
     def context(self, project_root):
         root = self.projects._root(project_root)
@@ -353,8 +353,8 @@ class UnityStore:
         payload = (_json(registry) + "\n").encode("utf-8")
         result = self._context(root, source, source_revision, registry, spec_sha256(registry))
         files = dict(artifacts or {})
-        files[root / DOCUMENT] = document
-        files[root / REGISTRY] = payload
+        files[ProjectLayout(root).persistent(DOCUMENT)] = document
+        files[ProjectLayout(root).persistent(REGISTRY)] = payload
         self.projects._publish_batch(ProjectLayout(root), files)
         return result
 
@@ -494,7 +494,7 @@ class UnityStore:
                         "component_inputs": all_components, "pages": pages,
                         "unity_validation": "not_performed"}
             _model(HandoffManifest, manifest, f"交付清单 {handoff_id}")
-            relative = f"smart-ui/unity/handoffs/{handoff_id}.json"
+            relative = ProjectLayout(root).persistent_relative(f"unity/handoffs/{handoff_id}.json")
             path = ProjectLayout(root).resolve(relative)
             if previous is None and path.exists():
                 raise ProjectError(f"未登记的接入清单已存在，不能覆盖：{relative}")

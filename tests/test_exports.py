@@ -10,6 +10,7 @@ import pytest
 
 from smartui_mcp.exports import prepare_exports, publish_exports
 from smartui_mcp.image_assets import register_image_file, verify_image_record
+from smartui_mcp.layout import ProjectLayout
 
 
 def fixture(tmp_path):
@@ -30,7 +31,7 @@ def fixture(tmp_path):
 
 
 def prepare(root, state, item):
-    return prepare_exports(str(root), {}, state, "button", [item])
+    return prepare_exports(str(root), ProjectLayout(root).paths, state, "button", [item])
 
 
 def save_state(state, result):
@@ -157,7 +158,7 @@ def test_all_items_preflight_before_any_output(tmp_path):
     second = deepcopy(item)
     second.update(asset_id="other", output_path="smart-ui/exports/ui/other.png", state="")
     with pytest.raises(ValueError, match="state"):
-        prepare_exports(str(tmp_path), {}, state, "button", [item, second])
+        prepare_exports(str(tmp_path), ProjectLayout(tmp_path).paths, state, "button", [item, second])
     assert not (tmp_path / "smart-ui/exports").exists()
     assert not list((tmp_path / ".smartui/temp").iterdir())
 
@@ -179,7 +180,7 @@ def test_publish_rechecks_all_targets_before_writing(tmp_path):
     state, item, _ = fixture(tmp_path)
     second = deepcopy(item)
     second.update(asset_id="second", output_path="smart-ui/exports/ui/second.png")
-    plan = prepare_exports(str(tmp_path), {}, state, "button", [item, second])
+    plan = prepare_exports(str(tmp_path), ProjectLayout(tmp_path).paths, state, "button", [item, second])
     target = tmp_path / second["output_path"]
     target.parent.mkdir(parents=True)
     target.write_bytes(b"new user file")
@@ -194,7 +195,7 @@ def test_publish_rolls_back_completed_writes_when_a_later_write_fails(tmp_path, 
     state, item, _ = fixture(tmp_path)
     second = deepcopy(item)
     second.update(asset_id="second", output_path="smart-ui/exports/ui/second.png")
-    plan = prepare_exports(str(tmp_path), {}, state, "button", [item, second])
+    plan = prepare_exports(str(tmp_path), ProjectLayout(tmp_path).paths, state, "button", [item, second])
     real_replace = exports.os.replace
 
     def fail_output(source, target):
@@ -255,4 +256,5 @@ def test_project_move_keeps_source_signature_and_relative_output(tmp_path):
 def test_public_registration_cannot_claim_component_export(tmp_path):
     _, _, source = fixture(tmp_path)
     with pytest.raises(ValueError, match="provenance.kind"):
-        register_image_file(str(tmp_path), {}, "fake", "伪造图像", str(source), {"kind": "component_export"})
+        register_image_file(str(tmp_path), ProjectLayout(tmp_path).paths, "fake", "伪造图像", str(source),
+                            {"kind": "component_export"})

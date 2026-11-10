@@ -1,16 +1,20 @@
 """工程内的制作目录，以及持久记录与运行时文件路径之间的转换。"""
 
 from copy import deepcopy
+from functools import cached_property
+import ntpath
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
-DEFAULT_PATHS = {
-    "documents": "smart-ui/docs",
-    "references": "smart-ui/references",
-    "programs": "smart-ui/programs",
-    "sources": "smart-ui/sources",
+_DIRECTORIES = {
+    "documents": "docs",
+    "references": "references",
+    "programs": "programs",
+    "sources": "sources",
 }
+_UNITY_PROJECT_FILE = "smartui.project.json"
+_is_reserved_windows_name = getattr(ntpath, "isreserved", lambda name: PureWindowsPath(name).is_reserved())
 
 IGNORE_RULES = "# SmartUI 本机缓存、临时文件和诊断\n/.smartui/\n"
 SCHEMA_MIGRATION_BACKUPS = ".smartui/migrations"
@@ -21,13 +25,78 @@ RUN_PATH_FIELDS = (
 
 
 class ProjectLayout:
-    def __init__(self, root: Path, paths: dict | None = None):
+    def __init__(self, root: Path, paths: dict | None = None, data_root: str | None = None):
         self.root = Path(root).resolve()
-        if paths is not None and (not isinstance(paths, dict) or paths.keys() - DEFAULT_PATHS.keys()):
-            raise ValueError("paths 必须是对象，且只能配置 documents、references、programs、sources")
-        self.paths = {**DEFAULT_PATHS, **(paths if paths is not None else {})}
-        if self.paths != DEFAULT_PATHS:
-            raise ValueError("制作目录固定在 smart-ui/ 中，不支持自定义目录")
+        self._paths = paths
+        self._requested_data_root = data_root
+        if paths is not None and paths != self.paths:
+            raise ValueError("项目目录必须使用制作资料的固定结构")
+
+    @cached_property
+    def is_unity(self):
+        assets = self.root / "Assets"
+        version = self.root / "ProjectSettings/ProjectVersion.txt"
+        if not version.is_file():
+            return False
+        self._check_managed_path(assets)
+        if not assets.is_dir():
+            raise ValueError(f"Unity 项目缺少 Assets 目录：{assets}")
+        return True
+
+    @cached_property
+    def data_root(self):
+        requested = self._requested_data_root
+        if not self.is_unity:
+            if requested is not None and self._relative_directory(requested, "data_root") != "smart-ui":
+                raise ValueError("非 Unity 项目的制作资料固定存放在 smart-ui/ 中")
+            return "smart-ui"
+
+        assets = self.root / "Assets"
+        legacy = self.root / "smart-ui"
+        if legacy.exists() or legacy.is_symlink() or legacy.is_junction():
+            raise ValueError(f"Unity 项目发现旧 SmartUI 资料，请先迁移至 Assets 子目录：{legacy}")
+        if requested is not None:
+            requested = self._validate_unity_data_root(requested)
+        if self._paths is not None and requested is None:
+            documents = self._paths.get("documents") if isinstance(self._paths, dict) else None
+            if not isinstance(documents, str) or not documents.endswith("/docs"):
+                raise ValueError("项目目录必须使用制作资料的固定结构")
+            return self._validate_unity_data_root(documents.removesuffix("/docs"))
+
+        existing = []
+        directories = [assets]
+        while directories:
+            directory = directories.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if os.path.normcase(entry.name) == _UNITY_PROJECT_FILE:
+                        self._check_managed_path(directory / entry.name)
+                        relative = directory.relative_to(self.root).as_posix()
+                        existing.append(self._validate_unity_data_root(relative))
+                    elif entry.is_dir(follow_symlinks=False) and not entry.is_junction():
+                        directories.append(Path(entry.path))
+        if len(existing) > 1:
+            raise ValueError(f"Unity 项目存在多个 SmartUI 制作目录：{', '.join(sorted(existing))}")
+        if existing:
+            if requested is not None and Path(requested) != Path(existing[0]):
+                raise ValueError(f"Unity 项目已有 SmartUI 制作目录 {existing[0]}，不能另建 {requested}")
+            return existing[0]
+        return requested if requested is not None else self._validate_unity_data_root("Assets/SmartUI")
+
+    def _validate_unity_data_root(self, value):
+        relative = self._relative_directory(value, "data_root")
+        path = PurePosixPath(relative)
+        if len(path.parts) < 2 or path.parts[0] != "Assets":
+            raise ValueError(f"Unity 项目的 data_root 必须是 Assets 的子目录：{value}")
+        if any(_is_reserved_windows_name(part) or part.endswith(".") or part.strip() != part or
+               any(char in part for char in '<>:"|?*') for part in path.parts):
+            raise ValueError(f"data_root 包含不受支持的目录名：{value}")
+        self._check_managed_path(self.root / relative)
+        return relative
+
+    @cached_property
+    def paths(self):
+        return {key: f"{self.data_root}/{directory}" for key, directory in _DIRECTORIES.items()}
 
     @staticmethod
     def _relative_directory(value, field):
@@ -40,24 +109,32 @@ class ProjectLayout:
         return path.as_posix()
 
     def directory(self, key):
-        path = self.root / self.paths[key]
-        self._check_managed_path(path)
+        return self.persistent(_DIRECTORIES[key])
+
+    def persistent(self, value):
+        relative = self._relative_directory(value, "制作资料路径")
+        data_root = self.root / self.data_root
+        path = data_root / relative
+        self._check_managed_path(path, boundary=data_root)
         return path
 
-    def _check_managed_path(self, path):
+    def persistent_relative(self, value):
+        return self.persistent(value).relative_to(self.root).as_posix()
+
+    def _check_managed_path(self, path, *, boundary=None):
         for parent in (path, *path.parents):
             if parent == self.root:
                 break
             if parent.is_symlink() or parent.is_junction():
                 raise ValueError(f"受管路径不能包含符号链接或目录联接：{parent}")
-        if not path.resolve().is_relative_to(self.root):
+        if not path.resolve().is_relative_to(boundary if boundary is not None else self.root):
+            if boundary is not None:
+                raise ValueError(f"受管路径越出制作资料目录 {boundary}：{path}")
             raise ValueError(f"受管路径越出工程根目录：{path}")
 
     @property
     def project_file(self):
-        path = self.root / "smart-ui/project.json"
-        self._check_managed_path(path)
-        return path
+        return self.persistent(_UNITY_PROJECT_FILE if self.is_unity else "project.json")
 
     @property
     def documents(self):
@@ -71,6 +148,8 @@ class ProjectLayout:
             raise ValueError(f"文件路径必须是非空字符串：{value!r}")
         path = Path(value)
         if path.is_absolute():
+            if path.is_relative_to(self.root):
+                self._check_managed_path(path)
             return path.resolve()
         relative = self._relative_directory(value, "项目文件路径")
         path = self.root / relative

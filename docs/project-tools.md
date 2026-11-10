@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.14.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.15.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -8,7 +8,7 @@ SmartUI PhotoCraft v0.14.0 管理参考、风格规则、文字规范、Python �
 
 | 操作 | 工具 | 使用方式 |
 | --- | --- | --- |
-| 建立和读取项目 | `project_create`、`project_context` | 建立项目或读取当前状态和 revision |
+| 建立和读取项目 | `project_create`、`project_context` | 建立项目，可选 `data_root`；读取当前状态和 revision |
 | 登记并查看参考 | `project_add_reference`、`project_inspect_reference` | 保存原图并按需预览、裁切及取样 |
 | 保存风格 | `project_update_style` | 保存说明、规则、项目共用参数和参考引用 |
 | 保存文字规范 | `project_update_typography` | 保存基准字号和完整角色样式，返回使用位置及页面构建状态 |
@@ -31,24 +31,40 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 
 ## 工程目录与持久化路径
 
+同时具有 `Assets/` 和 `ProjectSettings/ProjectVersion.txt` 的目录按 Unity 工程处理。`project_create` 可用工程相对路径指定 `data_root`，例如 `Assets/UI/SmartUI`。目录必须是 `Assets` 的严格子目录，默认 `Assets/SmartUI`。同一个 Unity 工程只保存一份 SmartUI 项目索引，工具可从 `Assets` 下发现唯一的 `smartui.project.json`。打开项目时仍传 Unity 工程的绝对路径作为 `project_root`。`project_create` 和 `project_context` 会返回实际的 `data_root`。Unity 工程根目录若存在旧 `smart-ui/` 资料，工具会报错，须先明确安排迁移。
+
+例如，给 `project_create` 传入以下参数，在 Unity 工程里选择 `Assets/UI/SmartUI` 作为资料目录。
+
+```json
+{
+  "project_root": "D:/Games/example",
+  "project_id": "example",
+  "name": "示例工程",
+  "data_root": "Assets/UI/SmartUI"
+}
+```
+
+下文的 `<data_root>` 表示实际资料目录。普通制作项目使用 `smart-ui`，索引保存在 `smart-ui/project.json`。Unity 项目的目录如下。
+
 | 路径 | 内容 |
 | --- | --- |
-| `smart-ui/project.json` | schema 5 项目索引、当前风格及项目记录 |
-| `smart-ui/typography.json` | 已定义的文字规范、字号档位与角色样式；未定义时项目索引为 `null` |
-| `smart-ui/docs/` | 工具生成的项目文档 |
-| `smart-ui/references/` | 登记的参考原图 |
-| `smart-ui/programs/<program_id>.py` | 当前程序源码；同目录的 `<program_id>.json` 保存当前元数据 |
-| `smart-ui/components/<component_id>.json` | 组件规格及当前制作记录 |
-| `smart-ui/sources/` | 组件 `<component_id>.pcraft`，以及 `images/<asset_id>.json` 和 `images/<asset_id>/image.<扩展名>` |
-| `smart-ui/layouts/<layout_id>.json` | 当前页面布局定义 |
-| `smart-ui/exports/` | 正式 PNG 导出资料 |
-| `smart-ui/previews/` | 当前组件预览、对照、视觉检查、静态组合及页面构建 |
-| `smart-ui/unity/` | 已启用项目的 Unity 控件登记和当前接入清单，独立于项目索引 |
-| `.smartui/` | 本机缓存、临时文件、诊断、锁和schema 升级迁移备份 |
+| `<data_root>/smartui.project.json` | schema 5 项目索引、当前风格及项目记录 |
+| `<data_root>/typography.json` | 已定义的文字规范、字号档位与角色样式；未定义时项目索引为 `null` |
+| `<data_root>/docs/` | 工具生成的项目文档 |
+| `<data_root>/references/` | 登记的参考原图 |
+| `<data_root>/programs/<program_id>.py` | 当前程序源码；同目录的 `<program_id>.json` 保存当前元数据 |
+| `<data_root>/components/<component_id>.json` | 组件规格及当前制作记录 |
+| `<data_root>/sources/` | 组件 `<component_id>.pcraft`，以及 `images/<asset_id>.json` 和 `images/<asset_id>/image.<扩展名>` |
+| `<data_root>/layouts/<layout_id>.json` | 当前页面布局定义 |
+| `<data_root>/exports/` | 正式 PNG 导出资料 |
+| `<data_root>/previews/` | 当前组件预览、对照、视觉检查、静态组合及页面构建 |
+| `<data_root>/unity/` | Unity 目录、制作定义、清单、构建请求和回执、导入基线 |
+| `<data_root>/Controls/`、`<data_root>/Pages/`、`<data_root>/Sprites/` | Unity 构建生成的控件预制体、页面预制体和图素 |
+| `.smartui/` | 本机缓存、临时文件、诊断、锁和 schema 升级迁移备份 |
 
-提交业务工程的 `smart-ui/` 及项目实际使用的交付文件。项目内路径以相对业务工程根目录的形式保存，使用 `/` 分隔；调用工具时可以用返回的绝对路径打开文件。项目引用的字体等必要资源也应能从业务工程取得。程序、组件、布局和资产按 ID 保存当前状态，历史变更通过 Git 查阅。受管 Markdown 展示项目摘要，通过工具更新结构化资料。
+提交业务工程的资料目录及项目实际使用的交付文件。项目内路径以相对业务工程根目录的形式保存，使用 `/` 分隔；调用工具时可以用返回的绝对路径打开文件。项目引用的字体等必要资源也应能从业务工程取得。程序、组件、布局和资产按 ID 保存当前状态，历史变更通过 Git 查阅。受管 Markdown 展示项目摘要，通过工具更新结构化资料。
 
-项目写入时在 `smart-ui/.gitattributes` 确保 `* -text` 生效，避免 Git 转换换行后导致文件摘要不匹配。
+项目写入时在 `<data_root>/.gitattributes` 确保 `* -text` 生效，避免 Git 转换换行后导致文件摘要不匹配。
 
 创建项目时，工具在业务工程根目录的 `.gitignore` 添加 `/.smartui/`。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。读取项目、继续修改组件、导出和构建页面依赖的是提交的资料以及正常安装的运行环境。项目锁只协调同一工程目录，revision 用来拒绝过期写入。各自检出的分支仍通过 Git 协商合并，工具不会自动合并 JSON 冲突或 PhotoCraft 文件。
 ## 参考区域与规则依据
@@ -137,7 +153,7 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 }
 ```
 
-`region` 相对来源预览，`geometry` 相对裁切后的 PNG，约束见[内容区域与伸缩几何](asset-geometry.md)。`output_path` 是 `smart-ui/exports/` 下的工程相对 PNG 路径，`manifests/` 保留给清单。已登记的正式资产需沿用对应输出路径。导出记录包括来源组件、区域、文件摘要、状态、用途和几何。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
+`region` 相对来源预览，`geometry` 相对裁切后的 PNG，约束见[内容区域与伸缩几何](asset-geometry.md)。`output_path` 是 `<data_root>/exports/` 下的工程相对 PNG 路径。示例用于普通制作项目，Unity 项目改用实际的 `data_root`。`manifests/` 保留给清单。已登记的正式资产需沿用对应输出路径。导出记录包括来源组件、区域、文件摘要、状态、用途和几何。每个组件的当前导出清单在 `<data_root>/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
 
 ## 页面制作的项目约定
 
@@ -178,7 +194,7 @@ Unity 控件目录、预制体登记及接入清单使用独立工具和独立�
 
 ## 项目文字规范
 
-文字规范独立于组件绘制参数。`project_update_typography(project_root, expected_revision, typography)` 保存完整当前规范，并生成 `smart-ui/docs/typography.md`。`project_context` 返回规范、`typography_usage` 和 `page_status`。新项目可以暂不定义文字规范，但保存含文字的正式页面前必须定义所引用的角色样式。参考分析和样片校准方法见[文字设计规范](typography-plan.md)。
+文字规范独立于组件绘制参数。`project_update_typography(project_root, expected_revision, typography)` 保存完整当前规范，并生成 `<data_root>/docs/typography.md`。`project_context` 返回规范、`typography_usage` 和 `page_status`。新项目可以暂不定义文字规范，但保存含文字的正式页面前必须定义所引用的角色样式。参考分析和样片校准方法见[文字设计规范](typography-plan.md)。
 
 项目索引使用 `typography_sha256` 校验独立规范内容，未定义规范时为 `null`。规范、文档与索引通过同一次发布更新；文件内容与登记摘要不符时明确失败。
 
@@ -310,7 +326,7 @@ schema 升级的本机备份按 `.smartui/migrations/<源版本>-to-<目标版�
 
 `project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像、实际使用的文字样式或控件定义变化后显式重建。含控件的构建以 `control_dependencies` 记录实际使用的控件、基础控件和嵌套控件的定义摘要。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时才校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
 
-构建中的图像快照按资产 ID 保存在页面目录，字体快照键由工程相对字体路径确定。完整字体按内容 SHA-256 存入项目的 `smart-ui/previews/fonts/`，页面间复用同一份字节。`inputs.json` 记录相对于页面目录的资源路径，快照清单、节点引用和文件摘要须一致。共享字体随预览目录一起保留，供构建记录独立校验。
+构建中的图像快照按资产 ID 保存在页面目录，字体快照键由工程相对字体路径确定。完整字体按内容 SHA-256 存入项目的 `<data_root>/previews/fonts/`，页面间复用同一份字节。`inputs.json` 记录相对于页面目录的资源路径，快照清单、节点引用和文件摘要须一致。共享字体随预览目录一起保留，供构建记录独立校验。
 
 离线 HTML 按页面实际文案内嵌字体子集，按内容摘要内嵌每张图片一次。可直接双击 HTML 打开，图像可见边界继续通过 Canvas 像素计算。
 

@@ -9,6 +9,7 @@ from PIL import Image
 import pytest
 
 from smartui_mcp.image_assets import register_image_file, verify_image_record
+from smartui_mcp.layout import ProjectLayout
 
 
 PROVENANCE = {"kind": "generated", "tool": "合成测试", "prompt": "透明图标", "actual_result": {"seed": None}}
@@ -22,7 +23,7 @@ def source_image(tmp_path, mode="RGBA", color=(20, 40, 60, 0), format="PNG"):
 
 
 def register(tmp_path, source):
-    return register_image_file(str(tmp_path), {}, "coin", "硬币", str(source), PROVENANCE)
+    return register_image_file(str(tmp_path), ProjectLayout(tmp_path).paths, "coin", "硬币", str(source), PROVENANCE)
 
 
 @pytest.mark.parametrize(("mode", "color", "format", "extension", "transparent"), [
@@ -113,14 +114,14 @@ def test_changed_copy_preserves_the_current_image(tmp_path, monkeypatch):
 def test_invalid_provenance_does_not_write(tmp_path, provenance):
     source = source_image(tmp_path)
     with pytest.raises(ValueError, match="provenance"):
-        register_image_file(str(tmp_path), {}, "coin", "硬币", str(source), provenance)
+        register_image_file(str(tmp_path), ProjectLayout(tmp_path).paths, "coin", "硬币", str(source), provenance)
     assert not (tmp_path / "smart-ui").exists()
 
 
 def test_imported_image_needs_description_without_generated_prompt(tmp_path):
     source = source_image(tmp_path)
     provenance = {"kind": "imported", "description": "从已有基础 UI 导出的 PNG"}
-    record = register_image_file(str(tmp_path), {}, "button", "按钮", str(source), provenance)
+    record = register_image_file(str(tmp_path), ProjectLayout(tmp_path).paths, "button", "按钮", str(source), provenance)
     assert record["provenance"] == provenance
     assert "prompt" not in record["provenance"]
     assert "tool" not in record["provenance"]
@@ -131,7 +132,7 @@ def test_imported_image_needs_description_without_generated_prompt(tmp_path):
 def test_invalid_identifier_or_name_does_not_write(tmp_path, identifier, name):
     source = source_image(tmp_path)
     with pytest.raises(ValueError):
-        register_image_file(str(tmp_path), {}, identifier, name, str(source), PROVENANCE)
+        register_image_file(str(tmp_path), ProjectLayout(tmp_path).paths, identifier, name, str(source), PROVENANCE)
     assert not (tmp_path / "smart-ui").exists()
 
 
@@ -171,7 +172,7 @@ def test_fixed_directory_and_path_boundary(tmp_path):
         with pytest.raises(ValueError, match="固定"):
             register_image_file(str(tmp_path), paths, "coin", "硬币", str(source), PROVENANCE)
     with pytest.raises(ValueError, match="绝对路径"):
-        register_image_file(str(tmp_path), {}, "coin", "硬币", "source.png", PROVENANCE)
+        register_image_file(str(tmp_path), ProjectLayout(tmp_path).paths, "coin", "硬币", "source.png", PROVENANCE)
 
 
 def test_linked_destination_is_rejected(tmp_path):

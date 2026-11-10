@@ -2,7 +2,7 @@
 
 import json
 
-from .layout import DEFAULT_PATHS, SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
+from .layout import SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
 from .page_builds import validate_build_record
 from .page_layouts import resolve_definition, validate_definition
 from .projects import ProjectError, ProjectStore, _identifier, _json, _sha, spec_sha256
@@ -37,10 +37,9 @@ def _read_legacy(store, layout):
     state = json.loads(project_bytes, object_pairs_hook=_unique_keys)
     if not isinstance(state, dict) or type(state.get("schema_version")) is not int or state["schema_version"] != 4:
         raise ProjectError(f"文字规范转换需要格式 4 项目：{project_file}")
-    if "typography" in state or state["paths"] != DEFAULT_PATHS:
+    if "typography" in state or state["paths"] != layout.paths:
         raise ProjectError(f"旧项目索引必须使用格式 4 的固定目录结构：{project_file}")
-    for path in (layout.root / "smart-ui/typography.json", layout.documents["typography.md"]):
-        layout._check_managed_path(path)
+    for path in (layout.persistent("typography.json"), layout.documents["typography.md"]):
         if path.exists():
             raise ProjectError(f"转换不能覆盖已存在的文字规范文件：{path}")
 
@@ -50,7 +49,7 @@ def _read_legacy(store, layout):
         for key, relative in state[collection].items():
             _identifier(key, collection)
             store._check_id_collision(records, key, collection)
-            expected = f"smart-ui/{directory}/{key}.json"
+            expected = layout.persistent_relative(f"{directory}/{key}.json")
             if relative != expected:
                 raise ProjectError(f"{collection}.{key} 路径必须为 {expected}")
             path = layout.resolve(relative)
@@ -69,7 +68,7 @@ def _read_legacy(store, layout):
             raise ProjectError(f"受管文档已被修改或缺失：{path}")
     store._references(state, state["style"]["reference_ids"], "style.reference_ids")
     store._rule_references(state, state["style"]["rules"])
-    store._validate_programs(layout.root, state["programs"], state["paths"])
+    store._validate_programs(layout, state["programs"])
     for component in state["components"].values():
         store._component_program(state, component["spec"])
     for key, page in state["layouts"].items():
@@ -149,7 +148,7 @@ def _backup_builds(state, layout, backup):
         previews = {}
         for label, name in _PREVIEW_NAMES.items():
             entry = record["files"][label]
-            expected = f"smart-ui/previews/pages/{build_id}/{name}"
+            expected = layout.persistent_relative(f"previews/pages/{build_id}/{name}")
             if entry["path"] != expected:
                 raise ProjectError(f"旧页面构建 {build_id} 的 {label} 路径必须为 {expected}")
             path = layout.resolve(expected)

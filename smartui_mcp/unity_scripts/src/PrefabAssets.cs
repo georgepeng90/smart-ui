@@ -15,18 +15,13 @@ namespace SmartUI.UGUI.Editor
     {
         internal static string ProjectPath => Path.GetDirectoryName(Application.dataPath);
 
-        internal static string PhysicalPath(string assetPath) => Path.Combine(ProjectPath, assetPath);
-
         internal static void RequireAssetPath(string path, bool output = false)
         {
-            if (string.IsNullOrEmpty(path) || path.Contains('\\') || path.Contains(':') ||
-                path.Split('/').Any(segment => segment.Length == 0 || segment == "." || segment == ".." ||
-                    segment.EndsWith(".", StringComparison.Ordinal) || segment.Trim() != segment ||
-                    segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) ||
-                (!path.StartsWith("Assets/", StringComparison.Ordinal) &&
+            if (path == null || (!path.StartsWith("Assets/", StringComparison.Ordinal) &&
                     (output || !path.StartsWith("Packages/", StringComparison.Ordinal))))
                 throw new InvalidOperationException($"Invalid Unity asset path '{path}'.");
 
+            BuildFiles.RelativePath(path);
             if (output && !path.EndsWith(".prefab", StringComparison.Ordinal))
                 throw new InvalidOperationException($"Prefab output '{path}' must end with .prefab.");
         }
@@ -68,7 +63,22 @@ namespace SmartUI.UGUI.Editor
             if (AssetDatabase.IsValidFolder(parent))
                 return;
 
+            var physical = BuildFiles.RelativePath(parent);
+            BuildFiles.RelativePath(parent + ".meta");
+            if (File.Exists(physical))
+                throw new IOException($"Unity output folder '{parent}' is occupied by a file.");
+
             EnsureOutputDirectory(parent);
+            if (AssetDatabase.IsValidFolder(parent))
+                return;
+            if (Directory.Exists(physical))
+            {
+                AssetDatabase.ImportAsset(parent, ImportAssetOptions.ForceSynchronousImport);
+                if (!AssetDatabase.IsValidFolder(parent))
+                    throw new IOException($"Unity could not import existing output folder '{parent}'.");
+                return;
+            }
+
             int separator = parent.LastIndexOf('/');
             if (string.IsNullOrEmpty(AssetDatabase.CreateFolder(parent.Substring(0, separator), parent.Substring(separator + 1))) ||
                 !AssetDatabase.IsValidFolder(parent))

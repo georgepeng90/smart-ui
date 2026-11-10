@@ -53,9 +53,9 @@ def _production_path(layout, value):
     path, relative = _relative_file(layout, value, "output_path")
     if path.suffix.lower() != ".png":
         raise ValueError(f"output_path 必须是 PNG 文件路径：{value}")
-    directory = layout.root / "smart-ui" / "exports"
+    directory = layout.persistent("exports")
     if not path.is_relative_to(directory) or path.is_relative_to(directory / "manifests"):
-        raise ValueError(f"output_path 必须位于 smart-ui/exports/ 的图像输出目录：{value}")
+        raise ValueError(f"output_path 必须位于 {layout.data_root}/exports/ 的图像输出目录：{value}")
     _check_parents(layout, path)
     if path.exists() and not path.is_file():
         raise ValueError(f"output_path 已存在但不是文件：{path}")
@@ -146,8 +146,7 @@ def _source(layout, state, component_id):
 
 def _manifest_path(layout, component_id):
     _identifier(component_id, "component_id")
-    destination = layout.root / "smart-ui" / "exports" / "manifests" / f"{component_id}.json"
-    layout._check_managed_path(destination)
+    destination = layout.persistent(f"exports/manifests/{component_id}.json")
     _check_parents(layout, destination)
     return destination
 

@@ -14,8 +14,8 @@ from .unity_contract import ControlDefinition, parse_model
 from .unity_prefabs import _is_file_id, inspect_prefab
 
 
-CONSTRUCTION = "smart-ui/unity/construction.json"
-OPERATIONS = "smart-ui/unity/operations"
+CONSTRUCTION = "unity/construction.json"
+OPERATIONS = "unity/operations"
 _RESULT_TARGET_STATES = {
     "plan": {"create", "update", "verify", "keep", "conflict"},
     "apply": {"created", "updated", "verified", "unchanged", "failed"},
@@ -47,8 +47,7 @@ def _path(value, label, *, suffix=None):
 
 
 def _config(value):
-    _fields(value, {"output_root", "fonts"}, "Unity 构建配置")
-    _path(value["output_root"], "output_root")
+    _fields(value, {"fonts"}, "Unity 构建配置")
     if not isinstance(value["fonts"], dict):
         raise ProjectError("Unity fonts 必须是按文字角色 ID 组织的对象")
     for key, font in value["fonts"].items():
@@ -61,9 +60,10 @@ def _config(value):
     return deepcopy(value)
 
 
-def read_construction(root):
+def read_construction(root, *, layout=None):
     """只读取构建资料，不递归打开 ProjectStore 或控件目录。"""
-    path = ProjectLayout(root).resolve(CONSTRUCTION)
+    layout = layout if layout is not None else ProjectLayout(root)
+    path = layout.persistent(CONSTRUCTION)
     if not path.exists():
         return {"schema_version": 1, "config": None, "recipes": {}, "bindings": {}}, None
     try:
@@ -193,7 +193,8 @@ class UnityBuildStore:
             raise ProjectError("Unity 构建资料 revision 冲突，请重新读取；首次使用 null")
 
     def _save(self, root, construction):
-        self.projects._publish_batch(ProjectLayout(root), {root / CONSTRUCTION: _bytes(construction)})
+        layout = ProjectLayout(root)
+        self.projects._publish_batch(layout, {layout.persistent(CONSTRUCTION): _bytes(construction)})
         return {"revision": spec_sha256(construction), "construction": deepcopy(construction)}
 
     def context(self, project_root):
@@ -201,13 +202,14 @@ class UnityBuildStore:
         with self.projects._lock(root):
             source, source_revision, _, registry_revision, construction, revision = self._read(root)
             operations = []
-            directory = ProjectLayout(root).resolve(OPERATIONS)
+            directory = ProjectLayout(root).persistent(OPERATIONS)
             if directory.exists():
                 for path in sorted(directory.glob("*/operation.json")):
                     _, operation, _ = self._operation(root, path.parent.name)
                     operations.append({key: operation[key] for key in ("request_id", "status", "operation", "error")})
             return {"revision": revision, "source_revision": source_revision, "registry_revision": registry_revision,
-                    "construction": construction, "controls": source["unity_controls"], "operations": operations,
+                    "construction": construction, "data_root": ProjectLayout(root).data_root,
+                    "controls": source["unity_controls"], "operations": operations,
                     "validation": "editor_execution_required"}
 
     def configure(self, project_root, expected_revision, config):
@@ -216,9 +218,6 @@ class UnityBuildStore:
         with self.projects._lock(root):
             *_, construction, revision = self._read(root)
             self._revision(expected_revision, revision)
-            if construction["config"] is not None and construction["config"]["output_root"] != config["output_root"]:
-                if ProjectLayout(root).resolve("smart-ui/unity/import-state").exists():
-                    raise ProjectError("已有 Unity 生成状态，不能通过配置迁移 output_root")
             construction["config"] = config
             return self._save(root, construction)
 
@@ -254,7 +253,7 @@ class UnityBuildStore:
                     raise ProjectError(f"控件修改使页面 {key} 无效：{error}") from error
             if definition is not None:
                 registered = self.unity._write(root, source, source_revision, registry,
-                                               {root / CONSTRUCTION: _bytes(construction)})
+                                               {ProjectLayout(root).persistent(CONSTRUCTION): _bytes(construction)})
                 return {"revision": spec_sha256(construction), "construction": deepcopy(construction),
                         "registry_revision": registered["revision"]}
             return self._save(root, construction)
@@ -318,14 +317,15 @@ class UnityBuildStore:
             request = self._request(root, source, registry, construction, control_ids, page_ids, operation, request_id)
             if adopt_matching:
                 request["adopt_matching"] = True
-            request_path = f"{OPERATIONS}/{request_id}/request.json"
+            layout = ProjectLayout(root)
+            request_path = layout.persistent_relative(f"{OPERATIONS}/{request_id}/request.json")
             record = {"schema_version": 1, "request_id": request_id, "operation": operation, "status": "prepared",
                       "request_sha256": _sha(_bytes(request)), "source_revision": source_revision,
                       "registry_revision": registry_revision, "construction_revision": revision,
                       "bindings": {key: deepcopy(construction["bindings"].get(key, {})) for key in page_ids},
                       "error": None, "result_sha256": None}
             self.projects._publish_batch(ProjectLayout(root), {
-                root / request_path: _bytes(request), root / OPERATIONS / request_id / "operation.json": _bytes(record)})
+                root / request_path: _bytes(request), layout.persistent(f"{OPERATIONS}/{request_id}/operation.json"): _bytes(record)})
             reference = source.get("ui_settings", {}).get("reference_size")
             size_checks = {}
             for target in request["targets"]:
@@ -344,8 +344,10 @@ class UnityBuildStore:
                  *, check_dependency_inputs=True, written_controls=()):
         config = construction["config"]
         if config is None:
-            raise ProjectError("请先配置 Unity output_root 和文字角色对应的 TMP 字体资源")
+            raise ProjectError("请先配置 Unity fonts；无文字控件可使用空字体映射")
         layout = ProjectLayout(root)
+        if not layout.data_root.startswith("Assets/"):
+            raise ProjectError("Unity 构建需要在 Unity 工程内创建项目，data_root 必须位于 Assets/ 下")
         effective = self.unity._effective(registry, source)
         recipes, resolved = construction["recipes"], source["unity_controls"]
         for key in control_ids:
@@ -392,7 +394,7 @@ class UnityBuildStore:
                                      check_dependency_inputs=False, written_controls=written_controls)
             for target in current["targets"]:
                 key, kind = target["id"], target["kind"]
-                baseline_path = layout.resolve(f"smart-ui/unity/import-state/{kind}/{key}.json")
+                baseline_path = layout.persistent(f"unity/import-state/{kind}/{key}.json")
                 try:
                     baseline = json.loads(baseline_path.read_bytes())
                 except (OSError, ValueError) as error:
@@ -408,10 +410,10 @@ class UnityBuildStore:
         for key in ordered:
             item, recipe = resolved[key], recipes[key]
             prefab = registry["controls"][key]["prefab"]
-            output = f"{config['output_root']}/Controls/{key}.prefab"
+            output = layout.persistent_relative(f"Controls/{key}.prefab")
             if prefab is not None:
                 output = prefab["file"]["path"]
-                if recipe["kind"] != "external" and output != f"{config['output_root']}/Controls/{key}.prefab":
+                if recipe["kind"] != "external" and output != layout.persistent_relative(f"Controls/{key}.prefab"):
                     raise ProjectError(f"控件 {key} 已登记其他路径，请使用 external 定义引用已有预制体")
             controls[key] = {"path": output, "guid": prefab["file"]["guid"] if prefab else None,
                              "sha256": prefab["file"]["sha256"] if prefab else None,
@@ -430,7 +432,7 @@ class UnityBuildStore:
             targets.append(target)
         for page_id, nodes in page_nodes.items():
             definition = source["layouts"][page_id]["definition"]
-            targets.append({"id": page_id, "kind": "page", "path": f"{config['output_root']}/Pages/{page_id}.prefab",
+            targets.append({"id": page_id, "kind": "page", "path": layout.persistent_relative(f"Pages/{page_id}.prefab"),
                             "width": definition["width"], "height": definition["height"], "base_control_id": None,
                             "background": definition["background"], "nodes": nodes, "overrides": [], "slots": {}, "button": None})
             direct_resources[("page", page_id)] = self._resource_ids(nodes, [], None, resolved)
@@ -464,7 +466,7 @@ class UnityBuildStore:
         assets, fonts, font_inputs = resources["assets"], {}, {}
         for key, asset in assets.items():
             asset.setdefault("geometry", None)
-            asset["output_path"] = f"{config['output_root']}/Sprites/{key}.png"
+            asset["output_path"] = layout.persistent_relative(f"Sprites/{key}.png")
             if asset["path"] == asset["output_path"]:
                 raise ProjectError(f"Unity 生成图像不能同时作为制作源文件：{asset['path']}")
             asset["expected"] = {"sha256": _file_hash(layout, asset["output_path"]),
@@ -524,9 +526,10 @@ class UnityBuildStore:
                 "components": {component_id: resources["component_inputs"][component_id] for component_id in source_components}})
             target["expected"] = {"prefab_sha256": _file_hash(layout, target["path"]),
                                   "meta_sha256": _file_hash(layout, target["path"] + ".meta"),
-                                  "baseline_sha256": _file_hash(layout, f"smart-ui/unity/import-state/{kind}/{key}.json")}
-        return {"schema_version": 1, "request_id": request_id, "operation": operation, "project_id": source["project_id"],
-                "result_path": f"{OPERATIONS}/{request_id}/result.json", "targets": targets,
+                                  "baseline_sha256": _file_hash(layout, layout.persistent_relative(f"unity/import-state/{kind}/{key}.json"))}
+        return {"schema_version": 2, "request_id": request_id, "operation": operation, "project_id": source["project_id"],
+                "data_root": layout.data_root, "project_file": layout.relative(layout.project_file),
+                "result_path": layout.persistent_relative(f"{OPERATIONS}/{request_id}/result.json"), "targets": targets,
                 "assets": assets, "fonts": fonts, "controls": controls}
 
     @staticmethod
@@ -553,11 +556,18 @@ class UnityBuildStore:
         if not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id):
             raise ProjectError("request_id 必须是准备请求时返回的 32 位标识")
         layout = ProjectLayout(root)
-        directory = layout.resolve(f"{OPERATIONS}/{request_id}")
+        directory = layout.persistent(f"{OPERATIONS}/{request_id}")
         try:
-            record = json.loads((directory / "operation.json").read_bytes())
-            data = (directory / "request.json").read_bytes()
+            record = json.loads(layout.persistent(f"{OPERATIONS}/{request_id}/operation.json").read_bytes())
+            data = layout.persistent(f"{OPERATIONS}/{request_id}/request.json").read_bytes()
             request = json.loads(data)
+            if not isinstance(record, dict) or not isinstance(request, dict):
+                raise ProjectError("Unity 请求和执行记录必须是 JSON 对象")
+            if (type(request.get("schema_version")) is not int or request["schema_version"] != 2
+                    or request.get("data_root") != layout.data_root
+                    or request.get("project_file") != layout.relative(layout.project_file)
+                    or request.get("result_path") != layout.persistent_relative(f"{OPERATIONS}/{request_id}/result.json")):
+                raise ProjectError("Unity 请求的 schema_version 或项目数据路径不一致")
             if record["request_id"] != request_id or request["request_id"] != request_id or _sha(data) != record["request_sha256"]:
                 raise ProjectError("执行请求身份或摘要不一致")
             return directory, record, request
@@ -565,7 +575,7 @@ class UnityBuildStore:
             raise ProjectError(f"无法读取 Unity 请求 {request_id}：{error}") from error
 
     def _ensure_idle(self, root, except_id=None):
-        directory = ProjectLayout(root).resolve(OPERATIONS)
+        directory = ProjectLayout(root).persistent(OPERATIONS)
         if directory.exists():
             for path in directory.glob("*/operation.json"):
                 _, record, _ = self._operation(root, path.parent.name)
@@ -614,7 +624,7 @@ class UnityBuildStore:
             directory, record, request = self._operation(root, request_id)
             if record["status"] == "prepared":
                 raise ProjectError("尚未执行的请求不能 reconcile")
-            path = directory / "result.json"
+            path = ProjectLayout(root).persistent(f"{OPERATIONS}/{request_id}/result.json")
             if record["result_sha256"] is not None:
                 if not path.is_file() or _sha(data := path.read_bytes()) != record["result_sha256"]:
                     raise ProjectError(f"已核对的 Unity 结果文件缺失或摘要已改变：{path}")
@@ -626,7 +636,7 @@ class UnityBuildStore:
                 data = path.read_bytes()
                 result = json.loads(data)
                 if (not isinstance(result, dict) or type(result.get("schema_version")) is not int
-                        or result["schema_version"] != 1 or result.get("request_id") != request_id
+                        or result["schema_version"] != 2 or result.get("request_id") != request_id
                         or result.get("request_sha256") != record["request_sha256"]):
                     raise ProjectError("Unity 结果与本次请求的身份或摘要不符")
                 if result.get("status") not in ("success", "failed") or not isinstance(result.get("targets"), list):

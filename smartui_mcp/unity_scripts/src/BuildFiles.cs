@@ -31,11 +31,21 @@ namespace SmartUI.UGUI.Editor
             foreach (string segment in path.Split('/'))
             {
                 current = Path.Combine(current, segment);
-                if ((File.Exists(current) || Directory.Exists(current)) &&
-                    (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                    throw new InvalidOperationException($"'{path}' contains a linked path at '{current}'.");
+                try
+                {
+                    if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidOperationException($"'{path}' contains a linked path at '{current}'.");
+                }
+                catch (FileNotFoundException) { }
+                catch (DirectoryNotFoundException) { }
             }
             return current;
+        }
+
+        internal static void RequireOutputPath(string dataRoot, string path)
+        {
+            if (!path.StartsWith(dataRoot + "/", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Unity output '{path}' must be inside '{dataRoot}'.");
         }
 
         internal static void RequireId(string value, string kind)
@@ -44,10 +54,12 @@ namespace SmartUI.UGUI.Editor
                 throw new InvalidOperationException($"Invalid {kind} ID '{value}'.");
         }
 
-        internal static string StatePath(string kind, string id)
+        internal static string StatePath(string dataRoot, string kind, string id)
         {
             RequireId(id, kind);
-            return RelativePath($"smart-ui/unity/import-state/{kind}/{id}.json");
+            string path = $"{dataRoot}/unity/import-state/{kind}/{id}.json";
+            RelativePath(path + ".pending");
+            return RelativePath(path);
         }
 
         internal static FileSnapshot Snapshot(string assetPath) => new()

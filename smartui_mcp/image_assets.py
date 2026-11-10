@@ -82,6 +82,20 @@ def _replace_directory(layout, staging, destination, commit=None):
         if destination.exists():
             if not destination.is_dir():
                 raise ValueError(f"受管输出路径不是目录：{destination}")
+            if layout.is_unity and destination.is_relative_to(layout.root / layout.data_root):
+                for output in list(staging.rglob("*")):
+                    if output.suffix == ".meta":
+                        continue
+                    current = destination / output.relative_to(staging)
+                    layout._check_managed_path(current)
+                    if not current.exists() or current.is_dir() != output.is_dir():
+                        continue
+                    meta = current.with_name(current.name + ".meta")
+                    layout._check_managed_path(meta)
+                    if meta.exists():
+                        if not meta.is_file():
+                            raise ValueError(f"Unity 资源的 .meta 路径必须是文件：{meta}")
+                        shutil.copyfile(meta, output.with_name(meta.name))
             destination.rename(previous)
         staging.rename(destination)
         published = True
@@ -119,6 +133,13 @@ def register_image_file(project_root: str, paths: dict, asset_id: str, name: str
         if not destination.is_dir():
             raise ValueError(f"受管图像路径不是目录：{destination}")
         entries = list(destination.iterdir())
+        if layout.is_unity:
+            for entry in entries[:]:
+                if entry.suffix == ".meta" and entry.with_suffix("") in entries:
+                    layout._check_managed_path(entry)
+                    if not entry.is_file():
+                        raise ValueError(f"Unity 资源的 .meta 路径必须是文件：{entry}")
+                    entries.remove(entry)
         if len(entries) != 1 or entries[0].name not in {"image.png", "image.jpg", "image.webp"}:
             raise ValueError(f"受管图像目录必须只包含一个当前图像：{destination}")
         current = entries[0]

@@ -12,6 +12,7 @@ from PIL import Image
 
 from smartui_mcp.projects import ProjectError, ProjectStore, spec_sha256, style_sha256
 from smartui_mcp.unity import DOCUMENT, REGISTRY, UnityStore
+from smartui_mcp.layout import ProjectLayout
 from test_compositions import text_node
 
 
@@ -111,10 +112,10 @@ def test_unconfigured_catalog_is_read_only_and_registration_survives_project_mov
     assert saved["controls"]["button"]["file_status"] == "file_checked"
     assert saved["controls"]["button"]["unity_validation"] == "not_performed"
     assert projects.context(str(root))["revision"] == context["source_revision"]
-    document = (root / DOCUMENT).read_bytes()
+    document = (ProjectLayout(root).persistent(DOCUMENT)).read_bytes()
     assert "主按钮（button）" in document.decode("utf-8")
     assert "(<../../Assets/Button.prefab>)" in document.decode("utf-8")
-    assert json.loads((root / REGISTRY).read_bytes())["document_sha256"] == hashlib.sha256(document).hexdigest()
+    assert json.loads((ProjectLayout(root).persistent(REGISTRY)).read_bytes())["document_sha256"] == hashlib.sha256(document).hexdigest()
 
     moved = tmp_path / "moved"
     shutil.move(root, moved)
@@ -124,8 +125,8 @@ def test_unconfigured_catalog_is_read_only_and_registration_survives_project_mov
     reloaded = store.context(str(moved))
     assert reloaded["revision"] == saved["revision"]
     assert reloaded["controls"]["button"]["file_status"] == "file_checked"
-    assert Path(reloaded["document"]) == moved / DOCUMENT
-    assert (moved / DOCUMENT).read_bytes() == document
+    assert Path(reloaded["document"]) == ProjectLayout(moved).persistent(DOCUMENT)
+    assert (ProjectLayout(moved).persistent(DOCUMENT)).read_bytes() == document
 
 
 @pytest.mark.parametrize("has_unity_control", [False, True], ids=["unconfigured", "referenced"])
@@ -169,9 +170,9 @@ def test_publication_failure_restores_catalog_document_and_handoff(project, regi
     replace = os.replace
 
     def fail_registry(source, destination):
-        if destination == root / REGISTRY:
+        if destination == ProjectLayout(root).persistent(REGISTRY):
             assert (root / "smart-ui/unity/handoffs/menu.json").is_file()
-            assert (root / DOCUMENT).read_bytes() != before[Path(DOCUMENT)]
+            assert (ProjectLayout(root).persistent(DOCUMENT)).read_bytes() != before[Path(ProjectLayout(root).persistent_relative(DOCUMENT))]
             raise OSError("模拟登记发布中断")
         return replace(source, destination)
 
@@ -259,12 +260,12 @@ def test_invalid_instance_overrides_leave_persisted_handoff_unchanged(project, r
 def test_unknown_registry_schema_and_edited_document_are_rejected(project, registered_button, fault, match):
     root, _, store = project
     if fault == "schema":
-        path = root / REGISTRY
+        path = ProjectLayout(root).persistent(REGISTRY)
         payload = json.loads(path.read_bytes())
         payload["schema_version"] = 2
         path.write_text(json.dumps(payload), encoding="utf-8")
     else:
-        (root / DOCUMENT).write_text("手工编辑的文档", encoding="utf-8")
+        (ProjectLayout(root).persistent(DOCUMENT)).write_text("手工编辑的文档", encoding="utf-8")
     before = persistent_files(root)
     with pytest.raises(ProjectError, match=match):
         store.context(str(root))
@@ -305,12 +306,12 @@ def test_handoff_document_order_is_stable_after_reopening_registry(project, regi
     request = handoff_request()
     last = store.prepare_handoff(str(root), registered_button["revision"], "z-menu", request)
     first = store.prepare_handoff(str(root), last["revision"], "a-menu", request)
-    document = (root / DOCUMENT).read_bytes()
+    document = (ProjectLayout(root).persistent(DOCUMENT)).read_bytes()
     assert store.context(str(root))["revision"] == first["revision"]
     repeated = store.prepare_handoff(str(root), first["revision"], "a-menu", request)
     assert repeated["revision"] == first["revision"]
     assert repeated["page_changes"] == {"home": "unchanged", "shop": "unchanged"}
-    assert (root / DOCUMENT).read_bytes() == document
+    assert (ProjectLayout(root).persistent(DOCUMENT)).read_bytes() == document
 
 
 @pytest.mark.parametrize("fault, match", [
@@ -320,7 +321,7 @@ def test_handoff_document_order_is_stable_after_reopening_registry(project, regi
 def test_malformed_registry_records_report_configuration_errors(project, registered_button, fault, match):
     root, _, store = project
     store.prepare_handoff(str(root), registered_button["revision"], "menu", handoff_request())
-    path = root / REGISTRY
+    path = ProjectLayout(root).persistent(REGISTRY)
     registry = json.loads(path.read_bytes())
     if fault == "prefab_file":
         registry["controls"]["button"]["prefab"]["file"]["slot_bindings"] = []
@@ -337,7 +338,7 @@ def test_variant_inherits_source_slot_identity_and_requires_reregistration_after
     draft = store.define_control(str(root), registered_button["revision"], "variant", definition)
     write_prefab(root, WRAPPER_PATH, WRAPPER_GUID, file_id=None, nested_guid=BUTTON_GUID)
     saved = store.register_prefab(str(root), draft["revision"], "variant", WRAPPER_PATH, WRAPPER_GUID, {})
-    persisted = json.loads((root / REGISTRY).read_bytes())["controls"]["variant"]["prefab"]
+    persisted = json.loads((ProjectLayout(root).persistent(REGISTRY)).read_bytes())["controls"]["variant"]["prefab"]
     assert persisted["file"]["slot_bindings"] == {}
     assert persisted["slot_sources"] == {"label": {"control_id": "button", "file_id": 700}}
     request = handoff_request("variant")

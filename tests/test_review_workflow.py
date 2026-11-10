@@ -16,6 +16,7 @@ from PIL import Image
 import pytest
 
 from smartui_mcp.pipeline import plan_component
+from smartui_mcp.layout import ProjectLayout
 from smartui_mcp.projects import ProjectError, ProjectStore, spec_sha256, style_sha256
 from smartui_mcp.references import register_reference
 from smartui_mcp.server import create_server
@@ -40,9 +41,10 @@ def write_json(path, value):
 def record_sample_run(store, context, run_id, color):
     """用合成文件替代 PhotoCraft，按当前产物路径登记绘制结果。"""
     root = context["project_root"]
-    directory = Path(root) / "smart-ui/components/sample"
-    document = Path(root) / "smart-ui/sources/sample.pcraft"
-    preview = Path(root) / "smart-ui/previews/components/sample.png"
+    layout = ProjectLayout(root)
+    directory = layout.persistent("components/sample")
+    document = layout.persistent("sources/sample.pcraft")
+    preview = layout.persistent("previews/components/sample.png")
     for folder in (directory, document.parent, preview.parent):
         folder.mkdir(parents=True, exist_ok=True)
     data = context["data"]

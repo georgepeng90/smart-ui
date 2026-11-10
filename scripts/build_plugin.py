@@ -2,10 +2,14 @@
 
 from pathlib import Path
 import shutil
+import sys
 
 
 def main():
     root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root))
+    from smartui_mcp.unity_script import SCRIPT_DIRECTORY, SCRIPT_NAME, write_script
+
     distribution_root = root / "dist"
     target = distribution_root / "smartui-photocraft"
     # 删除范围只允许当前项目的这个构建目录，拒绝指向外部的链接。
@@ -20,23 +24,18 @@ def main():
              "docs/unity-integration-plan.md", "docs/unity-tools.md", "docs/unity-prefab-reuse-plan.md",
              "docs/ui-delivery-plan.md", "docs/ui-delivery-checklists.md",
              "examples/drawing-programs/semantic_palette.py",
-             "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py", "scripts/adopt_typography.py",
-             "unity/com.smartui.ugui/package.json"]
-    for directory in ("smartui_mcp",):
-        files += [str(p.relative_to(root)) for p in (root / directory).rglob("*.py")]
+             "scripts/verify_program_workflow.py", "scripts/verify_page_workflow.py", "scripts/adopt_typography.py"]
+    files += [str(p.relative_to(root)) for p in (root / "smartui_mcp").rglob("*.py")]
     files += [str(p.relative_to(root)) for p in (root / "skills").rglob("*.md")]
-    unity_package = root / "unity" / "com.smartui.ugui"
-    files += [str(p.relative_to(root)) for p in unity_package.iterdir()
-              if p.is_file() and p.suffix in {".md", ".meta"}]
-    for directory in ("Editor", "Tests"):
-        files += [str(p.relative_to(root)) for p in (unity_package / directory).rglob("*")
-                  if p.is_file() and p.suffix in {".cs", ".asmdef", ".meta"}]
     for relative in sorted(files):
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / relative, destination)
+    unity_script = target / SCRIPT_DIRECTORY.relative_to(root) / SCRIPT_NAME
+    unity_script.parent.mkdir(parents=True)
+    write_script(unity_script)
     print("插件构建目录：", target)
-    print("文件数：", len(files))
+    print("文件数：", len(files) + 1)
 
 
 if __name__ == "__main__":

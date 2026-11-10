@@ -95,9 +95,10 @@ def register_reference(project_root: str, reference_id: str, source_path: str) -
         raise ValueError(f"project_root 必须是目录：{root}")
     identifier = _reference_id(reference_id)
     source = _absolute_path(source_path, "source_path")
-    destination = root / "smart-ui" / "references" / identifier
+    layout = ProjectLayout(root)
+    destination = layout.persistent(f"references/{identifier}")
     archived = destination / source.name
-    ProjectLayout(root)._check_managed_path(archived)
+    layout._check_managed_path(archived)
     if destination.exists():
         raise ValueError(f"参考图目录已存在，不能覆盖：{destination}")
     with TemporaryDirectory(dir=_temporary_directory(root)) as temp:

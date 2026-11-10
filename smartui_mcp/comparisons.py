@@ -142,6 +142,7 @@ def build_comparison(
     artifact_region: list[int] | None = None,
     reference_scale: float = 1.0,
     artifact_scale: float = 1.0,
+    paths=None,
     commit=None,
 ) -> dict:
     """保存当前对照的 RGBA 裁切图和总览，返回文件摘要及坐标。"""
@@ -167,9 +168,8 @@ def build_comparison(
         reference_coordinate_size = _size(reference_coordinate_size, "reference_coordinate_size")
     reference_path = _absolute_path(reference["source"], "reference.source")
     artifact_path = _absolute_path(run["preview"], "run.preview")
-    destination = root / "smart-ui" / "previews" / "comparisons" / comparison_id
-    layout = ProjectLayout(root)
-    layout._check_managed_path(destination)
+    layout = ProjectLayout(root, paths)
+    destination = layout.persistent(f"previews/comparisons/{comparison_id}")
     temp_dir = _temporary_directory(root)
 
     with (

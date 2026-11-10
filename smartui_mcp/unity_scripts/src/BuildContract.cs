@@ -9,7 +9,7 @@ namespace SmartUI.UGUI.Editor
     internal sealed class BuildRequest
     {
         public int SchemaVersion;
-        public string RequestId, Operation, ProjectId, ResultPath;
+        public string RequestId, Operation, ProjectId, DataRoot, ProjectFile, ResultPath;
         public bool AdoptMatching;
         public Target[] Targets;
         public Dictionary<string, ImageAsset> Assets;
@@ -110,7 +110,7 @@ namespace SmartUI.UGUI.Editor
 
     internal sealed class BuildResult
     {
-        public int SchemaVersion = 1;
+        public int SchemaVersion;
         public string RequestId, RequestSha256, Status, Error;
         public TargetResult[] Targets;
     }

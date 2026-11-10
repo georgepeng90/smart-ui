@@ -10,7 +10,7 @@ import sys
 from PIL import Image
 import pytest
 
-from smartui_mcp.layout import DEFAULT_PATHS
+from smartui_mcp.layout import ProjectLayout
 from smartui_mcp.page_layouts import image_geometry
 from smartui_mcp.projects import ProjectError, ProjectStore, _sha, spec_sha256
 from smartui_mcp.slicing import image_patches
@@ -80,7 +80,7 @@ def legacy(tmp_path, text_node):
     asset = {"id": "coin", "name": "金币", "path": image_path, "sha256": _sha((root / image_path).read_bytes()),
              "width": 4, "height": 4, "mode": "RGB", "has_transparency": False,
              "provenance": {"kind": "imported", "description": "测试合成图片"}}
-    state = {"schema_version": 4, "project_id": "legacy", "name": "旧工程", "paths": DEFAULT_PATHS,
+    state = {"schema_version": 4, "project_id": "legacy", "name": "旧工程", "paths": ProjectLayout(root).paths,
              "references": {}, "programs": {}, "components": {}, "images": {"coin": asset}, "compositions": {},
              "comparisons": {}, "visual_checks": {}, "feedback": {}, "layouts": {}, "page_builds": {},
              "style": {"description": "", "parameters": {}, "rules": [], "reference_ids": [],

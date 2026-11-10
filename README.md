@@ -1,6 +1,6 @@
 # SmartUI PhotoCraft 本地制作插件
 
-SmartUI PhotoCraft v0.14.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
+SmartUI PhotoCraft v0.15.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
 
 ## 安装
 
@@ -16,7 +16,7 @@ codex plugin marketplace add .
 codex plugin add smartui-photocraft@smartui-local
 ```
 
-构建输出为 `dist/smartui-photocraft`，其中包含 Unity Editor 包 `unity/com.smartui.ugui`。本地插件源由 `.agents/plugins/marketplace.json` 定义。插件源已登记时，更新只需重新运行构建命令和 `codex plugin add smartui-photocraft@smartui-local`。安装或更新后，在新聊天中使用插件。浏览器页面构建使用已安装的 Chromium。Unity Editor 包由业务工程按接入说明引入。
+构建输出为 `dist/smartui-photocraft`，其中包含由 Unity CLI 调用的 C# 构建脚本。本地插件源由 `.agents/plugins/marketplace.json` 定义。插件源已登记时，更新只需重新运行构建命令和 `codex plugin add smartui-photocraft@smartui-local`。安装或更新后，在新聊天中使用插件。浏览器页面构建使用已安装的 Chromium。
 
 ## 使用
 
@@ -32,19 +32,19 @@ codex plugin add smartui-photocraft@smartui-local
 
 ## 项目资料与交付
 
-在业务项目的 Git 仓库中提交 `smart-ui/`、根目录的忽略规则和项目实际使用的交付文件。项目索引、参考、程序、组件规格、可编辑源文件、布局、导出和当前预览都在 `smart-ui/`。工具生成受管文档，变更通过项目工具保存。每个标识保存当前状态，历史从 Git 查看。
+在 Unity 工程中创建 SmartUI 项目时，将工程绝对路径传给 `project_root`。持久资料默认放在 `Assets/SmartUI/`，也可用 `project_create` 的 `data_root` 指定其他 `Assets` 子目录。普通制作项目使用 `smart-ui/`。项目索引、参考、绘制程序、组件规格、可编辑源文件、布局、导出和正式预览随资料目录保存。通过项目工具更新受管资料，历史从 Git 查看。
 
-请一并提交 `smart-ui/.gitattributes`，其中的规则让 Git 保留 SmartUI 校验摘要所需的文件字节。
+将资料目录及其 `.gitattributes`、工程根目录的忽略规则和实际使用的交付文件一并纳入业务项目 Git 仓库。Unity 工程还应随资源保存 Unity 生成的 `.meta`。目录与调用示例见[工程目录与持久化路径](docs/project-tools.md#工程目录与持久化路径)。
 
-`.smartui/` 是 Git 忽略的本机目录，保存缓存、临时文件、诊断、锁和schema 升级迁移备份。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。其他成员取得业务项目提交后，可以用自己机器上的依赖继续制作。项目锁和 revision 检查当前目录的并发操作，跨分支冲突由团队在 Git 中处理。
+`.smartui/` 是 Git 忽略的本机目录，保存缓存、临时文件、诊断、锁和 schema 升级迁移备份。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。其他成员取得业务项目提交后，可以用自己机器上的依赖继续制作。项目锁和 revision 检查当前目录的并发操作，跨分支冲突由团队在 Git 中处理。
 
 正式导出记录当前组件产物、来源区域、文件摘要及[伸缩几何](docs/asset-geometry.md)。页面布局按资产 ID 引用当前资产，支持九宫格、独立文本框和嵌套分组。容器可横排、竖排、叠放或使用局部坐标；共享边距、等距分布、内容宽度、弹性区域及文字基线用于保持布局关系。组件可声明文字区域、点击范围、动画中心和所需状态，由引用它的页面复用并检查。
 
-文字默认使用项目规范的固定字号。需要有限缩字时显式声明最小字号，工具先按可用空间换行，再按策略处理溢出；无法完整显示时明确报错。浏览器预览可显示内容框、可见边界、辅助线和基线，并报告几何与组件约定问题。`project_preview_layout_variants` 批量检查文案、画布和安全区组合，本机检查资料保存到 `.smartui/`，正式页面构建仍保存在 `smart-ui/`。
+文字默认使用项目规范的固定字号。需要有限缩字时显式声明最小字号，工具先按可用空间换行，再按策略处理溢出；无法完整显示时明确报错。浏览器预览可显示内容框、可见边界、辅助线和基线，并报告几何与组件约定问题。`project_preview_layout_variants` 批量检查文案、画布和安全区组合，本机检查资料保存到 `.smartui/`，正式页面构建保存在项目资料目录的 `previews/`。
 
 `project_page_dependencies` 查询组件、图像、文字样式的页面使用位置及过期原因，`project_rebuild_pages` 集中重建指定页面。源组件变化而导出未更新时，先重新制作和导出再重建。接口见[项目工具说明](docs/project-tools.md)。
 
-使用 `unity-integration` 定义并登记控件，在页面布局中以 `control` 节点引用控件。浏览器展开控件图文来预览，Unity Editor 包在工程中生成基础 Prefab、Prefab Variant 和包含嵌套实例的页面 Prefab。构建入口由项目中的 Unity Pipeline 注册，通过 Unity CLI 调用。实际工程的保存重开、覆盖语义、对象引用及运行效果分别验收。接口、适配范围和工程接入条件见 [Unity 接入工具](docs/unity-tools.md)。
+使用 `unity-integration` 定义并登记控件，在页面布局中以 `control` 节点引用控件。浏览器展开控件图文来预览，Unity CLI 的 `run_script` 在目标 Editor 中运行插件随附的构建脚本，生成基础 Prefab、Prefab Variant 和包含嵌套实例的页面 Prefab。实际工程的保存重开、覆盖语义、对象引用及运行效果分别验收。接口、适配范围和工程接入条件见 [Unity 接入工具](docs/unity-tools.md)。
 
 工具仓库只保存通用代码、Skill、文档、测试及示例。具体项目的参考、程序、源文件和当前制作资料留在项目中，`projects/` 保持忽略。
 

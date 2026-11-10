@@ -1,7 +1,0 @@
-{
-  "name": "SmartUI.UGUI.Editor.Tests",
-  "rootNamespace": "SmartUI.UGUI.Editor.Tests",
-  "references": ["SmartUI.UGUI.Editor", "UnityEngine.UI", "Unity.TextMeshPro"],
-  "includePlatforms": ["Editor"],
-  "optionalUnityReferences": ["TestAssemblies"]
-}

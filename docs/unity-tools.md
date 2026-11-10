@@ -1,10 +1,10 @@
 # Unity 控件制作、预制体登记和页面构建
 
-SmartUI 保存公开控件目录、控件制作定义和预制体登记。正式页面可以用 `control` 节点引用控件，浏览器根据制作定义展开图文，Unity Editor 包按页面实例和排列结构生成嵌套预制体。使用已有预制体时，可核对并登记实际文件。接入清单也可单独记录手工指定的静态实例，供项目核对依赖。
+SmartUI 保存公开控件目录、控件制作定义和预制体登记。正式页面可以用 `control` 节点引用控件，浏览器根据制作定义展开图文，Unity CLI 在目标 Editor 中运行构建脚本，按页面实例和排列结构生成嵌套预制体。使用已有预制体时，可核对并登记实际文件。接入清单也可单独记录手工指定的静态实例，供项目核对依赖。
 
 ## 工具与持久化
 
-在目标工程根目录中建立 SmartUI 项目。先读 `project_context` 确认来源项目、组件、图像和文字角色。生成型控件可以先定义再构建，复用工程内已有控件时需要提供真实预制体。除协议查询外，`project_root` 均为该工程根目录的绝对路径。下面的调用对象省略这一公共参数。
+在当前 Unity 工程中建立 SmartUI 项目。创建时用可选的 `data_root` 指定 `Assets` 下的持久资料目录，默认 `Assets/SmartUI`。下文路径中的 `<data_root>` 代表实际目录。先读 `project_context` 确认来源项目、组件、图像和文字角色。生成型控件可以先定义再构建，复用工程内已有控件时需要提供真实预制体。除协议查询外，`project_root` 均为该工程根目录的绝对路径。下面的调用对象省略这一公共参数。
 
 | 工具 | 输入与用途 |
 | --- | --- |
@@ -14,30 +14,28 @@ SmartUI 保存公开控件目录、控件制作定义和预制体登记。正式
 | `project_register_unity_prefab` | 传入 `expected_revision`、`control_id`、`path`、`guid`、`slot_bindings`，核对并登记实际文件 |
 | `project_prepare_unity_handoff` | 传入 `expected_revision`、`handoff_id`、`request`，检查来源与实例并生成清单 |
 | `project_unity_build_context` | 读取构建配置、制作定义、已解析的控件和请求状态 |
-| `project_configure_unity_build` | 传入 `expected_revision`、`config`，设置输出目录和文字角色映射 |
+| `project_configure_unity_build` | 传入 `expected_revision`、`config`，设置文字角色到现有 TMP 字体资源及材质的映射 |
 | `project_define_unity_recipe` | 传入 `expected_revision`、`control_id`、`recipe`；同时修改公开接口或状态时，一并传完整 `definition` 和 `expected_registry_revision`，原子保存两份资料 |
 | `project_set_unity_bindings` | 传入 `expected_revision`、`page_id`、`bindings`，保存正式页面实例的业务槽位映射 |
 | `project_prepare_unity_build` | 传入 `expected_revision`、`control_ids`、`page_ids` 和 `operation`，从当前资料生成构建请求 |
 | `project_execute_unity_build` | 传入 `request_id`，通过目标 Editor 执行该请求并核对结果 |
 | `project_reconcile_unity_build` | 传入同一个 `request_id`，只核对已有执行结果和资源 |
 
-公开目录的版本来自 `project_unity_context`，对应 `smart-ui/unity/registry.json`。构建配置、制作定义与业务绑定共用 `project_unity_build_context` 的 `revision`，对应 `smart-ui/unity/construction.json`。两种记录首次写入时分别使用 `expected_revision: null`，之后使用各自的最新版本。构建请求同时固定制作资料的 `source_revision`、目录版本和构建资料版本。发生冲突时重新读取对应资料，核对差异后准备新请求。
+公开目录的版本来自 `project_unity_context`，对应 `<data_root>/unity/registry.json`。构建配置、制作定义与业务绑定共用 `project_unity_build_context` 的 `revision`，对应 `<data_root>/unity/construction.json`。两种记录首次写入时分别使用 `expected_revision: null`，之后使用各自的最新版本。构建请求同时固定制作资料的 `source_revision`、目录版本和构建资料版本。发生冲突时重新读取对应资料，核对差异后准备新请求。
 
 已存在制作定义时，如果修改状态图或公开槽位会同时影响目录和制作输入，通过 `project_define_unity_recipe` 一次提交 `recipe` 与完整 `definition`，并分别提供构建资料和公开目录的 revision。工具验证最终组合及已有页面后，一起保存目录、使用文档和制作定义；不能先把其中一份保存成不一致状态。单独修改文案或节点属性时只传 `recipe`。
 
-登记文件使用 schema 1。当前清单位于 `smart-ui/unity/handoffs/<handoff_id>.json`，同 ID 重新准备时保存当前结果。工具维护 `smart-ui/docs/unity-controls.md`，其中展示使用约定、预制体及使用位置。修改说明、接口或登记须通过工具；直接修改受管文档或清单会导致摘要校验失败。工程持久化资料随 Git 保存。
+目录登记和静态交付清单使用 schema 1。当前清单位于 `<data_root>/unity/handoffs/<handoff_id>.json`，同 ID 重新准备时保存当前结果。工具维护 `<data_root>/docs/unity-controls.md`，其中展示使用约定、预制体及使用位置。修改说明、接口或登记须通过工具；直接修改受管文档或清单会导致摘要校验失败。工程持久化资料随 Git 保存。
 
-## 在工程中接入 Editor 包
+## 检查目标工程的 Unity CLI 能力
 
-在目标 Unity 6 工程的当前目录与分支接入 `com.smartui.ugui`。源码和插件分发均包含 `unity/com.smartui.ugui`。可将该包作为工程内的嵌入包保存到 `Packages/com.smartui.ugui`，或按项目约定使用指向相同包目录的版本化引用。包使用 Editor 专用程序集，依赖 uGUI 2.0 和 Newtonsoft JSON。工程须启用 Force Text 资源序列化，运行构建时 Editor 须处于空闲的编辑模式。
-
-CLI 接入需要 `com.unity.pipeline` 及支持分组自定义命令的 Unity CLI。SmartUI 的命令程序集以 Pipeline `0.10.0-exp.1` 为起点。按项目的包依赖流程引入 Pipeline，等待当前 Editor 完成脚本编译并运行 Pipeline 服务。用以下命令核对所选工程的命令目录。
+在目标 Unity 6 工程的当前目录和分支操作。工程须启用 Force Text 资源序列化，已具备 Unity Pipeline 的 `run_script` 能力及 uGUI、TextMeshPro 和 Newtonsoft JSON。运行构建时 Editor 须处于空闲的编辑模式。用以下命令核对所选工程的命令目录。
 
 ```powershell
 unity --format json --no-banner --non-interactive command --project-path "<Unity 工程绝对路径>" --detail full
 ```
 
-目标 Editor 应公开 `smartui execute`，其中 `request_path` 是必填字符串参数。SmartUI 通过同一个绝对工程路径发现并调用该命令。使用 SmartUI 工具准备和执行构建，工具会保存本次请求、校验目标身份和结果文件，并处理控件登记。
+SmartUI 通过同一个绝对工程路径发现并调用官方 `run_script`。Unity Pipeline 接收插件随附的固定 C# 脚本，在内存中编译，并把请求路径作为 JSON 参数交给固定静态入口。构建使用 Unity 原生 API 导入资源、保存预制体及核对受管属性。构建脚本位于工程 `Assets` 之外，工程依赖由项目维护。必需的命令、程序集或字体材质缺失时，工具明确报错。
 
 ## 定义控件
 
@@ -137,7 +135,6 @@ unity --format json --no-banner --non-interactive command --project-path "<Unity
 
 ```json
 {
-  "output_root": "Assets/SmartUI",
   "fonts": {
     "button-title": {
       "font_asset_path": "Assets/UI/Fonts/Button SDF.asset",
@@ -149,7 +146,7 @@ unity --format json --no-banner --non-interactive command --project-path "<Unity
 }
 ```
 
-生成的控件、页面和 Sprite 分别位于输出目录下的 `Controls/`、`Pages/` 和 `Sprites/`。待生成的控件先保存公开目录和制作定义，再准备控件构建。引用已有 Prefab 时，先保存 `external` 预览定义并登记真实资源。页面依赖的生成型控件须已登记且与当前制作输入一致。修改控件后，先应用控件构建，再准备依赖它的页面。
+生成的控件、页面和 Sprite 分别位于 `<data_root>` 下的 `Controls/`、`Pages/` 和 `Sprites/`。待生成的控件先保存公开目录和制作定义，再准备控件构建。引用已有 Prefab 时，先保存 `external` 预览定义并登记真实资源。页面依赖的生成型控件须已登记且与当前制作输入一致。修改控件后，先应用控件构建，再准备依赖它的页面。
 
 在 `project_set_unity_bindings` 中按实例 ID 和公开槽位 ID 提供业务键。例如，为 `start` 实例的 `click` 槽位保存 `{"start":{"click":"menu.start"}}`。准备页面构建时核对必需绑定。业务键用于项目接入记录，事件处理和运行时绑定由项目代码实现。
 
@@ -161,7 +158,7 @@ unity --format json --no-banner --non-interactive command --project-path "<Unity
 | `apply` | 构建和保存需要写入的对象，重新加载并核对真实资源 |
 | `verify` | 复验当前资源和引用关系 |
 
-请求、状态与结果保存在 `smart-ui/unity/operations/<request_id>/` 的 `request.json`、`operation.json` 和 `result.json`。Editor 为各目标保存成功基线及未完成写入记录，位置为 `smart-ui/unity/import-state/`。页面的直接摘要覆盖背景颜色、本页排列、显式参数和直接资源属性；继承的控件声明及资源内容变化进入依赖摘要，可触发复验。业务绑定保存在项目资料中。
+构建请求和结果使用 schema 2。请求包含相对工程根目录的 `data_root` 与 `project_file`，用于识别实际资料目录和项目索引。请求、状态与结果保存在 `<data_root>/unity/operations/<request_id>/` 的 `request.json`、`operation.json` 和 `result.json`。Editor 为各目标保存成功基线及未完成写入记录，位置为 `<data_root>/unity/import-state/`。页面的直接摘要覆盖背景颜色、本页排列、显式参数和直接资源属性；继承的控件声明及资源内容变化进入依赖摘要，可触发复验。业务绑定保存在项目资料中。
 
 结果按实例 ID 和槽位 ID 记录嵌套槽位。每条记录包含当前预制体中实例排列容器的 `scope_file_id`，以及槽位来源预制体的 `control_id`、`guid` 和 `file_id`。两个同源实例可共享来源身份，各自在当前预制体中使用不同的实例容器。Editor 保存重开后核对各实例范围内的目标对象，SmartUI 再核对本地容器和已登记的来源。
 
@@ -181,7 +178,7 @@ unity --format json --no-banner --non-interactive command --project-path "<Unity
 `project_check_localization` 比对项目适配器按语言提供的源表与生成值，按本次使用的 Key 报告缺项、
 值差异和适配器标记的占位。
 
-浏览器预览、合成文件测试和真实 Editor 保存重开分别验证。真实工程还需核对重复嵌套实例、持久对象引用、覆盖与恢复继承，以及实际显示和点击。
+已通过真实 Unity CLI 的 `run_script` 验证外部脚本可以编译。实际项目的资源导入、保存重开、重复嵌套实例、持久对象引用、覆盖与恢复继承，以及显示和点击待工程验收。
 
 ## 登记实际预制体
 

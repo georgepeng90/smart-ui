@@ -12,7 +12,7 @@ import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
-from .layout import DEFAULT_PATHS, SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
+from .layout import SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
 
 
 class ProjectError(RuntimeError):
@@ -69,19 +69,20 @@ def _validate_ui_settings(settings):
 
 
 class ProjectStore:
-    def create(self, project_root: str, project_id: str, name: str) -> dict:
+    def create(self, project_root: str, project_id: str, name: str, data_root: str | None = None) -> dict:
         root = self._root(project_root)
         _identifier(project_id, "project_id")
         _text(name, "name")
-        try:
-            layout = ProjectLayout(root)
-            for key in layout.paths:
-                layout.directory(key)
-        except ValueError as error:
-            raise ProjectError(str(error)) from error
         root.mkdir(parents=True, exist_ok=True)
         with self._lock(root):
-            for path in (layout.project_file, root / "smart-ui/typography.json", *layout.documents.values()):
+            try:
+                layout = ProjectLayout(root, data_root=data_root)
+                for key in layout.paths:
+                    layout.directory(key)
+                managed = (layout.project_file, layout.persistent("typography.json"), *layout.documents.values())
+            except (OSError, ValueError) as error:
+                raise ProjectError(str(error)) from error
+            for path in managed:
                 if path.exists():
                     raise ProjectError(f"创建项目不能覆盖已有文件：{path}")
             state = {
@@ -145,8 +146,9 @@ class ProjectStore:
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
             self._check_id_collision(state["programs"], program_id, "program_id")
-            relative = f"smart-ui/programs/{program_id}.py"
-            path = self._program_path(root, relative, state["paths"])
+            layout = ProjectLayout(root, state["paths"])
+            relative = f"{layout.paths['programs']}/{program_id}.py"
+            path = self._program_path(layout, relative)
             if program_id not in state["programs"] and path.exists():
                 raise ProjectError(f"未登记的程序文件已存在，不能覆盖：{path}")
             payload = source.encode("utf-8")
@@ -163,7 +165,8 @@ class ProjectStore:
                 raise ProjectError(f"程序不存在：{program_id}")
             program = deepcopy(state["programs"][program_id])
             try:
-                payload = self._program_path(root, program["source_path"], state["paths"]).read_bytes()
+                layout = ProjectLayout(root, state["paths"])
+                payload = self._program_path(layout, program["source_path"]).read_bytes()
                 if _sha(payload) != program["sha256"]:
                     raise ProjectError(f"程序源码已被手动修改，摘要不一致：{program['source_path']}")
                 program["source"] = payload.decode("utf-8")
@@ -214,7 +217,7 @@ class ProjectStore:
                         if node["kind"] == "text" and node["text_style_id"] in removed:
                             raise ProjectError(f"不能移除文字样式 {node['text_style_id']}："
                                                f"Unity 控件 {control_id} 的节点 {node['id']} 仍在引用")
-            if removed and ProjectLayout(root).resolve(REGISTRY).exists():
+            if removed and ProjectLayout(root, state["paths"]).persistent(REGISTRY).exists():
                 _, _, registry, _ = UnityStore(self)._read(root)
                 for control_id, record in sorted(registry["controls"].items()):
                     for style_id in record["definition"]["text_style_ids"]:
@@ -310,7 +313,8 @@ class ProjectStore:
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
             component = state["components"][component_id]
-            document = ProjectLayout(root).directory("sources") / (component_id + ".pcraft")
+            layout = ProjectLayout(root, state["paths"])
+            document = layout.persistent(f"sources/{component_id}.pcraft")
             if Path(run["document"]) != document:
                 raise ProjectError("运行源文件路径与组件路径不同")
             latest = component["latest_run"]
@@ -325,9 +329,9 @@ class ProjectStore:
             self._record_run(state, component_id, run, document_artifact=candidate)
             current = component["latest_run"]
             destinations = {"document": document,
-                "preview": root / f"smart-ui/previews/components/{component_id}.png",
-                "plan_path": root / f"smart-ui/components/{component_id}/plan.json",
-                "style_snapshot_path": root / f"smart-ui/components/{component_id}/inputs.json"}
+                "preview": layout.persistent(f"previews/components/{component_id}.png"),
+                "plan_path": layout.persistent(f"components/{component_id}/plan.json"),
+                "style_snapshot_path": layout.persistent(f"components/{component_id}/inputs.json")}
             artifacts = {}
             for field, destination in destinations.items():
                 source = candidate if field == "document" else Path(run[field])
@@ -374,7 +378,7 @@ class ProjectStore:
                                        reference_region=reference_region,
                                        reference_coordinate_size=reference_coordinate_size,
                                        artifact_region=artifact_region, reference_scale=reference_scale,
-                                       artifact_scale=artifact_scale, commit=commit)
+                                       artifact_scale=artifact_scale, paths=state["paths"], commit=commit)
             return self._comparison_result(updated, comparison_id)
 
     def create_visual_check(self, project_root: str, expected_revision: str, check_id: str, items: list[dict],
@@ -410,7 +414,7 @@ class ProjectStore:
                 return self._write(root, state)
 
             updated = build_visual_check(str(root), check_id, resolved, background=background,
-                                         columns=columns, grayscale=grayscale, commit=commit)
+                                         columns=columns, grayscale=grayscale, paths=state["paths"], commit=commit)
             return self._visual_check_result(updated, check_id)
 
     def get_visual_check(self, project_root: str, check_id: str) -> dict:
@@ -519,13 +523,13 @@ class ProjectStore:
         from .visual_checks import RUN_FIELDS
 
         root = self._root(project_root)
-        layout = ProjectLayout(root)
         if not isinstance(nodes, list) or not 1 <= len(nodes) <= 64:
             raise ProjectError("nodes 必须包含 1 到 64 项")
         _identifier(composition_id, "composition_id")
         with self._lock(root):
             state, revision = self._read(root)
             self._revision(root, expected_revision, revision)
+            layout = ProjectLayout(root, state["paths"])
             self._check_id_collision(state["compositions"], composition_id, "composition_id")
             resolved = []
             for index, node in enumerate(nodes):
@@ -573,7 +577,8 @@ class ProjectStore:
                 state.setdefault("compositions", {})[composition_id] = record
                 return self._write(root, state)
 
-            updated = build_composition(str(root), composition_id, width, height, background, resolved, commit=commit)
+            updated = build_composition(str(root), composition_id, width, height, background, resolved,
+                                        paths=state["paths"], commit=commit)
             return self._composition_result(updated, composition_id)
 
     def save_layout(self, project_root, expected_revision, layout_id, name, width, height, background, nodes,
@@ -891,8 +896,8 @@ class ProjectStore:
             state = json.loads(layout.project_file.read_bytes())
             if not isinstance(state, dict) or state.get("schema_version") != 5:
                 raise ProjectError(f"项目状态必须是 schema_version=5 的对象：{layout.project_file}；已有项目请先显式转换文字规范与页面样式引用")
-            if state["paths"] != DEFAULT_PATHS:
-                raise ProjectError("项目目录必须使用 smart-ui/ 固定结构")
+            if state["paths"] != layout.paths:
+                raise ProjectError("项目目录必须使用制作资料的固定结构")
             if "ui_settings" in state:
                 _validate_ui_settings(state["ui_settings"])
             for collection, directory in self._collections().items():
@@ -900,7 +905,7 @@ class ProjectStore:
                 for key, relative in state[collection].items():
                     _identifier(key, collection)
                     self._check_id_collision(records, key, collection)
-                    expected = f"smart-ui/{directory}/{key}.json"
+                    expected = layout.persistent_relative(f"{directory}/{key}.json")
                     if relative != expected:
                         raise ProjectError(f"{collection}.{key} 路径必须为 {expected}")
                     records[key] = json.loads(layout.resolve(relative).read_bytes())
@@ -910,13 +915,15 @@ class ProjectStore:
                 if (not isinstance(public_ids, list) or any(not isinstance(key, str) for key in public_ids)
                         or len(public_ids) != len(set(public_ids)) or set(public_ids) - state["images"].keys()):
                     raise ProjectError("公共图素必须使用无重复的已登记资产 ID")
+            typography_path = layout.persistent("typography.json")
             if state["typography"] is not None:
-                if state["typography"] != "smart-ui/typography.json":
-                    raise ProjectError("typography 路径必须为 smart-ui/typography.json")
-                state["typography"] = json.loads(layout.resolve(state["typography"]).read_bytes())
+                expected = typography_path.relative_to(root).as_posix()
+                if state["typography"] != expected:
+                    raise ProjectError(f"typography 路径必须为 {expected}")
+                state["typography"] = json.loads(typography_path.read_bytes())
             expected_typography_sha = spec_sha256(state["typography"]) if state["typography"] is not None else None
             if state["typography_sha256"] != expected_typography_sha:
-                raise ProjectError("文字规范摘要不一致：smart-ui/typography.json；请通过文字规范工具更新")
+                raise ProjectError(f"文字规范摘要不一致：{typography_path}；请通过文字规范工具更新")
             for name, digest in state["document_hashes"].items():
                 if name not in layout.documents or _sha(layout.documents[name].read_bytes()) != digest:
                     raise ProjectError(f"受管文档已被修改或缺失：{name}")
@@ -924,7 +931,7 @@ class ProjectStore:
                 raise ProjectError("项目缺少受管文档摘要")
             self._references(state, state["style"]["reference_ids"], "style.reference_ids")
             self._rule_references(state, state["style"]["rules"])
-            self._validate_programs(root, state["programs"], state["paths"])
+            self._validate_programs(layout, state["programs"])
             from .component_usage import validate_usage
             for component_id, component in state["components"].items():
                 self._component_program(state, component["spec"])
@@ -961,11 +968,11 @@ class ProjectStore:
         from .unity_builds import read_construction
         from .unity_recipes import resolve_recipes
 
-        construction, _ = read_construction(layout.root)
+        construction, _ = read_construction(layout.root, layout=layout)
         recipes = construction["recipes"]
         if not recipes:
             return {}
-        registry = json.loads(layout.resolve(REGISTRY).read_bytes())
+        registry = json.loads(layout.persistent(REGISTRY).read_bytes())
         _fields(registry, {"schema_version", "controls", "handoffs", "document_sha256"}, REGISTRY)
         if type(registry["schema_version"]) is not int or registry["schema_version"] != 1:
             raise ProjectError(f"{REGISTRY} 只接受 schema_version=1")
@@ -991,25 +998,23 @@ class ProjectStore:
             raise ProjectError(f"项目 revision 冲突，请重新读取上下文：{root}")
 
     @staticmethod
-    def _program_path(root, relative, paths):
+    def _program_path(layout, relative):
         try:
-            layout = ProjectLayout(root, paths)
-            path = Path(relative)
+            path = layout.resolve(relative)
             directory = layout.directory("programs")
-            if path.is_absolute() or ".." in path.parts or not (root / path).is_relative_to(directory):
+            if Path(relative).is_absolute() or not path.is_relative_to(directory):
                 raise ProjectError(f"程序源码路径必须位于项目 programs 目录：{relative}")
-            layout._check_managed_path(root / path)
-            return (root / path).resolve()
+            return path
         except ValueError as error:
             raise ProjectError(str(error)) from error
 
-    def _validate_programs(self, root, programs, paths):
+    def _validate_programs(self, layout, programs):
         for key, program in programs.items():
             _identifier(key, "program_id")
-            expected = f"smart-ui/programs/{key}.py"
+            expected = f"{layout.paths['programs']}/{key}.py"
             if program.get("id") != key or program.get("source_path") != expected:
                 raise ProjectError(f"程序路径或标识不一致：{key}")
-            if _sha(self._program_path(root, expected, paths).read_bytes()) != program["sha256"]:
+            if _sha(self._program_path(layout, expected).read_bytes()) != program["sha256"]:
                 raise ProjectError(f"程序源码已被手动修改，摘要不一致：{expected}")
 
     @staticmethod
@@ -1158,7 +1163,7 @@ class ProjectStore:
                 raise ProjectError(f"{field} {identifier} 与已有标识 {existing} 仅大小写不同")
 
     def _write(self, root, state, artifacts=None):
-        layout = ProjectLayout(root)
+        layout = ProjectLayout(root, state["paths"])
         persistent = {key: value for key, value in state.items() if key != "unity_controls"}
         try:
             _json(persistent)
@@ -1171,11 +1176,10 @@ class ProjectStore:
         index = deepcopy(stored)
         files = dict(artifacts or {})
         if stored["typography"] is not None:
-            relative = "smart-ui/typography.json"
-            index["typography"] = relative
-            files[root / relative] = (_json(stored["typography"]) + "\n").encode("utf-8")
-        attributes = root / "smart-ui/.gitattributes"
-        layout._check_managed_path(attributes)
+            path = layout.persistent("typography.json")
+            index["typography"] = path.relative_to(root).as_posix()
+            files[path] = (_json(stored["typography"]) + "\n").encode("utf-8")
+        attributes = layout.persistent(".gitattributes")
         existing = attributes.read_bytes() if attributes.is_file() else b""
         if existing.rstrip().splitlines()[-1:] != [b"* -text"]:
             separator = b"" if not existing or existing.endswith(b"\n") else b"\n"
@@ -1184,9 +1188,9 @@ class ProjectStore:
         for collection, directory in self._collections().items():
             index[collection] = {}
             for key, record in stored.get(collection, {}).items():
-                relative = f"smart-ui/{directory}/{key}.json"
-                index[collection][key] = relative
-                files[root / relative] = (_json(record) + "\n").encode("utf-8")
+                path = layout.persistent(f"{directory}/{key}.json")
+                index[collection][key] = path.relative_to(root).as_posix()
+                files[path] = (_json(record) + "\n").encode("utf-8")
             stored.setdefault(collection, {})
         for name, payload in documents.items():
             files[layout.documents[name]] = payload
@@ -1205,7 +1209,7 @@ class ProjectStore:
     def _publish_batch(layout, files):
         """先校验并备齐整批文件，发布失败后恢复已替换的文件。"""
         root = layout.root
-        persistent = root / "smart-ui"
+        persistent = root / layout.data_root
         migration_backups = root / SCHEMA_MIGRATION_BACKUPS
         temporary = root / ".smartui/temp"
         pending = {}
@@ -1213,7 +1217,7 @@ class ProjectStore:
             for destination, content in files.items():
                 layout._check_managed_path(destination)
                 if not any(directory in destination.parents for directory in (persistent, migration_backups)):
-                    raise ProjectError(f"项目发布路径必须位于 smart-ui/ 或 {SCHEMA_MIGRATION_BACKUPS}/：{destination}")
+                    raise ProjectError(f"项目发布路径必须位于 {layout.data_root}/ 或 {SCHEMA_MIGRATION_BACKUPS}/：{destination}")
                 if destination.exists() and not destination.is_file():
                     raise ProjectError(f"项目发布路径已存在但不是文件：{destination}")
                 for parent in destination.parents:

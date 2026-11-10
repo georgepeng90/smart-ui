@@ -15,66 +15,122 @@ namespace SmartUI.UGUI.Editor.Tests
 {
     public sealed class PrefabReuseTests
     {
-        string id, output, projectId, fixtureDirectory;
-        bool createdProjectMarker;
-        readonly List<string> operationDirectories = new();
+        string id, dataRoot, output, fixtureDirectory;
 
-        [SetUp]
-        public void SetUp()
+        public static object RunAll()
+        {
+            var tests = new PrefabReuseTests();
+            var cases = new Action[]
+            {
+                tests.OwnedNodesAndNestedInstanceRootsUseDifferentNames,
+                tests.RejectsInvalidProjectFileOrIdentity,
+                tests.RejectsReceiptWithoutSchemaVersion,
+                tests.ImportsExistingOutputFoldersWithoutRenaming,
+                tests.ReusesSavedPrefabObjectsAndRestoresOnlyTheLocalOverride,
+                tests.ReportsManagedPrefabChangesBeforeApplyingAnyTarget,
+                tests.RejectsReadOnlySpriteMetaBeforeAnImporterSettingsUpdate,
+            };
+            foreach (var test in cases)
+            {
+                try
+                {
+                    tests.SetUp();
+                    test();
+                }
+                finally
+                {
+                    tests.TearDown();
+                }
+            }
+            return new { passed = cases.Select(test => test.Method.Name).ToArray() };
+        }
+
+        void SetUp()
         {
             id = "fixture." + Guid.NewGuid().ToString("N");
-            output = "Assets/SmartUI_" + id;
             Assert.That(EditorSettings.serializationMode, Is.EqualTo(SerializationMode.ForceText));
-            var projectMarker = BuildFiles.RelativePath("smart-ui/project.json");
-            if (!File.Exists(projectMarker))
-            {
-                BuildFiles.Write(projectMarker, new { project_id = id });
-                createdProjectMarker = true;
-            }
-            projectId = (string)BuildFiles.Read<JObject>(projectMarker)["project_id"];
-            fixtureDirectory = "smart-ui/unity/operations/" + Guid.NewGuid().ToString("N");
+            var folderName = "SmartUI_" + id;
+            dataRoot = "Assets/" + folderName;
+            Assert.That(AssetDatabase.CreateFolder("Assets", folderName), Is.Not.Empty);
+            output = dataRoot + "/Generated";
+            BuildFiles.Write(BuildFiles.RelativePath(dataRoot + "/smartui.project.json"), new { project_id = id });
+            fixtureDirectory = dataRoot + "/Fixtures";
             Directory.CreateDirectory(BuildFiles.RelativePath(fixtureDirectory));
-            operationDirectories.Add(fixtureDirectory);
             WritePng("normal", Color.white);
             WritePng("alternate", Color.blue);
             WritePng("changed", Color.green);
         }
 
-        [TearDown]
-        public void TearDown()
+        void TearDown()
         {
-            if (output != null && AssetDatabase.IsValidFolder(output))
-                AssetDatabase.DeleteAsset(output);
-            foreach (var directory in operationDirectories)
-                Directory.Delete(BuildFiles.RelativePath(directory), true);
-            operationDirectories.Clear();
-            foreach (var kind in new[] { "base", "variant", "page", "sprites" })
-            {
-                var suffixes = kind == "sprites" ? new[] { "normal", "alternate", "changed" } : new[] { kind };
-                foreach (var suffix in suffixes)
-                {
-                    string path = BuildFiles.StatePath(kind, id + "." + suffix);
-                    File.Delete(path);
-                    File.Delete(path + ".pending");
-                }
-            }
-            if (createdProjectMarker)
-            {
-                File.Delete(BuildFiles.RelativePath("smart-ui/project.json"));
-                createdProjectMarker = false;
-            }
+            if (dataRoot != null && AssetDatabase.IsValidFolder(dataRoot))
+                Assert.That(AssetDatabase.DeleteAsset(dataRoot), Is.True);
+            dataRoot = null;
         }
 
-        [Test]
-        public void OwnedNodesAndNestedInstanceRootsUseDifferentNames()
+        void OwnedNodesAndNestedInstanceRootsUseDifferentNames()
         {
             Assert.That(PrefabGraph.NodeName("Instance_first"), Is.Not.EqualTo(PrefabGraph.InstanceName("first")));
             Assert.Throws<InvalidOperationException>(() => PrefabAssets.RequireAssetPath(
                 output + "/" + PrefabGraph.NodeName("first") + ".prefab", true));
         }
 
-        [Test]
-        public void ReusesSavedPrefabObjectsAndRestoresOnlyTheLocalOverride()
+        void RejectsInvalidProjectFileOrIdentity()
+        {
+            string requestId = Guid.NewGuid().ToString("N");
+            string directory = dataRoot + "/unity/operations/" + requestId;
+            string requestPath = BuildFiles.RelativePath(directory + "/request.json");
+            string resultPath = directory + "/result.json";
+            var request = new BuildRequest
+            {
+                SchemaVersion = PrefabBuild.SchemaVersion, RequestId = requestId, ProjectId = id,
+                DataRoot = dataRoot, ProjectFile = "Assets/other/smartui.project.json", ResultPath = resultPath
+            };
+            BuildFiles.Write(requestPath, request);
+            Assert.Throws<InvalidOperationException>(() => PrefabBuild.Execute(requestPath));
+            request.ProjectFile = dataRoot + "/smartui.project.json";
+            request.ProjectId = null;
+            BuildFiles.Write(requestPath, request, replace: true);
+            Assert.Throws<InvalidOperationException>(() => PrefabBuild.Execute(requestPath));
+            Assert.That(File.Exists(BuildFiles.RelativePath(resultPath)), Is.False);
+            Assert.Throws<InvalidOperationException>(() => BuildFiles.RequireOutputPath(dataRoot, dataRoot + "-other/image.png"));
+        }
+
+        void RejectsReceiptWithoutSchemaVersion()
+        {
+            string requestId = Guid.NewGuid().ToString("N");
+            string directory = dataRoot + "/unity/operations/" + requestId;
+            string requestPath = BuildFiles.RelativePath(directory + "/request.json");
+            string resultPath = directory + "/result.json";
+            BuildFiles.Write(requestPath, new BuildRequest
+            {
+                SchemaVersion = PrefabBuild.SchemaVersion, RequestId = requestId, ProjectId = id,
+                DataRoot = dataRoot, ProjectFile = dataRoot + "/smartui.project.json", ResultPath = resultPath
+            });
+            BuildFiles.Write(BuildFiles.RelativePath(resultPath), new
+            {
+                request_id = requestId, request_sha256 = PrefabAssets.FileHash(requestPath), status = "success"
+            });
+            Assert.Throws<InvalidOperationException>(() => PrefabBuild.Execute(requestPath));
+        }
+
+        void ImportsExistingOutputFoldersWithoutRenaming()
+        {
+            string nested = output + "/Nested";
+            Directory.CreateDirectory(BuildFiles.RelativePath(nested));
+            string physicalRoot = BuildFiles.RelativePath(dataRoot);
+            var existing = Directory.GetDirectories(physicalRoot, "*", SearchOption.AllDirectories);
+            Assert.That(AssetDatabase.IsValidFolder(output), Is.False);
+            Assert.That(AssetDatabase.IsValidFolder(nested), Is.False);
+
+            PrefabAssets.EnsureOutputDirectory(nested + "/control.prefab");
+
+            Assert.That(AssetDatabase.IsValidFolder(output), Is.True);
+            Assert.That(AssetDatabase.IsValidFolder(nested), Is.True);
+            Assert.That(Directory.GetDirectories(physicalRoot, "*", SearchOption.AllDirectories), Is.EquivalentTo(existing));
+        }
+
+        void ReusesSavedPrefabObjectsAndRestoresOnlyTheLocalOverride()
         {
             var plan = Run("plan", false, true);
             Assert.That(plan.Targets.Select(item => item.Status), Is.EqualTo(new[] { "create", "create", "create" }));
@@ -110,12 +166,12 @@ namespace SmartUI.UGUI.Editor.Tests
             AssertPage("normal", "changed", "alternate");
             AssertSceneReferences(scenePath);
 
-            string baseline = PrefabAssets.FileHash(BuildFiles.StatePath("page", id + ".page"));
+            string baseline = PrefabAssets.FileHash(BuildFiles.StatePath(dataRoot, "page", id + ".page"));
             var repeated = Run("apply", true, false);
             Assert.That(repeated.Targets.Select(item => item.Status), Is.All.EqualTo("unchanged"));
             Assert.That(repeated.Targets[2].Sha256, Is.EqualTo(reverted.Targets[2].Sha256));
             Assert.That(Run("verify", true, false).Targets.Select(item => item.Status), Is.All.EqualTo("verified"));
-            Assert.That(PrefabAssets.FileHash(BuildFiles.StatePath("page", id + ".page")), Is.EqualTo(baseline));
+            Assert.That(PrefabAssets.FileHash(BuildFiles.StatePath(dataRoot, "page", id + ".page")), Is.EqualTo(baseline));
 
             var spritePath = output + "/Sprites/normal.png";
             string spriteGuid = AssetDatabase.AssetPathToGUID(spritePath);
@@ -126,8 +182,7 @@ namespace SmartUI.UGUI.Editor.Tests
             Assert.That(replaced.Targets.Select(item => item.Sha256), Is.EqualTo(repeated.Targets.Select(item => item.Sha256)));
         }
 
-        [Test]
-        public void ReportsManagedPrefabChangesBeforeApplyingAnyTarget()
+        void ReportsManagedPrefabChangesBeforeApplyingAnyTarget()
         {
             var initial = Run("apply", false, true);
             var root = PrefabUtility.LoadPrefabContents(TargetPath("page"));
@@ -147,8 +202,7 @@ namespace SmartUI.UGUI.Editor.Tests
             Assert.That(BuildFiles.Snapshot(TargetPath("base")).Sha256, Is.EqualTo(initial.Targets[0].Sha256));
         }
 
-        [Test]
-        public void RejectsReadOnlySpriteMetaBeforeAnImporterSettingsUpdate()
+        void RejectsReadOnlySpriteMetaBeforeAnImporterSettingsUpdate()
         {
             Run("apply", false, true);
             string normalPath = output + "/Sprites/normal.png";
@@ -176,8 +230,7 @@ namespace SmartUI.UGUI.Editor.Tests
             bool changedBorder = false)
         {
             var requestId = Guid.NewGuid().ToString("N");
-            string directory = "smart-ui/unity/operations/" + requestId;
-            operationDirectories.Add(directory);
+            string directory = dataRoot + "/unity/operations/" + requestId;
             string requestPath = BuildFiles.RelativePath(directory + "/request.json");
             string resultPath = directory + "/result.json";
             var slots = new Dictionary<string, Slot>
@@ -218,7 +271,8 @@ namespace SmartUI.UGUI.Editor.Tests
             page.Nodes = new[] { Instance("first", "base", 0, true), Instance("second", "base", 30.1f, false), Instance("third", "variant", 60, pageOverride) };
             var request = new BuildRequest
             {
-                SchemaVersion = 1, ProjectId = projectId, RequestId = requestId, ResultPath = resultPath, Operation = operation,
+                SchemaVersion = PrefabBuild.SchemaVersion, ProjectId = id, RequestId = requestId, Operation = operation,
+                DataRoot = dataRoot, ProjectFile = dataRoot + "/smartui.project.json", ResultPath = resultPath,
                 Targets = new[] { main, variant, page }, Fonts = new(),
                 Controls = new Dictionary<string, Control> { [id + ".base"] = ControlMapping("base"), [id + ".variant"] = ControlMapping("variant") },
                 Assets = new[] { "normal", "alternate", "changed" }.ToDictionary(key => id + "." + key, key => ImageMapping(key))
@@ -232,8 +286,12 @@ namespace SmartUI.UGUI.Editor.Tests
                 };
             }
             BuildFiles.Write(requestPath, request);
-            Assert.That(PrefabBuild.Execute(requestPath), Is.EqualTo(success ? "success" : "failed"), File.ReadAllText(BuildFiles.RelativePath(resultPath)));
+            var receipt = JObject.FromObject(PrefabBuild.Execute(requestPath));
+            Assert.That((string)receipt["request_id"], Is.EqualTo(requestId));
+            Assert.That((string)receipt["result_path"], Is.EqualTo(resultPath));
+            Assert.That((string)receipt["status"], Is.EqualTo(success ? "success" : "failed"), File.ReadAllText(BuildFiles.RelativePath(resultPath)));
             var result = BuildFiles.Read<BuildResult>(BuildFiles.RelativePath(resultPath));
+            Assert.That(result.SchemaVersion, Is.EqualTo(PrefabBuild.SchemaVersion));
             Assert.That(result.RequestSha256, Is.EqualTo(PrefabAssets.FileHash(requestPath)));
             return result;
         }
@@ -246,7 +304,7 @@ namespace SmartUI.UGUI.Editor.Tests
             return new ExpectedTarget
             {
                 PrefabSha256 = actual.Sha256, MetaSha256 = actual.MetaSha256,
-                BaselineSha256 = PrefabAssets.FileHash(BuildFiles.StatePath(kind, id + "." + kind))
+                BaselineSha256 = PrefabAssets.FileHash(BuildFiles.StatePath(dataRoot, kind, id + "." + kind))
             };
         }
 

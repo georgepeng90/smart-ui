@@ -122,13 +122,14 @@ namespace SmartUI.UGUI.Editor
                     LoadSprite(asset);
                     continue;
                 }
-                if (!path.StartsWith("Assets/", StringComparison.Ordinal) || !path.EndsWith(".png", StringComparison.Ordinal) ||
+                if (!path.EndsWith(".png", StringComparison.Ordinal) ||
                     string.Equals(path, asset.Path, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException($"'{path}' is not a separate generated Sprite output path.");
+                BuildFiles.RequireOutputPath(request.DataRoot, path);
 
                 var files = BuildFiles.Snapshot(path);
                 BuildFiles.RequireSnapshot(path, files, asset.Expected);
-                var statePath = BuildFiles.StatePath("sprites", item.Key);
+                var statePath = BuildFiles.StatePath(request.DataRoot, "sprites", item.Key);
                 BuildFiles.RequireNoPending(statePath);
                 var state = BuildFiles.Read<SpriteState>(statePath);
                 if (state == null ? files.Sha256 != null || files.MetaSha256 != null
@@ -158,7 +159,7 @@ namespace SmartUI.UGUI.Editor
                 var asset = item.Value;
                 var path = asset.OutputPath;
                 var output = BuildFiles.RelativePath(path);
-                var statePath = BuildFiles.StatePath("sprites", item.Key);
+                var statePath = BuildFiles.StatePath(request.DataRoot, "sprites", item.Key);
                 var state = BuildFiles.Read<SpriteState>(statePath);
                 var importer = AssetImporter.GetAtPath(path) as TextureImporter;
                 bool needsSettings = SpriteSettingsDiffer(asset, importer);

@@ -174,7 +174,7 @@ def _draw_text(node, index, staging, overview, fonts):
 
 
 def build_composition(project_root: str, composition_id: str, width: int, height: int,
-                      background: str, nodes: list[dict], *, commit=None) -> dict:
+                      background: str, nodes: list[dict], *, paths=None, commit=None) -> dict:
     """按列表顺序叠加，发布原像素与字体快照及组合图；所有返回路径均为绝对路径。"""
     root = _absolute_path(_string(project_root, "project_root"), "project_root")
     if not root.is_dir():
@@ -190,9 +190,8 @@ def build_composition(project_root: str, composition_id: str, width: int, height
     entries = [_validate_node(node, index, (width, height)) for index, node in enumerate(nodes, 1)]
     if len({node["id"] for node in entries}) != len(entries):
         raise ValueError("nodes 的 id 必须唯一")
-    destination = root / "smart-ui" / "previews" / "compositions" / composition_id
-    layout = ProjectLayout(root)
-    layout._check_managed_path(destination)
+    layout = ProjectLayout(root, paths)
+    destination = layout.persistent(f"previews/compositions/{composition_id}")
     with TemporaryDirectory(dir=_temporary_directory(layout.root)) as temp:
         staging = Path(temp) / "current"
         staging.mkdir()

@@ -72,7 +72,9 @@ def _project_summary(context):
     for component in data["components"].values():
         if component["latest_run"]:
             component["latest_run"].pop("inspection", None)
-    return {"project_root": context["project_root"], "revision": context["revision"], **data}
+    from .layout import ProjectLayout
+    return {"project_root": context["project_root"], "data_root": ProjectLayout(context["project_root"]).data_root,
+            "revision": context["revision"], **data}
 
 
 def _document_path(document: str) -> str:
@@ -157,7 +159,10 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         """在独立会话中打开 .pcraft 并返回原尺寸 PNG，不修改源文件。"""
         path = Path(_document_path(document))
         def render():
-            project = next((parent.parent for parent in path.parents if parent.name == "smart-ui"), path.parent)
+            project = next((parent for parent in path.parents
+                            if (parent / "ProjectSettings/ProjectVersion.txt").is_file()), None)
+            if project is None:
+                project = next((parent.parent for parent in path.parents if parent.name == "smart-ui"), path.parent)
             temporary_root = project / ".smartui/temp"
             temporary_root.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=temporary_root) as temporary:
@@ -173,9 +178,9 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         return [json.dumps(info, ensure_ascii=False), Image(data=payload, format="png")]
 
     @server.tool()
-    async def project_create(project_root: str, project_id: str, name: str) -> Any:
-        """在工程 smart-ui/ 创建当前项目状态及受管文档，.smartui/ 仅放可删除的本机数据。"""
-        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name))
+    async def project_create(project_root: str, project_id: str, name: str, data_root: str | None = None) -> Any:
+        """创建项目；Unity 持久数据默认放 Assets/SmartUI，可用 data_root 指定 Assets 子目录。"""
+        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name, data_root=data_root))
 
     @server.tool()
     async def project_context(project_root: str) -> Any:
@@ -331,7 +336,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_export_assets(project_root: str, expected_revision: str, component_id: StrictStr,
                                     exports: list[dict[str, Any]]) -> Any:
-        """从当前组件成功产物导出正式 PNG 和几何清单，输出必须位于 smart-ui/exports/。"""
+        """从当前组件成功产物导出正式 PNG 和几何清单，输出必须位于项目数据根的 exports/ 下。"""
         return await asyncio.to_thread(projects.export_assets, project_root, expected_revision, component_id, exports)
 
     @server.tool()

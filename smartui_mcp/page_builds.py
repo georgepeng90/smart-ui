@@ -45,8 +45,7 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
         if not annotate:
             raise ValueError("annotation_device 需要启用 annotate")
         resolved["annotation_device"] = validate_device(annotation_device, resolved)
-    destination = root / "smart-ui" / "previews" / "pages" / layout_id
-    layout._check_managed_path(destination)
+    destination = layout.persistent(f"previews/pages/{layout_id}")
     with TemporaryDirectory(dir=_temporary_directory(layout.root)) as temporary:
         staging = Path(temporary) / "current"
         staging.mkdir()

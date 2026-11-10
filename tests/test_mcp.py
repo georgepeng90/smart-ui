@@ -138,6 +138,9 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             project_root = str(root / "game")
+            (Path(project_root) / "Assets").mkdir(parents=True)
+            (Path(project_root) / "ProjectSettings").mkdir()
+            (Path(project_root) / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: 6000.3.20f1\n")
             parameters = StdioServerParameters(
                 command=sys.executable, args=["-m", "smartui_mcp"],
                 cwd=str(Path(__file__).resolve().parents[1]),
@@ -157,13 +160,14 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     prepare_schema = tools["project_prepare_unity_build"].inputSchema
                     self.assertEqual(prepare_schema["properties"]["operation"]["enum"], ["plan", "apply", "verify"])
                     self.assertEqual(prepare_schema["properties"]["operation"]["default"], "plan")
-                    project = await call("project_create", project_id="fixture", name="控件构建测试")
+                    project = await call("project_create", project_id="fixture", name="控件构建测试", data_root="Assets/UI/Tools")
+                    self.assertEqual(project["data_root"], "Assets/UI/Tools")
                     initial = await call("project_unity_build_context")
                     self.assertIsNone(initial["revision"])
                     self.assertEqual(initial["source_revision"], project["revision"])
                     self.assertEqual(initial["operations"], [])
                     configured = await call("project_configure_unity_build", expected_revision=None,
-                                            config={"output_root": "Assets/SmartUI", "fonts": {}})
+                                            config={"fonts": {}})
                     image = root / "panel.png"
                     Image.new("RGBA", (32, 32), (24, 100, 175, 255)).save(image)
                     await call("project_register_image", expected_revision=project["revision"], asset_id="background",
@@ -200,7 +204,9 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(prepared["status"], "prepared")
                     self.assertEqual(prepared["unity_execution"], "not_performed")
                     self.assertEqual(json.loads(Path(prepared["request_path"]).read_bytes()), prepared["request"])
-                    self.assertEqual(prepared["request"]["targets"][0]["path"], "Assets/SmartUI/Controls/panel.prefab")
+                    self.assertEqual(prepared["request"]["targets"][0]["path"], "Assets/UI/Tools/Controls/panel.prefab")
+                    self.assertEqual(prepared["request"]["schema_version"], 2)
+                    self.assertEqual(prepared["request"]["project_file"], "Assets/UI/Tools/smartui.project.json")
                     current = await call("project_unity_build_context")
                     self.assertEqual(current["source_revision"], page["revision"])
                     self.assertEqual(current["construction"]["bindings"]["home"], bindings)
@@ -213,7 +219,8 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                         failure = await session.call_tool(tool, {"project_root": project_root, "request_id": request_id})
                         self.assertTrue(failure.isError)
                         self.assertIn(message, failure.content[0].text)
-                    self.assertFalse((Path(project_root) / "Assets").exists())
+                    self.assertFalse((Path(project_root) / "Assets/UI/Tools/Controls").exists())
+                    self.assertFalse((Path(project_root) / "smart-ui").exists())
 
     async def test_visual_check_tools_require_strict_options(self):
         server = create_server(FakeClient(Path("unused.png")))

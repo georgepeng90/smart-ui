@@ -2,21 +2,42 @@
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 from PIL import Image
 import pytest
 
-from smartui_mcp.projects import ProjectError, _sha
+from smartui_mcp.projects import ProjectError, ProjectStore, _sha
+from smartui_mcp.layout import ProjectLayout
 from smartui_mcp.unity import DOCUMENT, REGISTRY, UnityStore
 from smartui_mcp.unity_builds import CONSTRUCTION, UnityBuildStore
 from smartui_mcp.unity_cli import UnityCliError
 from test_compositions import text_node
 from test_control_pages import control
-from test_page_layouts import exported_project, image_node, label, project_font, save, typography_project, typography_spec
-from test_review_workflow import project
+from test_page_layouts import image_node, label, project_font, save, typography_project, typography_spec
+from test_review_workflow import project as drawing_project
+from test_export_workflow import export_item
 from test_unity import BUTTON_GUID, write_prefab
 from test_unity_recipes import definition, slot
+
+
+@pytest.fixture
+def project(tmp_path):
+    root = tmp_path / "对照项目"
+    (root / "Assets").mkdir(parents=True)
+    (root / "ProjectSettings").mkdir()
+    (root / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: 6000.3.20f1\n", encoding="utf-8")
+    return drawing_project.__wrapped__(tmp_path)
+
+
+@pytest.fixture
+def exported_project(project):
+    store, context = project
+    root = context["project_root"]
+    item = export_item() | {"output_path": ProjectLayout(root).persistent_relative("exports/ui/button.png")}
+    store.export_assets(root, context["revision"], "sample", [item])
+    return store, store.context(root)
 
 
 def define_image(builder, root, control_id, *, event=False, parameter=False):
@@ -64,7 +85,7 @@ def builder_project(exported_project):
     root = context["project_root"]
     cli = FakeCli()
     builder = UnityBuildStore(UnityStore(store), cli)
-    builder.configure(root, None, {"output_root": "Assets/SmartUI", "fonts": {}})
+    builder.configure(root, None, {"fonts": {}})
     return root, store, builder, cli
 
 
@@ -75,7 +96,7 @@ def prepare(builder, root, control_ids, page_ids=(), operation="apply"):
 def prepared_result(request_path, statuses, *, overall="success", write_files=True):
     request_bytes = request_path.read_bytes()
     request = json.loads(request_bytes)
-    root = request_path.parents[4]
+    root = request_path.parents[len(Path(request["data_root"]).parts) + 3]
     targets = []
     for target, status in zip(request["targets"], statuses, strict=True):
         item = {key: target[key] for key in ("kind", "id", "path")}
@@ -85,7 +106,7 @@ def prepared_result(request_path, statuses, *, overall="success", write_files=Tr
             if write_files:
                 output.parent.mkdir(parents=True, exist_ok=True)
                 write_prefab(root, target["path"], BUTTON_GUID)
-                baseline = root / "smart-ui/unity/import-state" / target["kind"] / (target["id"] + ".json")
+                baseline = root / request["data_root"] / "unity/import-state" / target["kind"] / (target["id"] + ".json")
                 baseline.parent.mkdir(parents=True, exist_ok=True)
                 baseline.write_text(json.dumps({
                     "project_id": request["project_id"], "path": target["path"], "guid": BUTTON_GUID,
@@ -95,12 +116,56 @@ def prepared_result(request_path, statuses, *, overall="success", write_files=Tr
                         meta_sha256=_sha(output.with_suffix(".prefab.meta").read_bytes()),
                         slot_bindings={key: 700 for key in target["slots"]}, source_guids=[])
         targets.append(item)
-    return {"schema_version": 1, "request_id": request["request_id"], "request_sha256": _sha(request_bytes),
+    return {"schema_version": 2, "request_id": request["request_id"], "request_sha256": _sha(request_bytes),
             "status": overall, "targets": targets, "error": "模拟失败" if overall == "failed" else None}
 
 
 def write_result(request_path, result):
     request_path.with_name("result.json").write_text(json.dumps(result), encoding="utf-8")
+
+
+def test_custom_assets_root_builds_and_reopens_without_local_cache(tmp_path):
+    root = tmp_path / "game"
+    (root / "Assets").mkdir(parents=True)
+    (root / "ProjectSettings").mkdir()
+    (root / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: 6000.3.20f1\n")
+    store = ProjectStore()
+    context = store.create(str(root), "fixture", "自定义资料目录", data_root="Assets/UI/Tools")
+    image = tmp_path / "button.png"
+    Image.new("RGBA", (18, 12), "blue").save(image)
+    store.register_image(str(root), context["revision"], "button", "按钮", str(image),
+                         {"kind": "imported", "description": "合成输入"})
+    cli = FakeCli()
+    builder = UnityBuildStore(UnityStore(store), cli)
+    builder.configure(str(root), None, {"fonts": {}})
+    define_image(builder, str(root), "button")
+    prepared = prepare(builder, str(root), ["button"])
+    assert prepared["request"]["data_root"] == "Assets/UI/Tools"
+    assert prepared["request"]["project_file"] == "Assets/UI/Tools/smartui.project.json"
+    assert prepared["request"]["targets"][0]["path"] == "Assets/UI/Tools/Controls/button.prefab"
+    assert Path(prepared["request_path"]).is_relative_to(root / "Assets/UI/Tools/unity/operations")
+    cli.callback = lambda _, path: write_result(path, prepared_result(path, ["created"]))
+    result = builder.execute(str(root), prepared["request_id"])
+    assert result["status"] == "completed"
+    cache = root / ".smartui"
+    assert cache.resolve().parent == root.resolve()
+    shutil.rmtree(cache)
+    reopened = UnityBuildStore(UnityStore(ProjectStore()), cli)
+    assert reopened.context(str(root))["data_root"] == "Assets/UI/Tools"
+    assert reopened.reconcile(str(root), prepared["request_id"]) == result
+    assert (root / "Assets/UI/Tools/unity/import-state/base/button.json").is_file()
+    assert not (root / "smart-ui").exists()
+    assert not (root / "Packages").exists()
+
+
+@pytest.mark.parametrize("payload", [[], {"schema_version": 2.0}, {"schema_version": 1}])
+def test_operation_rejects_invalid_request_shape_and_schema(builder_project, payload):
+    root, _, builder, _ = builder_project
+    define_image(builder, root, "button")
+    prepared = prepare(builder, root, ["button"])
+    Path(prepared["request_path"]).write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ProjectError, match="JSON 对象|schema_version"):
+        builder.execute(root, prepared["request_id"])
 
 
 def test_updates_public_button_states_and_recipe_together(builder_project):
@@ -123,7 +188,7 @@ def test_updates_public_button_states_and_recipe_together(builder_project):
 def test_combined_recipe_revision_conflicts_and_publication_failure_leave_both_records_intact(builder_project, monkeypatch):
     root, _, builder, _ = builder_project
     context, public, recipe = button_state_edit(builder, root)
-    paths = [Path(root) / relative for relative in (REGISTRY, CONSTRUCTION, DOCUMENT)]
+    paths = [ProjectLayout(root).persistent(relative) for relative in (REGISTRY, CONSTRUCTION, DOCUMENT)]
     original = [path.read_bytes() for path in paths]
     with pytest.raises(ProjectError, match="Unity 登记 revision 冲突"):
         builder.define_recipe(root, context["revision"], "button", recipe, definition=public,
@@ -179,7 +244,7 @@ def test_registration_publish_failure_can_reconcile_same_result(builder_project,
     replace = os.replace
 
     def fail_registration(source, destination):
-        if destination == Path(root) / REGISTRY:
+        if destination == ProjectLayout(root).persistent(REGISTRY):
             raise OSError("模拟登记文件发布失败")
         return replace(source, destination)
 
@@ -294,7 +359,7 @@ def test_reconcile_checks_unselected_dependency_after_selected_ancestor_is_writt
                         meta_sha256=_sha(output.with_suffix(".prefab.meta").read_bytes()))
             if base_guid is not None:
                 item.update(slot_bindings={}, source_guids=[base_guid])
-                baseline = Path(root) / "smart-ui/unity/import-state/variant" / (item["id"] + ".json")
+                baseline = ProjectLayout(root).persistent("unity/import-state/variant") / (item["id"] + ".json")
                 baseline.write_text(json.dumps(json.loads(baseline.read_bytes()) | {"guid": guid}), encoding="utf-8")
         write_result(path, result)
 
@@ -502,7 +567,7 @@ def test_page_result_validates_each_nested_instance_scope(builder_project, probl
         elif problem == "wrong_source":
             instances["cancel"]["background"]["file_id"] = 702
         write_result(request_path, {
-            "schema_version": 1, "request_id": request["request_id"], "request_sha256": _sha(request_bytes),
+            "schema_version": 2, "request_id": request["request_id"], "request_sha256": _sha(request_bytes),
             "status": "success", "targets": [{
                 "kind": "page", "id": target["id"], "path": target["path"], "status": "created",
                 "guid": page_guid, "sha256": _sha(output.read_bytes()),
@@ -532,7 +597,7 @@ def test_font_asset_bytes_affect_control_direct_signature_without_rewriting_page
     for path, guid in ((font_path, "f" * 32), (material_path, "a" * 32)):
         (Path(root) / path).write_bytes(b"synthetic")
         (Path(root) / (path + ".meta")).write_text(f"guid: {guid}\n", encoding="utf-8")
-    builder.configure(root, None, {"output_root": "Assets/SmartUI", "fonts": {"button-label": {
+    builder.configure(root, None, {"fonts": {"button-label": {
         "font_asset_path": font_path, "font_asset_guid": "f" * 32,
         "material_path": material_path, "material_guid": "a" * 32,
     }}})

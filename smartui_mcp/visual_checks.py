@@ -125,6 +125,7 @@ def build_visual_check(
     background: str,
     columns: int = 3,
     grayscale: bool = True,
+    paths=None,
     commit=None,
 ) -> dict:
     """保存原尺寸裁切快照和检查总览，返回来源、坐标和文件摘要。"""
@@ -143,9 +144,8 @@ def build_visual_check(
         raise ValueError("grayscale 必须是布尔值")
     columns = min(columns, len(items))
     background = background.upper()
-    destination = root / "smart-ui" / "previews" / "checks" / check_id
-    layout = ProjectLayout(root)
-    layout._check_managed_path(destination)
+    layout = ProjectLayout(root, paths)
+    destination = layout.persistent(f"previews/checks/{check_id}")
     with TemporaryDirectory(dir=_temporary_directory(root)) as temp:
         staging = Path(temp) / "current"
         staging.mkdir()
