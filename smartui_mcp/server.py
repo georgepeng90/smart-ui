@@ -393,7 +393,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     async def project_build_layout(project_root: str, expected_revision: str, layout_id: StrictStr,
                                    annotate: bool = True,
                                    annotation_device: dict[str, Any] | None = None) -> list[Any]:
-        """默认交付干净稿、人工评审标注图和同版 inputs.json。annotation_device 可声明外部设备区域。"""
+        """默认交付干净稿、人工评审标注图和同版 inputs.json。默认附刘海和手势区示意；annotation_device 可覆盖设备区域。正式交付必须展示两张图。"""
         result = await asyncio.to_thread(projects.build_layout, project_root, expected_revision, layout_id,
                                          annotate=annotate, annotation_device=annotation_device)
         return await asyncio.to_thread(_page_build_content, result)

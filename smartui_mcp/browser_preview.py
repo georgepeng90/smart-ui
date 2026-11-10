@@ -736,7 +736,7 @@ def render_page(directory: Path, page: dict, *, annotate=False, annotation_devic
     if annotation_path is not None:
         from .annotation import render_annotation
 
-        evidence = render_annotation(png_path, annotation_path, page, renderer, annotation_device or {})
+        evidence = render_annotation(png_path, annotation_path, page, renderer, annotation_device)
         result["annotated"] = {"path": str(annotation_path), "sha256": _sha(annotation_path.read_bytes()),
                                **evidence}
     return result
