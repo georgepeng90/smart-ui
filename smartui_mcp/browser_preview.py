@@ -2,8 +2,12 @@
 
 import base64
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
+
+from fontTools import subset
+from fontTools.ttLib import TTLibError
 
 
 _SCRIPT = r"""
@@ -396,7 +400,7 @@ window.smartuiReady = (async () => {
       element.style.left = `${node.x + plan.content_offset[0]}px`;
       element.style.top = `${node.y + plan.content_offset[1]}px`;
       const image = new Image();
-      image.src = node.url;
+      image.src = data.images[node.sha256];
       try { await image.decode(); }
       catch (error) { throw new Error(`图像节点 ${node.id} 解码失败：${error.message}`); }
       const context = canvas.getContext('2d');
@@ -506,7 +510,7 @@ def _sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def _resource(path, expected, label, mime):
+def _verified_resource(path, expected, label):
     path = Path(path)
     if not path.is_absolute() or not path.is_file():
         raise ValueError(f"{label} 文件不存在或不是绝对路径：{path}")
@@ -514,7 +518,31 @@ def _resource(path, expected, label, mime):
     digest = _sha(content)
     if digest != expected:
         raise ValueError(f"{label} 文件摘要与快照不一致：{path}")
+    return content
+
+
+def _data_url(content, mime):
     return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+
+
+def _resource(path, expected, label, mime):
+    return _data_url(_verified_resource(path, expected, label), mime)
+
+
+def _font_subset(node, text):
+    content = _verified_resource(node["font_path"], node["font_sha256"], f"文字节点 {node['id']} 的字体")
+    options = subset.Options()
+    options.layout_features = ["*"]
+    try:
+        with subset.load_font(BytesIO(content), options) as font:
+            subsetter = subset.Subsetter(options=options)
+            subsetter.populate(text=text)
+            subsetter.subset(font)
+            output = BytesIO()
+            font.save(output)
+    except TTLibError as error:
+        raise ValueError(f"文字节点 {node['id']} 的字体加载失败：{node['font_path']}：{error}") from error
+    return _data_url(output.getvalue(), "font/otf")
 
 
 def measure_text_widths(nodes):
@@ -582,16 +610,28 @@ def measure_text_widths(nodes):
 
 def _html(page):
     fonts = {}
+    font_text = {}
+    images = {}
+    verified_images = set()
+    for node in page["nodes"]:
+        if node["kind"] == "text":
+            font_text.setdefault(node["snapshot_key"], []).append(node["text"])
     nodes = []
     for node in page["nodes"]:
         item = dict(node)
         if node["kind"] == "image":
-            item["url"] = _resource(node["source"], node["sha256"], f"图像节点 {node['id']}", "image/png")
+            digest = node["sha256"]
+            source = (node["source"], digest)
+            if source not in verified_images:
+                content = _verified_resource(node["source"], digest, f"图像节点 {node['id']}")
+                if digest not in images:
+                    images[digest] = _data_url(content, "image/png")
+                verified_images.add(source)
         elif node["kind"] == "text":
             key = node["snapshot_key"]
             digest = node["font_sha256"]
             if key not in fonts:
-                url = _resource(node["font_path"], digest, f"文字节点 {node['id']} 的字体", "font/otf")
+                url = _font_subset(node, "".join(font_text[key]))
                 fonts[key] = {"family": f"SmartUIFont_{Path(key).stem}", "sha256": digest, "url": url}
             item["font_family"] = fonts[key]["family"]
         else:
@@ -601,7 +641,7 @@ def _html(page):
         item.pop("font_path", None)
         nodes.append(item)
     data = {"width": page["width"], "height": page["height"], "background": page["background"],
-            "nodes": nodes, "fonts": list(fonts.values())}
+            "nodes": nodes, "fonts": list(fonts.values()), "images": images}
     data.update({key: page[key] for key in ("layout_groups", "baseline_groups", "safe_area", "component_usage",
                                           "checks", "unity_adaptation") if key in page})
     payload = json.dumps(data, ensure_ascii=False, indent=2)
