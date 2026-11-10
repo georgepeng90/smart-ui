@@ -5,7 +5,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 def validate_device(device, page):
     if device is None:
-        return {}
+        return {"top": max(1, round(page["width"] * .06)),
+                "bottom": max(1, round(page["width"] * .04)),
+                "label": "Illustrative device", "extend_background": True}
     if not isinstance(device, dict) or device.keys() - {
             "top", "bottom", "label", "background_node", "extend_background"}:
         raise ValueError("annotation_device 包含未知字段")
@@ -24,11 +26,12 @@ def validate_device(device, page):
 
 
 def render_annotation(clean, output, page, renderer, device):
+    device = validate_device(device, page)
     width, height = page["width"], page["height"]
     top, bottom = device.get("top", 0), device.get("bottom", 0)
     scale = max(1, round(width / 540))
     font = ImageFont.load_default(size=13 * scale)
-    legend = ("Element Bounds", "Anchor Side", "Pivot", "Stretch Direction", "Safe Area")
+    legend = ("Element Bounds", "Anchor Side", "Pivot", "Stretch Direction", "Safe Area", "Layout Group")
     gray, gold, green, blue = "#999999", "#ffbe32", "#49e592", "#49aaff"
     legend_width = round(max(font.getlength(label) for label in legend)) + 35 * scale
     columns = min(len(legend), max(1, width // legend_width))
@@ -119,13 +122,20 @@ def render_annotation(clean, output, page, renderer, device):
 
     bounds = {node["id"]: node["layout_box"] for node in renderer["nodes"]}
     bounds.update({group["id"]: group["box"] for group in page.get("layout_groups", ())})
+    groups = {group["id"] for group in page.get("layout_groups", ())}
     adaptations = page.get("unity_adaptation", {})
     for node_id, (x, y, w, h) in bounds.items():
         x, y, w, h = round(x), top + round(y), round(w), round(h)
-        dashed((x, y, x + w - 1, y + h - 1), gray)
+        if node_id in groups or adaptations.get(node_id, {}).get("annotate", True):
+            dashed((x, y, x + w - 1, y + h - 1), "#cf91ff" if node_id in groups else gray)
     for node_id, (x, y, w, h) in bounds.items():
         x, y, w, h = round(x), top + round(y), round(w), round(h)
         settings = adaptations.get(node_id, {})
+        # 隐藏重复标记仍检查完整约束，避免代表条目掩盖其他实例的缺项。
+        if not settings.get("annotate", True):
+            missing.extend({"node_id": node_id, "field": field}
+                           for field in ("anchor_min", "anchor_max", "pivot") if field not in settings)
+            continue
         if "anchor_min" in settings:
             low, high = settings["anchor_min"], settings["anchor_max"]
             sides = [start if start == end and start in (0, 1) else .5 for start, end in zip(low, high)]
@@ -154,7 +164,7 @@ def render_annotation(clean, output, page, renderer, device):
         elif index == 3:
             arrow(x, mid, 20 * scale, False)
         else:
-            dashed((x, mid - 5 * scale, x + 20 * scale, mid + 5 * scale), gray if index == 0 else green)
+            dashed((x, mid - 5 * scale, x + 20 * scale, mid + 5 * scale), gray if index == 0 else "#cf91ff" if index == 5 else green)
         draw.text((x + 27 * scale, y), label, fill="#e3e8ef", font=font)
     caption = f"Design Area: {width} x {height}"
     if top or bottom:

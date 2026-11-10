@@ -14,7 +14,7 @@ from .page_layouts import _identifier, resolve_definition
 from .references import _sha256, _temporary_directory
 
 LAYOUT_METADATA = ("layout_groups", "baseline_groups", "safe_area", "component_usage", "control_dependencies",
-                   "checks", "unity_adaptation")
+                   "checks", "unity_adaptation", "annotation_device")
 
 
 def snapshot_key(root, node, source):
@@ -39,12 +39,13 @@ def build_page(project_root, build_id, layout_id, layout_sha256, definition, sta
     root = _file_path(str(project_root), "project_root")
     layout = ProjectLayout(root, state["paths"])
     resolved = resolve_definition(state, definition)
-    if annotation_device is not None:
+    if annotate or annotation_device is not None:
         from .annotation import validate_device
 
         if not annotate:
             raise ValueError("annotation_device 需要启用 annotate")
-        resolved["annotation_device"] = validate_device(annotation_device, resolved)
+        annotation_device = validate_device(annotation_device, resolved)
+        resolved["annotation_device"] = annotation_device
     destination = root / "smart-ui" / "previews" / "pages" / layout_id
     layout._check_managed_path(destination)
     with TemporaryDirectory(dir=_temporary_directory(layout.root)) as temporary:

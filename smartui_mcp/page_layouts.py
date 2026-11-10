@@ -192,8 +192,10 @@ def validate_definition(width, height, background, nodes, safe_area=None, checks
         for node_id, settings in unity_adaptation.items():
             label = f"unity_adaptation.{node_id}"
             if not isinstance(settings, dict) or not settings or settings.keys() - {
-                    "anchor_min", "anchor_max", "pivot", "viewport_insets", "content_insets"}:
+                    "anchor_min", "anchor_max", "pivot", "viewport_insets", "content_insets", "annotate"}:
                 raise ValueError(f"{label} 包含无效适配字段")
+            if "annotate" in settings and type(settings["annotate"]) is not bool:
+                raise ValueError(f"{label}.annotate 必须为布尔值")
             if ("anchor_min" in settings) != ("anchor_max" in settings):
                 raise ValueError(f"{label} 必须同时声明 anchor_min 和 anchor_max")
             for key in settings.keys() & {"anchor_min", "anchor_max", "pivot"}:

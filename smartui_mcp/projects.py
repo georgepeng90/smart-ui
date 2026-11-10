@@ -597,7 +597,7 @@ class ProjectStore:
         _identifier(layout_id, "layout_id")
         return self._layout_result(self.context(project_root), layout_id)
 
-    def build_layout(self, project_root, expected_revision, layout_id, *, annotate=False, annotation_device=None):
+    def build_layout(self, project_root, expected_revision, layout_id, *, annotate=True, annotation_device=None):
         from .page_dependencies import asset_source_issues, require_current_page_sources
 
         _identifier(layout_id, "layout_id")
