@@ -4,7 +4,7 @@
 
 ## 程序入口与执行
 
-完整 Python 源码必须定义 `build(parameters, spec, component_id)`。`parameters` 来自当前风格，`spec` 为完整组件规格，`component_id` 为稳定标识。用 `project_save_program` 将当前源码保存至 资料目录下的 `programs/<program_id>.py`，通过 `spec.program_id` 引用；保存只检查语法，`project_plan_component` 和 `project_draw_component` 都执行程序并严格预检计划。单独查看或诊断计划时使用前者，已明确的参数调整可直接调用绘制入口。缺少必需配置直接报告具体字段。
+完整 Python 源码必须定义 `build(parameters, spec, component_id)`。`parameters` 来自当前风格，`spec` 为完整组件规格，`component_id` 为稳定标识。用 `project_save_program` 将当前源码保存至 `smart-ui/programs/<program_id>.py`，通过 `spec.program_id` 引用；保存只检查语法，`project_plan_component` 和 `project_draw_component` 都执行程序并严格预检计划。单独查看或诊断计划时使用前者，已明确的参数调整可直接调用绘制入口。缺少必需配置直接报告具体字段。
 
 程序在当前解释器的独立进程中运行，最长 60 秒，打印不会混入计划结果。这是可信本机代码，可访问文件及网络，不构成安全沙箱。返回值只能包含标准 JSON 类型和有限数值。
 

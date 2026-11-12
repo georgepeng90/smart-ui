@@ -125,7 +125,7 @@ namespace SmartUI.UGUI.Editor
                 if (!path.EndsWith(".png", StringComparison.Ordinal) ||
                     string.Equals(path, asset.Path, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException($"'{path}' is not a separate generated Sprite output path.");
-                BuildFiles.RequireOutputPath(request.DataRoot, path);
+                BuildFiles.RequireOutputPath("Sprites", path);
 
                 var files = BuildFiles.Snapshot(path);
                 BuildFiles.RequireSnapshot(path, files, asset.Expected);

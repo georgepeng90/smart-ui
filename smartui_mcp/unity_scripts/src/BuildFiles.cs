@@ -42,10 +42,11 @@ namespace SmartUI.UGUI.Editor
             return current;
         }
 
-        internal static void RequireOutputPath(string dataRoot, string path)
+        internal static void RequireOutputPath(string directory, string path)
         {
-            if (!path.StartsWith(dataRoot + "/", StringComparison.Ordinal))
-                throw new InvalidOperationException($"Unity output '{path}' must be inside '{dataRoot}'.");
+            string root = "Assets/SmartUI/" + directory;
+            if (!path.StartsWith(root + "/", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Unity output '{path}' must be inside '{root}'.");
         }
 
         internal static void RequireId(string value, string kind)

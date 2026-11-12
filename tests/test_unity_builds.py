@@ -35,7 +35,7 @@ def project(tmp_path):
 def exported_project(project):
     store, context = project
     root = context["project_root"]
-    item = export_item() | {"output_path": ProjectLayout(root).persistent_relative("exports/ui/button.png")}
+    item = export_item() | {"output_path": "Assets/UI/Art/button.png"}
     store.export_assets(root, context["revision"], "sample", [item])
     return store, store.context(root)
 
@@ -124,13 +124,13 @@ def write_result(request_path, result):
     request_path.with_name("result.json").write_text(json.dumps(result), encoding="utf-8")
 
 
-def test_custom_assets_root_builds_and_reopens_without_local_cache(tmp_path):
+def test_build_keeps_authoring_records_outside_assets_and_reopens_without_local_cache(tmp_path):
     root = tmp_path / "game"
     (root / "Assets").mkdir(parents=True)
     (root / "ProjectSettings").mkdir()
     (root / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: 6000.3.20f1\n")
     store = ProjectStore()
-    context = store.create(str(root), "fixture", "自定义资料目录", data_root="Assets/UI/Tools")
+    context = store.create(str(root), "fixture", "制作资料与 Unity 资源分离")
     image = tmp_path / "button.png"
     Image.new("RGBA", (18, 12), "blue").save(image)
     store.register_image(str(root), context["revision"], "button", "按钮", str(image),
@@ -140,10 +140,12 @@ def test_custom_assets_root_builds_and_reopens_without_local_cache(tmp_path):
     builder.configure(str(root), None, {"fonts": {}})
     define_image(builder, str(root), "button")
     prepared = prepare(builder, str(root), ["button"])
-    assert prepared["request"]["data_root"] == "Assets/UI/Tools"
-    assert prepared["request"]["project_file"] == "Assets/UI/Tools/smartui.project.json"
-    assert prepared["request"]["targets"][0]["path"] == "Assets/UI/Tools/Controls/button.prefab"
-    assert Path(prepared["request_path"]).is_relative_to(root / "Assets/UI/Tools/unity/operations")
+    assert prepared["request"]["data_root"] == "smart-ui"
+    assert prepared["request"]["project_file"] == "smart-ui/project.json"
+    assert prepared["request"]["targets"][0]["path"] == "Assets/SmartUI/Controls/button.prefab"
+    assert prepared["request"]["assets"]["button"]["path"].startswith("smart-ui/")
+    assert prepared["request"]["assets"]["button"]["output_path"] == "Assets/SmartUI/Sprites/button.png"
+    assert Path(prepared["request_path"]).is_relative_to(root / "smart-ui/unity/operations")
     cli.callback = lambda _, path: write_result(path, prepared_result(path, ["created"]))
     result = builder.execute(str(root), prepared["request_id"])
     assert result["status"] == "completed"
@@ -151,10 +153,11 @@ def test_custom_assets_root_builds_and_reopens_without_local_cache(tmp_path):
     assert cache.resolve().parent == root.resolve()
     shutil.rmtree(cache)
     reopened = UnityBuildStore(UnityStore(ProjectStore()), cli)
-    assert reopened.context(str(root))["data_root"] == "Assets/UI/Tools"
+    assert reopened.context(str(root))["data_root"] == "smart-ui"
     assert reopened.reconcile(str(root), prepared["request_id"]) == result
-    assert (root / "Assets/UI/Tools/unity/import-state/base/button.json").is_file()
-    assert not (root / "smart-ui").exists()
+    assert (root / "smart-ui/unity/import-state/base/button.json").is_file()
+    assert (root / "smart-ui/unity/construction.json").is_file()
+    assert not (root / "Assets/SmartUI/unity").exists()
     assert not (root / "Packages").exists()
 
 
@@ -506,6 +509,7 @@ def test_generated_dependency_must_apply_current_recipe_before_page_prepare(buil
     planned = prepare(builder, root, [], ["screen"], "plan")
     assert planned["reference_size_checks"]["screen"]["status"] == "match"
     page_before = planned["request"]["targets"][0]
+    assert page_before["path"] == "Assets/SmartUI/Pages/screen.prefab"
     assert page_before["background"] == store.context(root)["data"]["layouts"]["screen"]["definition"]["background"]
     assert {key: page_before["nodes"][0][key] for key in adaptation} == adaptation
 

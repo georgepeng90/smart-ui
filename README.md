@@ -1,6 +1,6 @@
 # SmartUI PhotoCraft 本地制作插件
 
-SmartUI PhotoCraft v0.15.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
+SmartUI PhotoCraft v0.15.1 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
 
 ## 安装
 
@@ -32,9 +32,9 @@ codex plugin add smartui-photocraft@smartui-local
 
 ## 项目资料与交付
 
-在 Unity 工程中创建 SmartUI 项目时，将工程绝对路径传给 `project_root`。持久资料默认放在 `Assets/SmartUI/`，也可用 `project_create` 的 `data_root` 指定其他 `Assets` 子目录。普通制作项目使用 `smart-ui/`。项目索引、参考、绘制程序、组件规格、可编辑源文件、布局、导出和正式预览随资料目录保存。通过项目工具更新受管资料，历史从 Git 查看。
+创建 SmartUI 项目时，将工程绝对路径传给 `project_root`。所有项目资料统一保存在项目根目录的 `smart-ui/`，项目索引为 `smart-ui/project.json`。`project_create` 不接收资料目录参数，返回的 `data_root` 为 `smart-ui`。参考、程序、组件规格、可编辑源文件、布局、导出清单、预览和 Unity 登记资料都保存在该目录。普通项目 PNG 导出到 `smart-ui/exports/`。通过项目工具更新受管资料，历史从 Git 查看。
 
-将资料目录及其 `.gitattributes`、工程根目录的忽略规则和实际使用的交付文件一并纳入业务项目 Git 仓库。Unity 工程还应随资源保存 Unity 生成的 `.meta`。目录与调用示例见[工程目录与持久化路径](docs/project-tools.md#工程目录与持久化路径)。
+将 `smart-ui/` 及其 `.gitattributes`、工程根目录的忽略规则和实际使用的交付文件一并纳入业务项目 Git 仓库。Unity 交付图元 PNG 写入调用者指定的 `Assets` 子目录；生成的控件预制体、页面预制体和构建 Sprite 固定输出到 `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/` 和 `Assets/SmartUI/Sprites/`，已有资源继续保留原路径。人工维护的业务文档可放在项目已有的 `Docs/` 等目录，不需放在 `Assets/`。Unity 资源还应随资源保存 Unity 生成的 `.meta`。目录与调用示例见[工程目录与持久化路径](docs/project-tools.md#工程目录与持久化路径)。
 
 `.smartui/` 是 Git 忽略的本机目录，保存缓存、临时文件、诊断、锁和 schema 升级迁移备份。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。其他成员取得业务项目提交后，可以用自己机器上的依赖继续制作。项目锁和 revision 检查当前目录的并发操作，跨分支冲突由团队在 Git 中处理。
 

@@ -44,14 +44,25 @@ def test_image_registration_restores_previous_format_when_project_write_fails(tm
     assert store.get_image(root, "icon")["image"] == first["image"]
 
 
-def test_export_restores_the_previous_png_and_manifest_when_index_publication_fails(project, monkeypatch):
+@pytest.mark.parametrize("unity", [False, True])
+def test_export_restores_the_previous_png_and_manifest_when_index_publication_fails(project, monkeypatch, unity):
     store, context = project
     root = context["project_root"]
-    first = store.export_assets(root, context["revision"], "sample", [export_item()])
+    definition = export_item()
+    if unity:
+        (Path(root) / "Assets").mkdir()
+        version = Path(root) / "ProjectSettings/ProjectVersion.txt"
+        version.parent.mkdir()
+        version.write_text("m_EditorVersion: 6000.0.62f1\n", encoding="utf-8")
+        definition["output_path"] = "Assets/UI/button.png"
+    first = store.export_assets(root, context["revision"], "sample", [definition])
     latest = record_sample_run(store, store.context(root), "second", (20, 80, 160, 255))
-    before = persistent_files(Path(root))
     png = Path(first["export"]["items"][0]["record"]["path"])
     manifest = Path(first["export"]["manifest"]["path"])
+    meta = png.with_suffix(".png.meta")
+    meta.write_bytes(b"guid: retained-guid\n")
+    original_meta = meta.read_bytes(), meta.stat().st_mtime_ns
+    before = persistent_files(Path(root))
     index = Path(root) / "smart-ui/project.json"
     original_png, original_manifest = png.read_bytes(), manifest.read_bytes()
     replace = os.replace
@@ -66,8 +77,10 @@ def test_export_restores_the_previous_png_and_manifest_when_index_publication_fa
     with monkeypatch.context() as patch:
         patch.setattr(os, "replace", fail_index)
         with pytest.raises(ProjectError, match="模拟项目索引写入失败"):
-            store.export_assets(root, latest["revision"], "sample", [export_item()])
+            store.export_assets(root, latest["revision"], "sample", [definition])
     assert persistent_files(Path(root)) == before
+    assert (png.read_bytes(), manifest.read_bytes()) == (original_png, original_manifest)
+    assert (meta.read_bytes(), meta.stat().st_mtime_ns) == original_meta
     assert store.get_export(root, "sample")["export"] == first["export"]
 
 

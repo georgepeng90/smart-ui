@@ -346,8 +346,8 @@ class UnityBuildStore:
         if config is None:
             raise ProjectError("请先配置 Unity fonts；无文字控件可使用空字体映射")
         layout = ProjectLayout(root)
-        if not layout.data_root.startswith("Assets/"):
-            raise ProjectError("Unity 构建需要在 Unity 工程内创建项目，data_root 必须位于 Assets/ 下")
+        if not layout.is_unity:
+            raise ProjectError("Unity 构建需要在含 Assets 和 ProjectSettings 的 Unity 工程内创建项目")
         effective = self.unity._effective(registry, source)
         recipes, resolved = construction["recipes"], source["unity_controls"]
         for key in control_ids:
@@ -410,10 +410,10 @@ class UnityBuildStore:
         for key in ordered:
             item, recipe = resolved[key], recipes[key]
             prefab = registry["controls"][key]["prefab"]
-            output = layout.persistent_relative(f"Controls/{key}.prefab")
+            output = f"Assets/SmartUI/Controls/{key}.prefab"
             if prefab is not None:
                 output = prefab["file"]["path"]
-                if recipe["kind"] != "external" and output != layout.persistent_relative(f"Controls/{key}.prefab"):
+                if recipe["kind"] != "external" and output != f"Assets/SmartUI/Controls/{key}.prefab":
                     raise ProjectError(f"控件 {key} 已登记其他路径，请使用 external 定义引用已有预制体")
             controls[key] = {"path": output, "guid": prefab["file"]["guid"] if prefab else None,
                              "sha256": prefab["file"]["sha256"] if prefab else None,
@@ -432,7 +432,7 @@ class UnityBuildStore:
             targets.append(target)
         for page_id, nodes in page_nodes.items():
             definition = source["layouts"][page_id]["definition"]
-            targets.append({"id": page_id, "kind": "page", "path": layout.persistent_relative(f"Pages/{page_id}.prefab"),
+            targets.append({"id": page_id, "kind": "page", "path": f"Assets/SmartUI/Pages/{page_id}.prefab",
                             "width": definition["width"], "height": definition["height"], "base_control_id": None,
                             "background": definition["background"], "nodes": nodes, "overrides": [], "slots": {}, "button": None})
             direct_resources[("page", page_id)] = self._resource_ids(nodes, [], None, resolved)
@@ -466,7 +466,7 @@ class UnityBuildStore:
         assets, fonts, font_inputs = resources["assets"], {}, {}
         for key, asset in assets.items():
             asset.setdefault("geometry", None)
-            asset["output_path"] = layout.persistent_relative(f"Sprites/{key}.png")
+            asset["output_path"] = f"Assets/SmartUI/Sprites/{key}.png"
             if asset["path"] == asset["output_path"]:
                 raise ProjectError(f"Unity 生成图像不能同时作为制作源文件：{asset['path']}")
             asset["expected"] = {"sha256": _file_hash(layout, asset["output_path"]),

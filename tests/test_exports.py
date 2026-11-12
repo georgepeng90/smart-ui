@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import hashlib
+import json
 from pathlib import Path
 import shutil
 
@@ -32,6 +33,14 @@ def fixture(tmp_path):
 
 def prepare(root, state, item):
     return prepare_exports(str(root), ProjectLayout(root).paths, state, "button", [item])
+
+
+def make_unity_project(root, item):
+    (root / "Assets").mkdir()
+    version = root / "ProjectSettings/ProjectVersion.txt"
+    version.parent.mkdir()
+    version.write_text("m_EditorVersion: 6000.0.62f1\n", encoding="utf-8")
+    item["output_path"] = "Assets/UI/button.png"
 
 
 def save_state(state, result):
@@ -69,8 +78,11 @@ def test_prepare_is_read_only_and_publish_keeps_exact_region_and_evidence(tmp_pa
     verify_image_record(record)
 
 
-def test_unchanged_export_does_not_rewrite_png_manifest_or_adjacent_file(tmp_path):
+@pytest.mark.parametrize("unity", [False, True])
+def test_unchanged_export_does_not_rewrite_png_manifest_or_adjacent_file(tmp_path, unity):
     state, item, _ = fixture(tmp_path)
+    if unity:
+        make_unity_project(tmp_path, item)
     result = publish_exports(prepare(tmp_path, state, item))
     save_state(state, result)
     target = tmp_path / item["output_path"]
@@ -88,6 +100,64 @@ def test_unchanged_export_does_not_rewrite_png_manifest_or_adjacent_file(tmp_pat
     assert manifest.stat().st_mtime_ns == manifest_stamp
     assert target.stat().st_mtime_ns == stamp
     assert meta.read_bytes() == b"adjacent file"
+
+
+def test_unity_exports_png_to_assets_and_keeps_manifest_and_sources_outside_assets(tmp_path):
+    state, item, _ = fixture(tmp_path)
+    make_unity_project(tmp_path, item)
+    result = publish_exports(prepare(tmp_path, state, item))
+    target = Path(result["items"][0]["record"]["path"])
+    assert target == tmp_path / "Assets/UI/button.png"
+    assert Path(result["manifest"]["path"]) == tmp_path / "smart-ui/exports/manifests/button.json"
+    manifest = json.loads(Path(result["manifest"]["path"]).read_bytes())
+    assert manifest["items"][0]["record"]["path"] == "Assets/UI/button.png"
+    assert result["source"]["preview"]["path"] == "smart-ui/previews/components/button.png"
+    assert [path for path in (tmp_path / "Assets").rglob("*") if path.is_file()] == [target]
+
+
+@pytest.mark.parametrize("path", ["smart-ui/exports/ui/button.png", "smart-ui/exports/manifests/button.png",
+                                  "smart-ui/sources/button.png", "Assets/UI/button.jpg", "AssetsElse/button.png"])
+def test_unity_png_output_must_be_inside_assets(tmp_path, path):
+    state, item, _ = fixture(tmp_path)
+    make_unity_project(tmp_path, item)
+    item["output_path"] = path
+    with pytest.raises(ValueError, match="output_path"):
+        prepare(tmp_path, state, item)
+    assert not (tmp_path / "smart-ui/exports").exists()
+    assert not list((tmp_path / "Assets").iterdir())
+
+
+@pytest.mark.parametrize("fail_commit", [False, True])
+def test_unity_reexport_and_commit_rollback_preserve_png_meta(tmp_path, fail_commit):
+    state, item, source = fixture(tmp_path)
+    make_unity_project(tmp_path, item)
+    first = publish_exports(prepare(tmp_path, state, item))
+    save_state(state, first)
+    target = tmp_path / item["output_path"]
+    meta = target.with_suffix(".png.meta")
+    meta.write_bytes(b"guid: retained-guid\n")
+    metadata = meta.read_bytes(), meta.stat().st_mtime_ns
+    manifest = Path(first["manifest"]["path"])
+    previous = target.read_bytes(), manifest.read_bytes()
+    with Image.new("RGBA", (12, 10), "red") as image:
+        image.save(source)
+    state["components"]["button"]["latest_run"]["artifact_hashes"]["preview"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    plan = prepare(tmp_path, state, item)
+    assert plan["items"][0]["write_output"]
+
+    def commit(result):
+        assert target.read_bytes() != previous[0]
+        assert manifest.read_bytes() != previous[1]
+        raise ValueError("项目记录发布失败")
+
+    if fail_commit:
+        with pytest.raises(ValueError, match="项目记录发布失败"):
+            publish_exports(plan, commit=commit)
+        assert (target.read_bytes(), manifest.read_bytes()) == previous
+    else:
+        publish_exports(plan)
+        assert target.read_bytes() != previous[0]
+    assert (meta.read_bytes(), meta.stat().st_mtime_ns) == metadata
 
 
 def test_new_run_with_same_pixels_updates_current_source_without_rewriting_png(tmp_path):

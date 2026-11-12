@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from functools import cached_property
-import ntpath
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -13,8 +12,6 @@ _DIRECTORIES = {
     "programs": "programs",
     "sources": "sources",
 }
-_UNITY_PROJECT_FILE = "smartui.project.json"
-_is_reserved_windows_name = getattr(ntpath, "isreserved", lambda name: PureWindowsPath(name).is_reserved())
 
 IGNORE_RULES = "# SmartUI 本机缓存、临时文件和诊断\n/.smartui/\n"
 SCHEMA_MIGRATION_BACKUPS = ".smartui/migrations"
@@ -25,15 +22,15 @@ RUN_PATH_FIELDS = (
 
 
 class ProjectLayout:
-    def __init__(self, root: Path, paths: dict | None = None, data_root: str | None = None):
+    data_root = "smart-ui"
+
+    def __init__(self, root: Path, paths: dict | None = None):
         self.root = Path(root).resolve()
-        self._paths = paths
-        self._requested_data_root = data_root
+        self.is_unity = self._detect_unity()
         if paths is not None and paths != self.paths:
             raise ValueError("项目目录必须使用制作资料的固定结构")
 
-    @cached_property
-    def is_unity(self):
+    def _detect_unity(self):
         assets = self.root / "Assets"
         version = self.root / "ProjectSettings/ProjectVersion.txt"
         if not version.is_file():
@@ -42,57 +39,6 @@ class ProjectLayout:
         if not assets.is_dir():
             raise ValueError(f"Unity 项目缺少 Assets 目录：{assets}")
         return True
-
-    @cached_property
-    def data_root(self):
-        requested = self._requested_data_root
-        if not self.is_unity:
-            if requested is not None and self._relative_directory(requested, "data_root") != "smart-ui":
-                raise ValueError("非 Unity 项目的制作资料固定存放在 smart-ui/ 中")
-            return "smart-ui"
-
-        assets = self.root / "Assets"
-        legacy = self.root / "smart-ui"
-        if legacy.exists() or legacy.is_symlink() or legacy.is_junction():
-            raise ValueError(f"Unity 项目发现旧 SmartUI 资料，请先迁移至 Assets 子目录：{legacy}")
-        if requested is not None:
-            requested = self._validate_unity_data_root(requested)
-        if self._paths is not None and requested is None:
-            documents = self._paths.get("documents") if isinstance(self._paths, dict) else None
-            if not isinstance(documents, str) or not documents.endswith("/docs"):
-                raise ValueError("项目目录必须使用制作资料的固定结构")
-            return self._validate_unity_data_root(documents.removesuffix("/docs"))
-
-        existing = []
-        directories = [assets]
-        while directories:
-            directory = directories.pop()
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    if os.path.normcase(entry.name) == _UNITY_PROJECT_FILE:
-                        self._check_managed_path(directory / entry.name)
-                        relative = directory.relative_to(self.root).as_posix()
-                        existing.append(self._validate_unity_data_root(relative))
-                    elif entry.is_dir(follow_symlinks=False) and not entry.is_junction():
-                        directories.append(Path(entry.path))
-        if len(existing) > 1:
-            raise ValueError(f"Unity 项目存在多个 SmartUI 制作目录：{', '.join(sorted(existing))}")
-        if existing:
-            if requested is not None and Path(requested) != Path(existing[0]):
-                raise ValueError(f"Unity 项目已有 SmartUI 制作目录 {existing[0]}，不能另建 {requested}")
-            return existing[0]
-        return requested if requested is not None else self._validate_unity_data_root("Assets/SmartUI")
-
-    def _validate_unity_data_root(self, value):
-        relative = self._relative_directory(value, "data_root")
-        path = PurePosixPath(relative)
-        if len(path.parts) < 2 or path.parts[0] != "Assets":
-            raise ValueError(f"Unity 项目的 data_root 必须是 Assets 的子目录：{value}")
-        if any(_is_reserved_windows_name(part) or part.endswith(".") or part.strip() != part or
-               any(char in part for char in '<>:"|?*') for part in path.parts):
-            raise ValueError(f"data_root 包含不受支持的目录名：{value}")
-        self._check_managed_path(self.root / relative)
-        return relative
 
     @cached_property
     def paths(self):
@@ -134,7 +80,7 @@ class ProjectLayout:
 
     @property
     def project_file(self):
-        return self.persistent(_UNITY_PROJECT_FILE if self.is_unity else "project.json")
+        return self.persistent("project.json")
 
     @property
     def documents(self):

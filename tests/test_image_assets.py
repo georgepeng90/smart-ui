@@ -63,6 +63,19 @@ def test_register_replaces_the_same_asset_and_removes_the_previous_format(tmp_pa
     verify_image_record(second)
 
 
+def test_unity_registration_keeps_original_images_outside_assets(tmp_path):
+    (tmp_path / "Assets").mkdir()
+    version = tmp_path / "ProjectSettings/ProjectVersion.txt"
+    version.parent.mkdir()
+    version.write_text("m_EditorVersion: 6000.0.62f1\n", encoding="utf-8")
+    first = register(tmp_path, source_image(tmp_path))
+    assert Path(first["path"]) == tmp_path / "smart-ui/sources/images/coin/image.png"
+    second = register(tmp_path, source_image(tmp_path, "RGB", (20, 40, 60), "JPEG"))
+    assert Path(second["path"]) == tmp_path / "smart-ui/sources/images/coin/image.jpg"
+    assert not Path(first["path"]).exists()
+    assert not list((tmp_path / "Assets").iterdir())
+
+
 def test_invalid_current_image_cannot_be_overwritten(tmp_path):
     first = register(tmp_path, source_image(tmp_path))
     current = Path(first["path"])

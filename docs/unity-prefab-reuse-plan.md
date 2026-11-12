@@ -2,7 +2,7 @@
 
 第二阶段以“一个基础控件、一个变体、两个页面”验证预制体复用：共用外观在基础预制体上修改，页面保留独立文案和引用，两个页面预制体文件不因继承变化而重写。
 
-当前实现基线为 SmartUI PhotoCraft v0.15.0，接口见 [Unity 接入工具](unity-tools.md)。已提供控件制作定义、浏览器控件节点、Unity CLI 调度和通用 Editor 构建脚本。本文说明实现边界及尚待实际工程执行的验收。验证工程待选；工程数据留在业务工程，工具代码与通用说明留在本仓库。已通过真实 Unity CLI 的 `run_script` 编译预检，当前仍待实际导入、保存重开和运行验收。
+当前实现基线为 SmartUI PhotoCraft v0.15.1，接口见 [Unity 接入工具](unity-tools.md)。已提供控件制作定义、浏览器控件节点、Unity CLI 调度和通用 Editor 构建脚本。本文说明实现边界及尚待实际工程执行的验收。验证工程待选；工程数据留在业务工程，工具代码与通用说明留在本仓库。当前 C# 脚本的 Unity 编译、实际导入、保存重开和运行效果待工程验证。
 
 ## 1 本阶段的范围
 
@@ -84,7 +84,7 @@ Python 客户端先通过 Unity CLI 查询工程实际能力，再以目标工�
 
 构建脚本随 SmartUI 插件分发，通过 Unity 原生 API 处理受管属性、资源导入和预制体保存。目标工程须具备 Unity Pipeline 的 `run_script` 能力、uGUI、TextMeshPro 和 Newtonsoft JSON。项目显式映射字体和材质。宿主挂载和业务引用由后续项目适配器处理。
 
-选定验证工程后，先确认 CLI 能连接当前 Editor 并调用官方脚本入口。SmartUI 报告缺少的能力或资源，工程依赖按项目流程维护。业务工程中的构建输入与持久输出统一使用实际的 `data_root`。
+选定验证工程后，先确认 CLI 能连接当前 Editor 并调用官方脚本入口。SmartUI 报告缺少的能力或资源，工程依赖按项目流程维护。构建输入、执行资料和持久输出清单保存在项目根目录的 `smart-ui/`。
 
 ### 基础控件、变体和页面的保存方式
 
@@ -142,12 +142,13 @@ Unity 覆写 Prefab 时会尝试按名称维持引用，同名对象及同一对
 
 | 位置 | 维护者与内容 |
 | --- | --- |
-| `<data_root>/unity/registry.json` | 项目工具维护公开目录和经文件核对的产物索引 |
-| `<data_root>/unity/construction.json` | 项目工具维护制作定义、TMP 字体和材质映射，以及当前页面业务键 |
-| `<data_root>/unity/operations/<request_id>/` | 固定输入请求、执行状态和实际结果；超时后核对同一次操作 |
-| `<data_root>/unity/import-state/` | Editor 写入每个目标的当前成功基线、对象映射和必要的未完成写入状态 |
-| `<data_root>/docs/unity-controls.md` | 项目工具生成当前使用说明和产物状态 |
-| `Assets/<工程约定目录>/` | 实际 Sprite、基础 Prefab、Variant 和页面 Prefab |
+| `smart-ui/unity/registry.json` | 项目工具维护公开目录和经文件核对的产物索引 |
+| `smart-ui/unity/construction.json` | 项目工具维护制作定义、TMP 字体和材质映射，以及当前页面业务键 |
+| `smart-ui/unity/operations/<request_id>/` | 固定输入请求、执行状态和实际结果；超时后核对同一次操作 |
+| `smart-ui/unity/import-state/` | Editor 写入每个目标的当前成功基线、对象映射和必要的未完成写入状态 |
+| `smart-ui/docs/unity-controls.md` | 项目工具生成当前使用说明和产物状态 |
+| `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/`、`Assets/SmartUI/Sprites/` | 默认生成的基础 Prefab、Variant、页面 Prefab 和构建 Sprite；已有资源保持登记的原路径 |
+| 调用者指定的 `Assets` 子目录 | 交付给 Unity 使用的图元 PNG |
 | `.smartui/` | 可再生成的缓存、详细诊断和锁；清理后不得丢失判断已落盘资源所需的状态 |
 
 请求和结果使用 schema 2。请求记录实际资料目录、项目索引和预期输入，结果记录目标状态、请求摘要和可核对的资产身份。资源保存后重新加载并通过核对，才推进该资源的成功基线。资源写入或验证中断时保留 `.pending`，登记未完成时保留请求状态。同一次执行留下完整结果后，可用 `project_reconcile_unity_build` 继续核对。始终没有完整结果或仍有未完成写入记录时，人工检查目标 Prefab、`.meta` 和基线。当前工具阻止新构建或冲突目标再次写入，尚无自动补回执、回滚或解锁操作。相同输入准备新请求并复验时，登记和成功基线也不因时间戳产生变化。

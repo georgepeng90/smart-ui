@@ -178,9 +178,9 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
         return [json.dumps(info, ensure_ascii=False), Image(data=payload, format="png")]
 
     @server.tool()
-    async def project_create(project_root: str, project_id: str, name: str, data_root: str | None = None) -> Any:
-        """创建项目；Unity 持久数据默认放 Assets/SmartUI，可用 data_root 指定 Assets 子目录。"""
-        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name, data_root=data_root))
+    async def project_create(project_root: str, project_id: str, name: str) -> Any:
+        """创建项目；制作资料统一保存于工程根目录的 smart-ui/，Unity 正式图元单独导出至 Assets。"""
+        return _project_summary(await asyncio.to_thread(projects.create, project_root, project_id, name))
 
     @server.tool()
     async def project_context(project_root: str) -> Any:
@@ -336,7 +336,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_export_assets(project_root: str, expected_revision: str, component_id: StrictStr,
                                     exports: list[dict[str, Any]]) -> Any:
-        """从当前组件成功产物导出正式 PNG 和几何清单，输出必须位于项目数据根的 exports/ 下。"""
+        """导出正式 PNG；Unity 图元写入 Assets，普通项目写入 smart-ui/exports，清单保存于 smart-ui/exports/manifests。"""
         return await asyncio.to_thread(projects.export_assets, project_root, expected_revision, component_id, exports)
 
     @server.tool()

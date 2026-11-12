@@ -6,7 +6,6 @@ import shutil
 
 import pytest
 
-from smartui_mcp.image_assets import _replace_directory
 from smartui_mcp.layout import ProjectLayout, map_state_paths
 from smartui_mcp.projects import ProjectError, ProjectStore
 from smartui_mcp.references import register_reference, inspect_reference
@@ -90,23 +89,23 @@ def unity_root(tmp_path):
     return root
 
 
-def test_unity_default_data_root(unity_root):
+def test_unity_keeps_project_data_outside_assets(unity_root):
     store = ProjectStore()
     context = store.create(str(unity_root), "game", "项目")
 
-    assert context["data"]["paths"]["documents"] == "Assets/SmartUI/docs"
-    assert (unity_root / "Assets/SmartUI/smartui.project.json").is_file()
-    assert not (unity_root / "smart-ui").exists()
+    assert context["data"]["paths"]["documents"] == "smart-ui/docs"
+    assert (unity_root / "smart-ui/project.json").is_file()
+    assert not list((unity_root / "Assets").iterdir())
     assert {path.name for path in (unity_root / "ProjectSettings").iterdir()} == {"ProjectVersion.txt"}
     assert "/.smartui/" in (unity_root / ".gitignore").read_text(encoding="utf-8").splitlines()
 
 
-def test_unity_custom_data_root_holds_current_assets_and_reopens_without_cache(unity_root, tmp_path):
+def test_unity_data_and_exported_sprites_reopen_without_cache(unity_root, tmp_path):
     store = ProjectStore()
     root = str(unity_root)
-    relative = "Assets/Game UI/Design"
+    relative = "smart-ui"
     data_root = unity_root / relative
-    context = store.create(root, "game", "项目", data_root=relative.replace("/", "\\"))
+    context = store.create(root, "game", "项目")
     source = tmp_path / "guide.png"
     with Image.new("RGBA", (12, 10), "red") as image:
         image.save(source)
@@ -121,13 +120,13 @@ def test_unity_custom_data_root_holds_current_assets_and_reopens_without_cache(u
     comparison = compare(store, context)
     visual = store.create_visual_check(root, comparison["revision"], "review", [{"component_id": "sample", "label": "样片"}],
                                        background="#123456")
-    item = export_item() | {"output_path": f"{relative}/exports/ui/button.png"}
+    item = export_item() | {"output_path": "Assets/UI/button.png"}
     exported = store.export_assets(root, visual["revision"], "sample", [item])
     composition = store.create_composition(root, exported["revision"], "screen", 64, 48, "#123456", [image_node()])
     page = save(store, composition, [image_node()])
     built = store.build_layout(root, page["revision"], "screen")
 
-    index = json.loads((data_root / "smartui.project.json").read_bytes())
+    index = json.loads((data_root / "project.json").read_bytes())
     assert index["references"]["guide"]["source"] == f"{relative}/references/guide/guide.png"
     assert index["programs"]["drawing"] == f"{relative}/programs/drawing.json"
     assert index["components"]["sample"] == f"{relative}/components/sample.json"
@@ -140,7 +139,7 @@ def test_unity_custom_data_root_holds_current_assets_and_reopens_without_cache(u
         assert all((unity_root / image["path"]).is_file() and image["path"].startswith(f"{relative}/previews/")
                    for image in record["images"].values())
     assert "(<../programs/drawing.py>)" in (data_root / "docs/components.md").read_text(encoding="utf-8")
-    assert not (unity_root / "smart-ui").exists()
+    assert {p.relative_to(unity_root / "Assets").as_posix() for p in (unity_root / "Assets").rglob("*") if p.is_file()} == {"UI/button.png"}
     assert not (unity_root / "Assets/SmartUI").exists()
 
     shutil.rmtree(unity_root / ".smartui")
@@ -154,68 +153,6 @@ def test_unity_custom_data_root_holds_current_assets_and_reopens_without_cache(u
     assert updated["data"]["style"]["description"] == "继续制作"
 
 
-def test_unity_image_replacement_preserves_meta_for_the_same_file(unity_root, tmp_path):
-    store = ProjectStore()
-    root = str(unity_root)
-    context = store.create(root, "game", "项目")
-    source = tmp_path / "icon.png"
-    with Image.new("RGBA", (6, 4), "red") as image:
-        image.save(source)
-    provenance = {"kind": "imported", "description": "合成图像"}
-    original = store.register_image(root, context["revision"], "icon", "图标", str(source), provenance)
-    path = Path(original["image"]["path"])
-    meta = path.with_suffix(".png.meta")
-    meta.write_bytes(b"fileFormatVersion: 2\nguid: 9f2b8c8fc3e14747880096b173a48938\n")
-    original_meta = meta.read_bytes()
-    with Image.new("RGBA", (6, 4), "blue") as image:
-        image.save(source)
-    replacement = store.register_image(root, original["revision"], "icon", "图标", str(source), provenance)
-
-    assert replacement["image"]["path"] == original["image"]["path"]
-    assert replacement["image"]["sha256"] != original["image"]["sha256"]
-    assert meta.read_bytes() == original_meta
-
-    jpeg = tmp_path / "icon.jpg"
-    with Image.new("RGB", (6, 4), "green") as image:
-        image.save(jpeg)
-    changed = store.register_image(root, replacement["revision"], "icon", "图标", str(jpeg), provenance)
-    new_path = Path(changed["image"]["path"])
-    assert new_path == path.with_suffix(".jpg")
-    assert set(path.parent.iterdir()) == {new_path}
-
-
-def test_unity_preview_replacement_preserves_nested_asset_and_folder_meta(unity_root):
-    ProjectStore().create(str(unity_root), "game", "项目")
-    layout = ProjectLayout(unity_root)
-    destination = layout.persistent("previews/pages/screen")
-    retained = {
-        "images.meta": b"guid: images",
-        "images/icons.meta": b"guid: icons",
-        "images/icons/keep.png.meta": b"guid: keep",
-    }
-    old = retained | {
-        "images/icons/keep.png": b"old pixels",
-        "images/icons/removed.png": b"removed pixels",
-        "images/icons/removed.png.meta": b"guid: removed",
-        "images/icons/new.png.meta": b"guid: orphan",
-        "fonts/removed.font": b"removed font",
-        "fonts/removed.font.meta": b"guid: removed font",
-        "fonts.meta": b"guid: fonts",
-    }
-    staging = unity_root / ".smartui/temp/test-transaction/current"
-    new = {"images/icons/keep.png": b"new pixels", "images/icons/new.png": b"new image"}
-    for directory, contents in ((destination, old), (staging, new)):
-        for relative, payload in contents.items():
-            path = directory / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(payload)
-
-    _replace_directory(layout, staging, destination)
-
-    assert {path.relative_to(destination).as_posix(): path.read_bytes()
-            for path in destination.rglob("*") if path.is_file()} == new | retained
-
-
 def test_unity_project_without_assets_does_not_create_a_drawing_project(unity_root):
     (unity_root / "Assets").rmdir()
     with pytest.raises(ProjectError, match="Unity 项目缺少 Assets 目录"):
@@ -223,54 +160,33 @@ def test_unity_project_without_assets_does_not_create_a_drawing_project(unity_ro
     assert not (unity_root / "smart-ui").exists()
 
 
-@pytest.mark.parametrize("relative", ["Assets", "GameUI", "AssetsOther/UI", "Assets/../UI", "C:/Assets/UI",
-                                       "Assets/UI:Stream", "Assets/UI.", "Assets/UI/ Tools"])
-def test_unity_rejects_data_root_outside_assets(unity_root, relative):
-    with pytest.raises(ProjectError, match="data_root"):
-        ProjectStore().create(str(unity_root), "game", "项目", data_root=relative)
-
-
-def test_unity_rejects_another_data_root_and_multiple_state_files(unity_root):
-    store = ProjectStore()
-    root = str(unity_root)
-    store.create(root, "game", "项目", data_root="Assets/Existing")
-    with pytest.raises(ProjectError, match="不能另建"):
-        store.create(root, "game", "项目", data_root="Assets/Other")
-    assert not (unity_root / "Assets/Other").exists()
-
-    duplicate = unity_root / "Assets/Other"
-    duplicate.mkdir()
-    shutil.copyfile(unity_root / "Assets/Existing/smartui.project.json", duplicate / "smartui.project.json")
-    with pytest.raises(ProjectError, match="多个 SmartUI 制作目录"):
-        store.context(root)
-
-
-def test_unity_rejects_legacy_directory_without_modifying_it(unity_root):
+def test_unity_creation_does_not_overwrite_existing_project(unity_root):
     legacy = unity_root / "smart-ui/project.json"
     legacy.parent.mkdir()
     legacy.write_text("原项目资料", encoding="utf-8")
-    with pytest.raises(ProjectError, match="迁移至 Assets 子目录"):
+    with pytest.raises(ProjectError, match="创建项目不能覆盖已有文件"):
         ProjectStore().create(str(unity_root), "game", "项目")
     assert legacy.read_text(encoding="utf-8") == "原项目资料"
     assert not (unity_root / "Assets/SmartUI").exists()
 
 
 def test_unity_rejects_linked_data_root_and_managed_children(unity_root, monkeypatch):
-    data_root = unity_root / "Assets/Linked"
+    data_root = unity_root / "smart-ui"
     real_is_junction = Path.is_junction
     with monkeypatch.context() as patch:
         patch.setattr(Path, "is_junction", lambda path: path == data_root or real_is_junction(path))
         with pytest.raises(ProjectError, match="目录联接"):
-            ProjectStore().create(str(unity_root), "game", "项目", data_root="Assets/Linked")
+            ProjectStore().create(str(unity_root), "game", "项目")
     assert not data_root.exists()
 
     store = ProjectStore()
     root = str(unity_root)
-    context = store.create(root, "game", "项目", data_root="Assets/Linked")
+    context = store.create(root, "game", "项目")
     linked = data_root / "programs"
     real_is_symlink = Path.is_symlink
     monkeypatch.setattr(Path, "is_symlink", lambda path: path == linked or real_is_symlink(path))
     with pytest.raises(ProjectError, match="符号链接"):
         store.save_program(root, context["revision"], "drawing", "绘制程序", "", PROGRAM)
     assert not linked.exists()
-    assert ProjectLayout(unity_root).resolve("smart-ui/programs/drawing.py") == unity_root / "smart-ui/programs/drawing.py"
+    with pytest.raises(ValueError, match="符号链接"):
+        ProjectLayout(unity_root).resolve("smart-ui/programs/drawing.py")

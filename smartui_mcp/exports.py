@@ -53,9 +53,11 @@ def _production_path(layout, value):
     path, relative = _relative_file(layout, value, "output_path")
     if path.suffix.lower() != ".png":
         raise ValueError(f"output_path 必须是 PNG 文件路径：{value}")
-    directory = layout.persistent("exports")
-    if not path.is_relative_to(directory) or path.is_relative_to(directory / "manifests"):
-        raise ValueError(f"output_path 必须位于 {layout.data_root}/exports/ 的图像输出目录：{value}")
+    directory = layout.root / "Assets" if layout.is_unity else layout.persistent("exports")
+    if not path.is_relative_to(directory):
+        raise ValueError(f"output_path 必须位于 {layout.relative(directory)}/ 的图像输出目录：{value}")
+    if not layout.is_unity and path.is_relative_to(directory / "manifests"):
+        raise ValueError(f"output_path 不能位于导出清单目录：{value}")
     _check_parents(layout, path)
     if path.exists() and not path.is_file():
         raise ValueError(f"output_path 已存在但不是文件：{path}")

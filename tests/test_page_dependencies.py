@@ -15,13 +15,13 @@ from test_review_workflow import project, record_sample_run
 
 
 @pytest.mark.parametrize("mode", ["custom", "default", "no-device", "clean", "new"])
-def test_rebuild_preserves_page_annotation_settings_in_unity_assets(tmp_path, mode):
+def test_rebuild_preserves_page_annotation_settings_outside_unity_assets(tmp_path, mode):
     root = tmp_path / "Unity Project"
     (root / "Assets").mkdir(parents=True)
     (root / "ProjectSettings").mkdir()
     (root / "ProjectSettings/ProjectVersion.txt").write_text("m_EditorVersion: 6000.0.0f1\n", encoding="utf-8")
     store = ProjectStore()
-    current = store.create(str(root), "game", "项目", data_root="Assets/UI/Design")
+    current = store.create(str(root), "game", "项目")
     source = tmp_path / "button.png"
     with Image.new("RGBA", (18, 12), "red") as image:
         image.save(source)
@@ -36,12 +36,6 @@ def test_rebuild_preserves_page_annotation_settings_in_unity_assets(tmp_path, mo
         current = store.build_layout(str(root), current["revision"], "screen",
                                      annotate=mode != "clean", annotation_device=device)
         before = current["page_build"]
-    meta = None
-    if before is not None and "annotated" in before["files"]:
-        meta = Path(before["files"]["annotated"]["path"]).with_suffix(".png.meta")
-        meta.write_bytes(b"fileFormatVersion: 2\nguid: 9f2b8c8fc3e14747880096b173a48938\n")
-        meta_bytes = meta.read_bytes()
-
     current = save(store, current, [image_node(x=10)])
     result = store.rebuild_pages(str(root), current["revision"], ["screen"])
     assert result["completed_layout_ids"] == ["screen"]
@@ -55,13 +49,12 @@ def test_rebuild_preserves_page_annotation_settings_in_unity_assets(tmp_path, mo
         assert "annotation_device" not in record and "annotation_device" not in inputs
     else:
         annotated = Path(record["files"]["annotated"]["path"])
-        assert annotated.is_relative_to(root / "Assets/UI/Design/previews/pages/screen")
+        assert annotated.is_relative_to(root / "smart-ui/previews/pages/screen")
         assert annotated.is_file()
         expected = before["annotation_device"] if before is not None else {
             "top": 4, "bottom": 3, "label": "Illustrative device", "extend_background": True}
         assert record["annotation_device"] == inputs["annotation_device"] == expected
-    if meta is not None:
-        assert meta.read_bytes() == meta_bytes
+    assert not list((root / "Assets").iterdir())
 
 
 def test_rebuild_preflights_retained_device_background_before_publishing(exported_project):

@@ -11,7 +11,7 @@ description: 查看项目视觉参考，区分可见特征与制作假设，归�
 
 ## 看图与记录依据
 
-`project_root` 是业务工程根目录的绝对路径。`<data_root>` 是保存参考、当前风格和制作资料的工程相对目录。普通项目使用 `smart-ui`，Unity 项目使用创建时指定的 `Assets` 子目录，默认 `Assets/SmartUI`。资料目录纳入 Git，本机 `.smartui/` 整体忽略。登记的参考原图保存在 `<data_root>/references/`，工程内引用使用相对路径。
+`project_root` 是业务工程根目录的绝对路径。所有项目均在根目录的 `smart-ui/` 保存参考、当前风格和制作资料，索引为 `smart-ui/project.json`；创建工具不接收资料目录参数，返回的 `data_root` 固定为 `smart-ui`。资料目录纳入 Git，本机 `.smartui/` 整体忽略。登记的参考原图保存在 `smart-ui/references/`，工程内引用使用相对路径。
 
 已有项目先 `project_context`，查看已有规则、组件规格和预览，避免重复建立矛盾规范。新项目先 `project_create`。用 `project_add_reference` 登记只读原图，用 `project_inspect_reference` 查看整图、关键区域和需要的色块。坐标相对完整参考，按预览测量时传 coordinate_size。
 
@@ -43,13 +43,13 @@ ICON 图像采用独立的宿主生图或图像编辑流程。SmartUI 不内置�
 
 角色至少说明用途和适用条件，填色、描边和投影分别选择，合法无效果用 `null`。字体引用工程内持久文件，缺字或文件变化应明确修正源头。先用正式页面工具制作小型文字样片，检查真实文案、复杂汉字、数字和长标签在实际背景中的效果；包含其他语言时按真实译文复查。目标设备和运行态可读性另行验证，浏览器截图不能替代。具体方法及社区依据见[文字设计规范](../../docs/typography-plan.md)。
 
-文字规范保存在 `<data_root>/typography.json`，工具生成 `<data_root>/docs/typography.md`。更新后用上下文中的 `typography_usage` 和 `page_status` 定位受影响页面，显式重建并复查。文字规范变化不要求重画无关组件。
+文字规范保存在 `smart-ui/typography.json`，工具生成 `smart-ui/docs/typography.md`。更新后用上下文中的 `typography_usage` 和 `page_status` 定位受影响页面，显式重建并复查。文字规范变化不要求重画无关组件。
 
 ## 维护项目文档与校准
 
 用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。说明规则适用于基础 UI、ICON 还是两者，参数按实际用途组织，不强加固定色板、圆角或高光字段。需要通过 PhotoCraft 制作的组件用 `project_define_component` 保存完整规格，其中 program_id 引用已保存的程序；定义规格不表示已经生成资产。ICON 占位和独立生成图像不登记为待绘制组件。
 
-每次写入用最新 revision，冲突时重新读取核对。`<data_root>/docs/style.md` 和 `<data_root>/docs/components.md` 由 MCP 根据项目资料生成，通过工具更新原始资料。
+每次写入用最新 revision，冲突时重新读取核对。`smart-ui/docs/style.md` 和 `smart-ui/docs/components.md` 由 MCP 根据项目资料生成，通过工具更新原始资料。
 
 先校准覆盖主要画法的少量代表组件，再推广到整组。需要检查图文和容器关系时，只组合一个典型区域，沿用后续制作的程序与资产；不为组件校准提前补齐完整页面、场景、全部图标或未来状态。具体范围及结束条件见[参考匹配与按需修正流程](../../docs/style-reproduction-validation.md)。
 

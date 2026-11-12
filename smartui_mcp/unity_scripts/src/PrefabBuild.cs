@@ -22,7 +22,7 @@ namespace SmartUI.UGUI.Editor
                 throw new ArgumentException("SmartUI requires an absolute request path.", nameof(requestPath));
             var fullPath = Path.GetFullPath(requestPath);
             var relative = Path.GetRelativePath(PrefabAssets.ProjectPath, fullPath).Replace('\\', '/');
-            var match = Regex.Match(relative, @"\A(Assets/.+)/unity/operations/([0-9a-f]{32})/request\.json\z");
+            var match = Regex.Match(relative, @"\Asmart-ui/unity/operations/([0-9a-f]{32})/request\.json\z");
             if (!match.Success || !string.Equals(fullPath, BuildFiles.RelativePath(relative),
                     Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                 throw new ArgumentException("SmartUI request must be in the current project's operation directory.", nameof(requestPath));
@@ -32,11 +32,11 @@ namespace SmartUI.UGUI.Editor
             using (var sha = SHA256.Create())
                 requestSha = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
             var request = BuildFiles.Deserialize<BuildRequest>(new UTF8Encoding(false, true).GetString(bytes));
-            string dataRoot = match.Groups[1].Value;
-            string id = match.Groups[2].Value;
+            const string dataRoot = "smart-ui";
+            string id = match.Groups[1].Value;
             string resultPath = $"{dataRoot}/unity/operations/{id}/result.json";
             if (request.SchemaVersion != SchemaVersion || request.RequestId != id || request.DataRoot != dataRoot ||
-                request.ProjectFile != $"{dataRoot}/smartui.project.json" || request.ResultPath != resultPath)
+                request.ProjectFile != $"{dataRoot}/project.json" || request.ResultPath != resultPath)
                 throw new InvalidOperationException($"SmartUI request '{relative}' has an invalid schema, identity or project paths.");
             BuildFiles.RequireId(request.ProjectId, "project");
 
@@ -140,7 +140,7 @@ namespace SmartUI.UGUI.Editor
             try
             {
                 PrefabAssets.RequireAssetPath(item.Path, true);
-                BuildFiles.RequireOutputPath(request.DataRoot, item.Path);
+                BuildFiles.RequireOutputPath(item.Kind == "page" ? "Pages" : "Controls", item.Path);
                 UpdateFileResult(item);
             }
             catch (Exception inspectionError)
@@ -195,7 +195,7 @@ namespace SmartUI.UGUI.Editor
             {
                 BuildFiles.RequireId(target.Id, "target");
                 PrefabAssets.RequireAssetPath(target.Path, true);
-                BuildFiles.RequireOutputPath(request.DataRoot, target.Path);
+                BuildFiles.RequireOutputPath(target.Kind == "page" ? "Pages" : "Controls", target.Path);
                 if (!(target.Kind is "base" or "page" or "variant") || !keys.Add(target.Kind + "/" + target.Id) ||
                     !paths.Add(target.Path) || target.Nodes == null || target.Overrides == null || target.Slots == null ||
                     target.Expected == null || !Positive(target.Width) || !Positive(target.Height))

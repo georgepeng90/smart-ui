@@ -69,14 +69,14 @@ def _validate_ui_settings(settings):
 
 
 class ProjectStore:
-    def create(self, project_root: str, project_id: str, name: str, data_root: str | None = None) -> dict:
+    def create(self, project_root: str, project_id: str, name: str) -> dict:
         root = self._root(project_root)
         _identifier(project_id, "project_id")
         _text(name, "name")
         root.mkdir(parents=True, exist_ok=True)
         with self._lock(root):
             try:
-                layout = ProjectLayout(root, data_root=data_root)
+                layout = ProjectLayout(root)
                 for key in layout.paths:
                     layout.directory(key)
                 managed = (layout.project_file, layout.persistent("typography.json"), *layout.documents.values())
