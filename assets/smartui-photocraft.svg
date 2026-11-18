@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 100 100" role="img" aria-labelledby="title">
+  <title id="title">SmartUI PhotoCraft</title>
+  <rect width="100" height="100" rx="20" fill="#F7F6F2"/>
+  <path id="body" fill="#27232E" d="M14 41A27 27 0 0 1 41 14H47V29Q47 53 71 53H86V59A27 27 0 0 1 59 86H53V71Q53 47 29 47H14Z"/><g fill="#6943EB"><path id="component" d="M54 14H69A17 17 0 0 1 86 31V46H71Q54 46 54 29Z"/><use href="#component" transform="rotate(180 50 50)"/></g>
+</svg>
