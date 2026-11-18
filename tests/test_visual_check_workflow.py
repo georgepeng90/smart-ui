@@ -114,7 +114,7 @@ def test_failed_preview_record_write_restores_previous_current_files(project, mo
         fetch = store.get_comparison
 
         def replace():
-            return store.compare_component(root, first["revision"], "sample", "guide", artifact_scale=2)
+            return compare(store, first, artifact_scale=2)
     else:
         first = _create(store, context, _item())
         fetch = store.get_visual_check

@@ -15,6 +15,7 @@ from mcp.client.stdio import stdio_client
 from PIL import Image
 import pytest
 
+from smartui_mcp import comparisons
 from smartui_mcp.pipeline import plan_component
 from smartui_mcp.layout import ProjectLayout
 from smartui_mcp.projects import ProjectError, ProjectStore, spec_sha256, style_sha256
@@ -86,11 +87,11 @@ def project(tmp_path):
     return store, record_sample_run(store, context, "first", (150, 20, 20, 255))
 
 
-def compare(store, context):
+def compare(store, context, **overrides):
+    options = {"reference_region": [1, 1, 3, 2], "reference_coordinate_size": [6, 5],
+               "artifact_region": [1, 0, 4, 3], "reference_scale": 2.0}
     return store.compare_component(
-        context["project_root"], context["revision"], "sample", "guide",
-        reference_region=[1, 1, 3, 2], reference_coordinate_size=[6, 5],
-        artifact_region=[1, 0, 4, 3], reference_scale=2.0,
+        context["project_root"], context["revision"], "sample", "guide", **(options | overrides),
     )
 
 
@@ -129,7 +130,8 @@ def test_project_replaces_current_comparison_after_redrawing(project, redraw_id)
 
     later = record_sample_run(store, store.context(root), redraw_id, (20, 150, 20, 255))
     assert not store.get_comparison(root, first["id"])["comparison"]["is_current"]
-    second = compare(store, later)["comparison"]
+    second = compare(store, later, reference_region=[2, 2, 6, 4], reference_coordinate_size=None,
+                     reference_scale=3.0, artifact_scale=2.0)["comparison"]
     assert second["id"] == first["id"] and second["is_current"]
     assert second["images"]["comparison"]["path"] == first["images"]["comparison"]["path"]
     assert second["images"]["comparison"]["sha256"] != first["images"]["comparison"]["sha256"]
@@ -251,19 +253,75 @@ def test_feedback_requires_the_current_source_bytes(project, source):
         give_feedback(store, result)
 
 
-def test_feedback_does_not_apply_to_a_different_reference_crop(project):
+@pytest.mark.parametrize("crop", [{"reference_region": [0, 0, 3, 2]}, {"artifact_region": [2, 0, 4, 3]}])
+def test_comparisons_keep_separate_images_and_feedback_for_each_crop(project, crop):
     store, context = project
     first = compare(store, context)
     added = give_feedback(store, first)
     root = context["project_root"]
-    changed = store.compare_component(root, added["revision"], "sample", "guide", reference_region=[0, 0, 3, 2])
+    changed = compare(store, added, **crop)
     feedback_id = added["feedback"]["id"]
     comparison_id = changed["comparison"]["id"]
+    original_id = first["comparison"]["id"]
+    assert comparison_id != original_id
     assert changed["comparison"]["is_current"]
     assert changed["comparison"]["artifact"]["sha256"] == first["comparison"]["artifact"]["sha256"]
-    assert not changed["feedback"][feedback_id]["applies_to_current_run"]
-    with pytest.raises(ProjectError, match="相同的参考图和源图区域"):
+    assert changed["feedback"] == {}
+    restored = ProjectStore().get_comparison(root, original_id)
+    assert restored["comparison"] == first["comparison"]
+    assert restored["feedback"] == {feedback_id: added["feedback"]}
+    assert ProjectStore().get_comparison(root, comparison_id) == changed
+    with pytest.raises(ProjectError, match="裁切区域的当前对照"):
         store.update_feedback(root, changed["revision"], feedback_id, "resolved", "已复查", comparison_id)
+
+
+def test_existing_comparison_is_reused_for_its_crop_and_keeps_its_feedback(project, monkeypatch):
+    store, context = project
+    root = context["project_root"]
+    legacy_id = "comparison-" + spec_sha256(["sample", "guide"])
+    original_build = comparisons.build_comparison
+
+    def build_with_legacy_id(project_root, _select_id, *args, **options):
+        return original_build(project_root, lambda reference, artifact: legacy_id, *args, **options)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(comparisons, "build_comparison", build_with_legacy_id)
+        first = compare(store, context)
+    assert first["comparison"]["id"] == legacy_id
+    added = give_feedback(store, first)
+    other = compare(store, added, artifact_region=[2, 0, 4, 3])["comparison"]
+    assert other["id"] != legacy_id
+    assert store.get_comparison(root, legacy_id)["comparison"] == first["comparison"]
+
+    later = record_sample_run(store, store.context(root), "second", (30, 90, 120, 255))
+    updated = compare(store, later)
+    assert updated["comparison"]["id"] == legacy_id
+    saved_other = store.get_comparison(root, other["id"])["comparison"]
+    assert saved_other == other | {"is_current": False}
+    resolved = store.update_feedback(root, updated["revision"], added["feedback"]["id"],
+                                     "resolved", "已复查原区域", legacy_id)
+    assert resolved["feedback"]["applies_to_current_run"]
+
+
+def test_full_comparison_is_stable_when_artifact_size_changes(project):
+    store, context = project
+    root = context["project_root"]
+    first = store.compare_component(root, context["revision"], "sample", "guide")
+    explicit = store.compare_component(root, first["revision"], "sample", "guide",
+                                       reference_region=[0, 0, 12, 10], artifact_region=[0, 0, 8, 6])
+    assert explicit["comparison"]["id"] == first["comparison"]["id"]
+    added = give_feedback(store, explicit)
+
+    resized = store.define_component(root, added["revision"], "sample", "样片", {
+        "program_id": "drawing", "width": 10, "height": 9,
+    })
+    later = record_sample_run(store, resized, "second", (30, 90, 120, 255))
+    second = store.compare_component(root, later["revision"], "sample", "guide")
+    assert second["comparison"]["id"] == first["comparison"]["id"]
+    assert second["comparison"]["artifact"]["region_source_xywh"] == [0, 0, 10, 9]
+    resolved = store.update_feedback(root, second["revision"], added["feedback"]["id"],
+                                     "resolved", "已复查新尺寸的整图", second["comparison"]["id"])
+    assert resolved["feedback"]["applies_to_current_run"]
 
 
 def test_comparison_stops_matching_when_the_registered_reference_digest_changes(project):

@@ -302,7 +302,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
                                         reference_coordinate_size: list[StrictInt] | None = None,
                                         artifact_region: list[StrictInt] | None = None, reference_scale: StrictFloat = 1.0,
                                         artifact_scale: StrictFloat = 1.0) -> list[Any]:
-        """对照当前组件产物与参考，按组件和参考的稳定标识覆盖当前检查图；region=[x,y,width,height]，倍率和参考坐标基准显式指定。"""
+        """对照当前组件产物与参考，按组件、参考和两侧实际裁切区域保存。相同区域的复查更新原对照，其他区域各自保存。region=[x,y,width,height]。"""
         result = await asyncio.to_thread(projects.compare_component, project_root, expected_revision, component_id,
                                         reference_id, reference_region, reference_coordinate_size,
                                         artifact_region, reference_scale, artifact_scale)

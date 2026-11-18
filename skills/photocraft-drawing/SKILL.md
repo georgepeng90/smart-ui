@@ -1,11 +1,13 @@
 ---
 name: photocraft-drawing
-description: 使用 PhotoCraft 执行项目 Python 程序，制作可编辑 .pcraft 组件，检查保存重开并修改指定节点。用于基础组件制作与源文件编辑；已有资产排版使用 page-composition，独立 ICON 生图使用 icon-assets。
+description: 使用 PhotoCraft 为新设计或定稿图素制作可编辑的基础 UI 组件，执行项目 Python 程序，验证保存重开并修改指定节点。已有资产排版使用 page-composition，独立 ICON 图像使用 icon-assets。
 ---
 
 # 使用 PhotoCraft 制作与修改组件
 
 先读取项目上下文、参考和现有程序。通过 [reference-style](../reference-style/SKILL.md) 明确证据与适用规则。根据接手的人需要单独修改的内容[选择图层和可编辑属性](../../docs/editable-component-artwork.md#按接手后的修改选择做法)，再按[绘制程序约定](../../docs/drawing-programs.md)编写程序。动态文字保留在页面的文字节点。
+
+参考风格做新设计时，用提炼出的规则指导组件设计。按定稿制作图素时，用指定原图各关键部位的观察指导绘制，按原图还原可见轮廓、明暗过渡、高光、阴影、材质和纹理。共享参数和程序可以复用，原图上表现不同的部位按各自的依据绘制。
 
 新建组件前用 `project_search_reusable` 查同用途控件和图素，已有候选满足需求时直接引用。
 
@@ -14,6 +16,8 @@ description: 使用 PhotoCraft 执行项目 Python 程序，制作可编辑 .pcr
 3. 首次编写或需要诊断计划时，用 `project_plan_component` 检查原生形状、分组、像素节点、效果及蒙版。`project_draw_component` 本身会执行程序并严格预检；已明确的参数调整无需为了固定顺序重复单独预检。预检不代表文件已经生成。
 4. 用 `project_draw_component` 制作。局部反馈仅选择相关稳定 key；省略 `layers` 更新全部。当前画布尺寸或节点结构变化使用新组件 ID。
 5. 查看[发布检查](../../docs/photocraft-contract.md#执行与失败)结果，用实际 PNG 核对目标尺寸和背景下的轮廓、留白、状态及外扩效果边界。需要诊断源文件或定位编辑属性时，可按需查看 `editable` 视图。首次采用一种画法或编辑入口存疑时，用代表样片的副本[试改约定的属性](../../docs/editable-component-artwork.md#保存源文件并验证交接)。
+
+按定稿制作时，交付前以目标显示尺寸为基准，将当前成品与原图的对应区域缩放到可比尺度，逐处核对各图素的关键部位，必要时等比放大查看。拆成多层的效果还要按实际层序组合后检查。代表样片用于校准共用画法。记录当前成品的剩余差异，尚未解决的反馈保持开放。
 
 首次制作先校准少量代表组件，再用同一程序与共用参数扩展。图文关系需要验证时，复用组件预览或正式资产组合一个典型区域，不提前制作完整业务页面。已有代表样片能覆盖当前需求且对应当前输入时直接复用。
 

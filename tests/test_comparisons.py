@@ -15,6 +15,10 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def comparison_id(reference, artifact):
+    return "example"
+
+
 @pytest.fixture
 def inputs(tmp_path):
     reference_path = tmp_path / "reference.png"
@@ -44,7 +48,7 @@ def test_comparison_uses_source_regions_and_independent_display_scales(tmp_path,
     before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in source_paths]
 
     result = build_comparison(
-        str(tmp_path), "example", reference, run,
+        str(tmp_path), comparison_id, reference, run,
         reference_region=[1, 1, 2, 2], reference_coordinate_size=[4, 6], reference_scale=3,
         artifact_region=[1, 2, 40, 12], artifact_scale=0.5,
     )
@@ -100,7 +104,7 @@ def test_changed_source_hash_prevents_comparison(tmp_path, inputs, target):
         image.save(source)
 
     with pytest.raises(ValueError, match="SHA-256"):
-        build_comparison(str(tmp_path), "example", reference, run)
+        build_comparison(str(tmp_path), comparison_id, reference, run)
     assert not (tmp_path / "smart-ui" / "previews" / "comparisons").exists()
 
 
@@ -131,7 +135,7 @@ def test_decode_uses_the_same_bytes_as_hash_check(tmp_path, inputs, monkeypatch,
 
     monkeypatch.setattr(comparisons, "SOURCE_SNAPSHOT_MEMORY_LIMIT", memory_limit)
     monkeypatch.setattr(comparisons, "_open_image", replace_reference_during_decode)
-    result = build_comparison(str(tmp_path), "example", reference, run)
+    result = build_comparison(str(tmp_path), comparison_id, reference, run)
 
     assert result["reference"]["sha256"] == sha256(source_path)
     with Image.open(result["images"]["reference"]["path"]) as image:
@@ -151,7 +155,7 @@ def test_ineligible_inputs_are_rejected(tmp_path, inputs, field, value, message)
         run[field] = value
 
     with pytest.raises(ValueError, match=message):
-        build_comparison(str(tmp_path), "example", reference, run)
+        build_comparison(str(tmp_path), comparison_id, reference, run)
 
 
 @pytest.mark.parametrize("options, message", [
@@ -173,12 +177,12 @@ def test_ineligible_inputs_are_rejected(tmp_path, inputs, field, value, message)
 ])
 def test_invalid_options_fail_without_clipping_or_creating_outputs(tmp_path, inputs, options, message):
     with pytest.raises(ValueError, match=message):
-        build_comparison(str(tmp_path), "example", *inputs, **options)
+        build_comparison(str(tmp_path), comparison_id, *inputs, **options)
     assert not (tmp_path / "smart-ui" / "previews" / "comparisons").exists()
 
 
 def test_same_id_replaces_comparison_after_successful_staging(tmp_path, inputs, monkeypatch):
-    original = build_comparison(str(tmp_path), "example", *inputs)
+    original = build_comparison(str(tmp_path), comparison_id, *inputs)
     save = Image.Image.save
 
     def fail_artifact(image, path, *args, **kwargs):
@@ -189,11 +193,11 @@ def test_same_id_replaces_comparison_after_successful_staging(tmp_path, inputs, 
     with monkeypatch.context() as patch:
         patch.setattr(Image.Image, "save", fail_artifact)
         with pytest.raises(OSError, match="无法写入产物裁切图"):
-            build_comparison(str(tmp_path), "example", *inputs, reference_scale=2)
+            build_comparison(str(tmp_path), comparison_id, *inputs, reference_scale=2)
     for info in original["images"].values():
         assert sha256(Path(info["path"])) == info["sha256"]
 
-    updated = build_comparison(str(tmp_path), "example", *inputs, reference_scale=2)
+    updated = build_comparison(str(tmp_path), comparison_id, *inputs, reference_scale=2)
     assert updated["id"] == original["id"]
     assert updated["images"]["comparison"]["path"] == original["images"]["comparison"]["path"]
     assert updated["images"]["comparison"]["sha256"] != original["images"]["comparison"]["sha256"]

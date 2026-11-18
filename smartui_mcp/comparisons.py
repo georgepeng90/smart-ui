@@ -1,5 +1,6 @@
 """将登记参考图与当前绘制产物生成并排对照。"""
 
+from collections.abc import Callable
 from contextlib import contextmanager
 import hashlib
 import math
@@ -36,6 +37,12 @@ def _check_scale(scale: float, label: str) -> None:
         raise ValueError(f"{label} 必须是有限正数")
     if scale > MAX_OUTPUT_EDGE:
         raise ValueError(f"{label} 超过上限 {MAX_OUTPUT_EDGE}")
+
+
+def source_crop_key(image: dict) -> list[int] | None:
+    """按实际裁切像素识别局部区域，整图在源尺寸变化后仍属于同一检查范围。"""
+    region = image["region_source_xywh"]
+    return None if region == [0, 0, *image["source_size"]] else region
 
 
 @contextmanager
@@ -133,7 +140,7 @@ def _compose(reference: Image.Image, artifact: Image.Image, ref: dict, out: dict
 
 def build_comparison(
     project_root: str,
-    comparison_id: str,
+    select_id: Callable[[dict, dict], str],
     reference: dict,
     run: dict,
     *,
@@ -144,15 +151,13 @@ def build_comparison(
     artifact_scale: float = 1.0,
     paths=None,
     commit=None,
-) -> dict:
-    """保存当前对照的 RGBA 裁切图和总览，返回文件摘要及坐标。"""
+):
+    """按实际裁切信息选定对照 ID，发布图片，再提交对照记录。"""
     from .image_assets import _replace_directory
 
     root = _absolute_path(project_root, "project_root")
     if not root.is_dir():
         raise ValueError(f"project_root 必须是目录：{root}")
-    if not isinstance(comparison_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", comparison_id):
-        raise ValueError("comparison_id 必须以英文字母或数字开头，且只能包含英文字母、数字、点、下划线和连字符")
     if run.get("status") not in ("drawn", "verified"):
         raise ValueError(f"只有绘制成功的记录可用于对照：run_id={run.get('run_id')}")
     preview_hash = run.get("artifact_hashes", {}).get("preview")
@@ -169,7 +174,6 @@ def build_comparison(
     reference_path = _absolute_path(reference["source"], "reference.source")
     artifact_path = _absolute_path(run["preview"], "run.preview")
     layout = ProjectLayout(root, paths)
-    destination = layout.persistent(f"previews/comparisons/{comparison_id}")
     temp_dir = _temporary_directory(root)
 
     with (
@@ -177,6 +181,10 @@ def build_comparison(
                      coordinate_size=reference_coordinate_size, expected_size=[reference["width"], reference["height"]]) as (ref_image, ref),
         _crop_source(artifact_path, preview_hash, artifact_region, artifact_scale, label="产物预览图", temp_dir=temp_dir) as (out_image, out),
     ):
+        comparison_id = select_id(ref, out)
+        if not isinstance(comparison_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", comparison_id):
+            raise ValueError("comparison_id 必须以英文字母或数字开头，且只能包含英文字母、数字、点、下划线和连字符")
+        destination = layout.persistent(f"previews/comparisons/{comparison_id}")
         comparison, display = _compose(ref_image, out_image, ref, out)
         with comparison, TemporaryDirectory(dir=temp_dir) as temp:
             staging = Path(temp) / "current"

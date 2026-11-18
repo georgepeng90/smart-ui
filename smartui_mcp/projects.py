@@ -350,7 +350,7 @@ class ProjectStore:
                           reference_coordinate_size: list[int] | None = None,
                           artifact_region: list[int] | None = None, reference_scale: float = 1.0,
                           artifact_scale: float = 1.0) -> dict:
-        from .comparisons import build_comparison
+        from .comparisons import build_comparison, source_crop_key
 
         root = self._root(project_root)
         for value, field in ((component_id, "component_id"), (reference_id, "reference_id")):
@@ -362,7 +362,17 @@ class ProjectStore:
             if reference_id not in state["references"]:
                 raise ProjectError(f"未登记参考：{reference_id}")
             nodes, rules = plan["nodes"], snapshot["style"]["rules"]
-            comparison_id = "comparison-" + spec_sha256([component_id, reference_id])
+
+            def select_id(reference, artifact):
+                reference_crop = source_crop_key(reference)
+                artifact_crop = source_crop_key(artifact)
+                for comparison_id, saved in state["comparisons"].items():
+                    if (saved["component_id"] == component_id and saved["reference"]["id"] == reference_id
+                            and source_crop_key(saved["reference"]) == reference_crop
+                            and source_crop_key(saved["artifact"]) == artifact_crop):
+                        return comparison_id
+                return "comparison-" + spec_sha256([component_id, reference_id, reference_crop, artifact_crop])
+
             def commit(record):
                 record.update(component_id=component_id,
                               created_at=datetime.now(timezone.utc).isoformat(),
@@ -371,14 +381,15 @@ class ProjectStore:
                                                             "program_id", "program_sha256")},
                               node_keys=[node["key"] for node in nodes],
                               rule_ids=[rule["id"] for rule in rules if isinstance(rule.get("id"), str)])
+                comparison_id = record["id"]
                 state["comparisons"][comparison_id] = record
-                return self._write(root, state)
+                return comparison_id, self._write(root, state)
 
-            updated = build_comparison(str(root), comparison_id, state["references"][reference_id], run,
-                                       reference_region=reference_region,
-                                       reference_coordinate_size=reference_coordinate_size,
-                                       artifact_region=artifact_region, reference_scale=reference_scale,
-                                       artifact_scale=artifact_scale, paths=state["paths"], commit=commit)
+            comparison_id, updated = build_comparison(str(root), select_id, state["references"][reference_id], run,
+                                                      reference_region=reference_region,
+                                                      reference_coordinate_size=reference_coordinate_size,
+                                                      artifact_region=artifact_region, reference_scale=reference_scale,
+                                                      artifact_scale=artifact_scale, paths=state["paths"], commit=commit)
             return self._comparison_result(updated, comparison_id)
 
     def create_visual_check(self, project_root: str, expected_revision: str, check_id: str, items: list[dict],

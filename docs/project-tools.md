@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.16.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.17.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -122,9 +122,9 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 
 `project_compare_component` 使用组件的当前成功预览和已登记参考。参考区域和产物区域均为 `[x, y, width, height]`，省略时取整图。参考区域可按完整缩略图测量，传入 `reference_coordinate_size` 后映射到原图坐标。产物区域以预览像素为坐标。双方分别裁切，再按显式倍率等比缩放，默认均为 1。
 
-对照按组件和参考的组合保留当前记录，包含参考和产物裁切及棋盘背景拼图。每份裁切快照和拼图每边最多 8192 像素、每张最多 3200 万像素。工具校验来源和保存文件的摘要。用 `project_get_comparison` 按返回的 `comparison_id` 查看已有对照。对同一组件和参考再次创建对照会更新该记录。
+同一组件与同一参考可以保存多个部位的对照。每对参考区域与产物区域单独保存两张裁切图和一张棋盘背景拼图。用返回的 `comparison_id` 调用 `project_get_comparison` 可以查看该部位的对照和反馈。重绘后按相同区域重建对照会更新该部位的记录。显示倍率只影响拼图的显示尺寸。每份裁切快照和拼图每边最多 8192 像素、每张最多 3200 万像素。工具校验来源和保存文件的摘要。
 
-`project_record_feedback` 分别记录可见现象 `observation` 和建议改动 `suggested_change`。有依据时用 `target_nodes` 关联计划节点 key，用 `rule_ids` 关联风格规则。用 `project_update_feedback` 更新当前状态和复查说明。`open` 表示继续跟进，`resolved` 表示偏差已修正，`dismissed` 表示结束跟进。记录和复查反馈前，先确认对照对应当前产物。复查沿用同一组件、同一参考原图和同一原图区域，标记 `resolved` 还要求产物预览摘要发生变化。复查状态只保留当前结论。用户风格确认由用户明确给出。
+`project_record_feedback` 分别记录可见现象 `observation` 和建议改动 `suggested_change`。有依据时用 `target_nodes` 关联计划节点 key，用 `rule_ids` 关联风格规则。用 `project_update_feedback` 更新当前状态和复查说明。`open` 表示继续跟进，`resolved` 表示偏差已修正，`dismissed` 表示结束跟进。复查时，沿用该部位的 `comparison_id`，核对原参考图及其区域，再查看当前产物的对应区域。标记 `resolved` 还要求产物预览摘要发生变化。复查状态只保留当前结论。用户风格确认由用户明确给出。
 
 ## 多产物视觉检查
 

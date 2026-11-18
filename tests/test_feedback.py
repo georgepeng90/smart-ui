@@ -103,7 +103,7 @@ def test_resolving_requires_changed_artifact_bytes_for_the_current_comparison(st
     before = deepcopy(state)
     with pytest.raises(ProjectError, match="预览图 SHA-256 已变化"):
         update_feedback(state, record["id"], "resolved", "已经复查", "original", "model")
-    with pytest.raises(ProjectError, match="原组件和参考的当前对照"):
+    with pytest.raises(ProjectError, match="裁切区域的当前对照"):
         update_feedback(state, record["id"], "resolved", "已经复查", "other", "model")
     assert state == before
 

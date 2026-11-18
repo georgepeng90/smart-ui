@@ -68,7 +68,7 @@ def update_feedback(state: dict, feedback_id: str, status: str, comment: str,
     record = feedback[feedback_id]
     comparison = _comparison(_collection(state, "comparisons"), comparison_id)
     if comparison_id != record["comparison_id"]:
-        raise ProjectError(f"复查反馈 {feedback_id} 必须使用原组件和参考的当前对照：{record['comparison_id']}")
+        raise ProjectError(f"复查反馈 {feedback_id} 必须使用原组件、参考图和裁切区域的当前对照：{record['comparison_id']}")
     reference = comparison["reference"]
     if (reference["sha256"] != record["reference_sha256"]
             or reference["region_source_xywh"] != record["reference_region_source_xywh"]):
