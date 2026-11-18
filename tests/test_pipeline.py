@@ -1,12 +1,15 @@
 """验证原生制作、局部修改范围和失败时保留已发布源文件。"""
 
+import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from smartui_mcp.client import PhotoCraftCapabilityError, PhotoCraftClient
+from smartui_mcp.photocraft import apply_plan, editable_parts, read_document
 from smartui_mcp.pipeline import draw_component, plan_component
 from smartui_mcp.projects import ProjectError, ProjectStore
 
@@ -22,6 +25,23 @@ def build(parameters, spec, component_id):
         {"key": "detail", "name": "细节", "kind": "shape", "parent": "assembly",
          "properties": {"visible": spec.get("detail_visible", True)}, "shape": {
             "kind": "ellipse", "rect": [12, 12, 10, 10], "fill": spec.get("detail_color", "#abcdef")}}
+    ]}
+'''
+
+EDITABLE_PROGRAM = '''
+def build(parameters, spec, component_id):
+    gradient = {"gradient": {"stops": [[0, "#123456"], [1, "#789abc"]]}}
+    return {"schema_version": 1, "width": 96, "height": 64, "nodes": [
+        {"key": "assembly", "name": "组件分组", "kind": "group", "parent": "root"},
+        {"key": "outline", "name": "只有描边", "kind": "shape", "parent": "assembly", "shape": {
+            "kind": "ellipse", "rect": [68, 21, 24, 24], "fill": None,
+            "stroke": {"width": 2, "color": gradient}}},
+        {"key": "ink", "name": "主体", "kind": "shape", "parent": "assembly", "shape": {
+            "kind": "roundedRect", "rect": [5, 5, 45, 45], "radii": spec.get("radius", 5),
+            "fill": gradient, "stroke": {"width": 2, "color": "#112233"}}, "effects": [
+                {"kind": "dropShadow", "params": {"size": 2}},
+                {"kind": "innerGlow", "params": {}},
+                {"kind": "dropShadow", "params": {"size": 5}}]}
     ]}
 '''
 
@@ -130,17 +150,20 @@ def test_real_creation_keeps_only_current_artifact(project):
     assert Path(run["document"]) == root / "smart-ui/sources/sample.pcraft"
     assert "source_snapshot_path" not in run
     assert "operations_path" not in run
-    assert run["backend"]["name"] == "photocraft"
-    assert run["backend"]["build_verification"] in ("verified", "unverified")
-    assert run["backend"]["missing_capabilities"] == []
+    cli = PhotoCraftClient().cli_path
+    version = subprocess.check_output([str(cli), "--version"], encoding="utf-8", timeout=60).strip()
+    with cli.open("rb") as executable:
+        digest = hashlib.file_digest(executable, "sha256").hexdigest()
+    assert run["backend"] == {"name": "photocraft", "version": version,
+                              "sha256": digest, "missing_capabilities": []}
     assert set(run["layer_ids"]) == {"assembly", "ink", "detail"}
     assert not list((root / ".smartui/temp").iterdir())
 
 
-def test_missing_capability_preserves_actual_build_in_diagnostic(project):
+def test_missing_capability_preserves_cli_identity_in_diagnostic(project):
     store, context = project
     backend = {"version": "photocraft-cli 0.20.2", "cli_path": str(Path(context["project_root"]) / "cli.exe"),
-               "sha256": "0" * 64, "build_verification": "unverified", "missing_capabilities": ["method:doc.save"]}
+               "sha256": "0" * 64, "missing_capabilities": ["method:doc.save"]}
 
     class IncompatibleClient:
         def session(self, root, trace):
@@ -231,3 +254,49 @@ def test_failed_update_preserves_source_and_latest_success(project):
     assert updated["latest_run"] == old
     assert Path(old["document"]).read_bytes() == source
     assert "runs" not in updated
+
+
+@pytest.fixture
+def editable_source(project):
+    store, context = project
+    context = store.save_program(context["project_root"], context["revision"], "drawing", "组件程序", "", EDITABLE_PROGRAM)
+    return store, record_source(store, context)
+
+
+def test_published_editable_parts_match_plan(editable_source):
+    _, context = editable_source
+    published = context["data"]["components"]["sample"]["latest_run"]
+    nodes = {node["id"]: node for node in read_document(published["document"])["nodes"]}
+    parts = {key: editable_parts(nodes[native_id]) for key, native_id in published["layer_ids"].items()}
+    assert parts["assembly"] == {"effects": [], "effects_enabled": True}
+    assert parts["outline"] == {"fill": None, "stroke": "Gradient", "effects": [], "effects_enabled": True}
+    assert parts["ink"] == {"fill": "Gradient", "stroke": "Solid",
+                             "effects": ["DropShadow", "InnerGlow", "DropShadow"], "effects_enabled": True}
+
+
+@pytest.mark.parametrize("command, params, reason", [
+    ("shape.edit", {"fill": None}, "ink 的可编辑填充"),
+    ("shape.edit", {"fill": "#123456"}, "ink 的可编辑填充"),
+    ("shape.edit", {"stroke": None}, "ink 的可编辑描边"),
+    ("shape.edit", {"stroke": {"color": {"gradient": {"stops": [[0, "#000000"], [1, "#FFFFFF"]]}}}}, "ink 的可编辑描边"),
+    ("layer.layerStyle.replace", {"effects": []}, "ink 的可编辑效果类型或顺序"),
+    ("layer.layerStyle.replace", {"effects": [{"kind": name} for name in ("innerGlow", "dropShadow", "dropShadow")]},
+     "ink 的可编辑效果类型或顺序"),
+    ("layer.setEffectsVisible", {"visible": False}, "ink 的可编辑效果.*未启用"),
+])
+def test_native_editable_part_mismatch_blocks_publication(editable_source, monkeypatch, command, params, reason):
+    store, context = editable_source
+    old = context["data"]["components"]["sample"]["latest_run"]
+    source = Path(old["document"]).read_bytes()
+    context = change_spec(store, context, {"radius": 9})
+
+    def apply_with_wrong_native_result(session, *args, **kwargs):
+        ids = apply_plan(session, *args, **kwargs)
+        session.call("engine.execute", {"command": command, "params": {"layer": ids["ink"], **params}})
+        return ids
+
+    monkeypatch.setattr("smartui_mcp.pipeline.apply_plan", apply_with_wrong_native_result)
+    with pytest.raises(RuntimeError, match=reason):
+        draw_component(context["project_root"], context["revision"], "sample", ["ink"], store=store)
+    assert store.context(context["project_root"]) == context
+    assert Path(old["document"]).read_bytes() == source

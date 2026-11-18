@@ -10,7 +10,7 @@ import pytest
 import zstandard
 
 from smartui_mcp.client import PhotoCraftClient
-from smartui_mcp.photocraft import NativeDocumentError, apply_plan, read_document
+from smartui_mcp.photocraft import NativeDocumentError, apply_plan, editable_parts, read_document
 from smartui_mcp.programs import ProgramError
 
 
@@ -76,6 +76,21 @@ def test_real_vector_mask_replaced_and_removed(tmp_path, client):
         session.call("doc.save", {"path": "unmasked.pcraft"})
     assert read_document(tmp_path / "masked.pcraft")["nodes"][0]["manifest"]["vector_mask"] is not None
     assert read_document(tmp_path / "unmasked.pcraft")["nodes"][0]["manifest"]["vector_mask"] is None
+
+
+def test_read_native_grayscale_mask_with_pixels(tmp_path, client):
+    with client.session(tmp_path) as session:
+        session.call("doc.new", {"width": 24, "height": 24, "background": "transparent"})
+        session.call("engine.execute", {"command": "layer.newFillLayer.solidColor", "params": {"color": "#112233"}})
+        session.call("engine.execute", {"command": "paint.stroke", "params": {
+            "target": "mask", "color": "#000000", "size": 4, "points": [[5, 5], [15, 15]]}})
+        session.call("doc.save", {"path": "masked-fill.pcraft"})
+    inspection = read_document(tmp_path / "masked-fill.pcraft")
+    fill = next(node for node in inspection["nodes"] if node["kind"] == "fill")
+    surface = fill["manifest"]["mask"]["surface"]
+    assert surface["tiles"]
+    assert all(inspection["objects"][f"tiles/{tile['hash']}.zst"]["bytes"] == 256 * 256 for tile in surface["tiles"])
+    assert editable_parts(fill) == {"effects": [], "effects_enabled": True}
 
 
 def native_file(tmp_path, mutate=None, *, missing=False, corrupt=False):

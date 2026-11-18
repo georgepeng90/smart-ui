@@ -2,6 +2,36 @@
 
 正式 PNG 资产、页面布局和浏览器渲染共享同一份 `geometry`。布局实例的宽高表示内容区域的目标尺寸；PNG 可以在内容区域之外保留描边、阴影或光晕。内容区域是制作时明确指定的布局主体，不是非透明像素包围盒，也不是文字安全区，不能由透明度自动推断。
 
+## 为切片伸缩制作 UI 图形
+
+先确定组件要改变哪个方向的尺寸。仅随文案变宽的按钮或固定高度的条形控件，可以保留左右端部，只伸缩横向中段。宽度固定、只变高度的控件可采用纵向三切片。宽高都可变化的弹窗和面板用九宫格，四角固定，上下边沿横向伸缩，左右边沿纵向伸缩，中心沿两轴变化。 [游戏 UI 资产交接指南](https://github.com/miltoncandelero/game-ui-assets-guide#exporting)、[游戏 UI 九宫格的分区示例](https://create.roblox.com/docs/ui/9-slice)
+
+**先圈定固定区域，再缩短可伸缩的中段。** 切线放在圆角、斜角、端帽、角花和局部高光结束的位置之外。固定区域保留这些细节，以及外描边、阴影、光晕和必要的透明留边。切线两侧的边缘和填色应能自然接上。可编辑源文件和预览保留设计宽度，导出时只缩短中段。例如一块横向伸缩的底图，左右端各占 24 像素，中间保留 4 列相同的像素，导出宽度就是 52 像素。控件的最小显示宽度还取决于固定端部、文案、图标、内边距及交互区域。 [Unity Sprite Editor 的边界设置](https://docs.unity.com/en-us/engine/6000.0/manual/unity2d/sprite/9-slice/set-sprite-9slicing)、[游戏 UI 的尺寸与边界交接](https://github.com/miltoncandelero/game-ui-assets-guide#frames-dialogs-and-borders)
+
+**根据填充和纹理选择中段。** 纯色、沿伸缩轴取色一致的边沿，以及只在垂直于伸缩轴的方向变化的渐变，通常适合拉伸。比如横向三切片的按钮可以只保留少量列，保留每列完整的上下渐变。横向光斑、斜向渐变或跨两轴的高光会随相应方向的拉伸改变形状或色变速度。需要保留原形的装饰可独立叠放。需要保持颗粒或花纹尺寸时，使用能无缝衔接的纹理周期，并在支持平铺的运行端检查接缝和尾块处理。按可用渲染方式决定用拉伸、平铺还是独立图层。 [Godot 的分轴拉伸和平铺模式](https://docs.godotengine.org/en/stable/classes/class_ninepatchrect.html#enumerations)、[Unreal UMG 的 Box 和 Border](https://dev.epicgames.com/documentation/en-us/unreal-engine/umg-styling-in-unreal-engine#setting-image-states)
+
+**依据实际采样检查切线和最小尺寸。** 在最小、常用和最大显示尺寸下，用正式资产、实际背景和运行端采用的纹理采样设置查看结果。横纵双向伸缩的控件还要单独拉宽、拉高，检查边角变形、描边断线、透明边裁切、切缝串色和纹理变形。使用线性过滤时，切线附近可能混入相邻像素的颜色，图集中的素材还要检查实际打包后的采样。Android Draw 9-patch 为其格式建议保留足够大的拉伸区和邻接安全像素，libGDX 的 `NinePatch` 则在使用线性过滤时调整拉伸区域的采样坐标。为实际纹理和输出端留下经预览验证的中段与安全空间。 [Android Draw 9-patch](https://developer.android.com/studio/write/draw9patch)、[libGDX NinePatch 的采样实现](https://github.com/libgdx/libgdx/blob/master/gdx/src/com/badlogic/gdx/graphics/g2d/NinePatch.java)
+
+### 不同引擎如何解释切片
+
+| 工具 | 配置与渲染方式 |
+| --- | --- |
+| Unity | 从 Sprite 的四边定义固定区域，uGUI 支持拉伸或平铺。 [Unity uGUI 的导入与验收](#unity-ugui-的导入与验收) |
+| Android Draw 9-patch | `.9.png` 的边缘标记分别描述可拉伸区和可选的内容区。编辑器可预览不同大小，标出有风险的拉伸区。 [Android Draw 9-patch](https://developer.android.com/studio/write/draw9patch) |
+| libGDX | `NinePatch` 可对按钮等 Scene2D 控件绘制固定边角与可伸缩区。TexturePacker 可读取 `.9.png` 的切片标记和内容内边距标记。 [libGDX NinePatch](https://libgdx.com/wiki/graphics/2d/ninepatches)、[libGDX TexturePacker](https://libgdx.com/wiki/tools/texture-packer#ninepatches) |
+| Godot | `NinePatchRect` 用四边的 `patch_margin` 标出固定区域，可为两个轴分别选择拉伸、平铺，或通过 `Tile Fit` 调整平铺块的尺寸，使每块都能完整显示。 [Godot NinePatchRect](https://docs.godotengine.org/en/stable/classes/class_ninepatchrect.html) |
+| Unreal UMG | Slate Brush 的 `Box` 拉伸边和中间，`Border` 平铺边并省略中心。固定部分由 `Margin` 与 `Image Size` 共同决定。 [Unreal UMG 样式](https://dev.epicgames.com/documentation/en-us/unreal-engine/umg-styling-in-unreal-engine#setting-image-states) |
+
+### Unity uGUI 的导入与验收
+
+- **在 Unity 中手工导入。** 将切片 PNG 导入为 `Sprite (2D and UI)`，将 Mesh Type 设为 `Full Rect`，在 Sprite Editor 的 Border 字段填写从实际 PNG 四边向内量取的像素数。`Sprite.border` 的分量顺序为左、下、右、上。uGUI `Image` 的 `Sliced` 拉伸边和中心，`Tiled` 重复对应区域。用 `RectTransform` 的目标宽高检查变化。 [Unity Sprite 切片设置](https://docs.unity.com/en-us/engine/6000.0/manual/unity2d/sprite/9-slice/set-sprite-9slicing)、[Sprite.border](https://docs.unity.com/en-us/engine/6000.0/script-reference/unityengine/sprite/border)、[uGUI Image.Type](https://docs.unity3d.com/Packages/com.unity.ugui@2.0/api/UnityEngine.UI.Image.Type.html)
+- **通过 SmartUI 构建。** 公开构建流程在 `apply` 时从源 PNG 生成受管副本 `Assets/SmartUI/Sprites/<id>.png`。Unity 将 Single、Full Rect 和 100 Pixels Per Unit（每单位像素数，PPU）等导入设置保存到副本的 `.meta`。切片 Sprite 的 Border 由导出资产的 `geometry.borders` 按左、下、右、上自动设置，构建校验受管 Sprite 的实际尺寸、边距和切片 PPU，并将切片图像节点设为 `Sliced`。 [Unity 接入工具](unity-tools.md)
+- **按目标尺寸排版。** uGUI 绘制切片时，固定边先按 `源边距 × Canvas Reference PPU ÷ (Sprite PPU × Image PPU Multiplier)` 换算为布局单位。例如 Canvas Reference PPU 为 100、Multiplier 为 1 时，24 像素的边距配 Sprite PPU 200，占 12 个布局单位。`SetNativeSize` 用实际样片的 `Sprite.rect` 宽高除以 `Sprite PPU ÷ Canvas Reference PPU` 设置 `RectTransform.sizeDelta`，同时令 `anchorMax` 等于 `anchorMin`。这个计算独立于 Image PPU Multiplier，得到的是样片换算后的宽高。使用缩短中段的样片时，按设计指定的目标宽高排版。 [uGUI PPU 实现](https://github.com/Unity-Technologies/uGUI/blob/5e55142c416efc0440b44b1ea7e23811219ed57a/com.unity.ugui/Runtime/UGUI/UI/Core/Image.cs#L763-L782)、[SetNativeSize 实现](https://github.com/Unity-Technologies/uGUI/blob/5e55142c416efc0440b44b1ea7e23811219ed57a/com.unity.ugui/Runtime/UGUI/UI/Core/Image.cs#L891-L900)、[切片边距换算](https://github.com/Unity-Technologies/uGUI/blob/5e55142c416efc0440b44b1ea7e23811219ed57a/com.unity.ugui/Runtime/UGUI/UI/Core/Image.cs#L1180-L1192)
+- **核对最小显示尺寸。** uGUI 绘制时，如果某轴的尺寸小于换算后两侧固定边的总厚度，就按比例压缩该轴两侧的边。SmartUI 预览和 Unity 构建校验切片布局时要求目标中心在两个轴上都有正尺寸。检查时用内容框加上外扩得到完整目标图像尺寸。 [Unity 固定边压缩](https://github.com/Unity-Technologies/uGUI/blob/5e55142c416efc0440b44b1ea7e23811219ed57a/com.unity.ugui/Runtime/UGUI/UI/Core/Image.cs#L1507-L1536)、[SmartUI 伸缩模式与最小尺寸](#伸缩模式)
+- **图集与实机检查。** 双线性过滤会混合邻近像素，图集 `Padding` 可减少相邻素材串色。Unity 手册建议 Canvas UI 图集关闭 `Allow Rotation`。在目标设备上按实际图集的过滤、留边和平台压缩设置查看最窄、最矮和拉伸后的控件，留意细线、阴影和切缝。英文美术作者记录过顶边少留一行像素的情况。原尺寸下看不出异常，拉高后高光变成了宽带。 [Unity Sprite Atlas 手册](https://docs.unity.com/en-us/engine/6000.0/manual/unity2d/sprite/atlas/sprite-atlas-reference#packing)、[高光切线复盘](https://z3er1n.itch.io/ui-pack-vol1/devlog/1651971/v13-the-buttons-9-slice-border-has-been-wrong-since-v10)
+
+交接时注明实际 PNG 的切线、允许伸缩的方向、内容区域与外扩，以及已核对的显示尺寸和状态。
+
 ## 几何字段
 
 ```json
@@ -12,7 +42,7 @@
 }
 ```
 
-上述数值是用于说明非对称边距的合成示例，不是默认配置。所有源坐标都以完整导出 PNG 的左上角为原点，向右、向下为正，单位为整数像素。矩形采用左闭右开、上闭下开的范围。若导出进行了区域裁切，几何必须声明裁切后 PNG 的坐标，不能继续使用源画布坐标。
+上述数值是说明非对称边距的示例。几何坐标以相应区域或图像的左上角为原点，向右、向下为正，单位为整数像素，矩形采用左闭右开、上闭下开的范围。导出请求中的几何相对于裁切区域，导出资产的几何相对于实际 PNG。布局实例单独指定显示宽高。 [正式 PNG 导出](project-tools.md#正式-png-导出)
 
 | 字段 | 约束 |
 | --- | --- |

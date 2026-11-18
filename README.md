@@ -1,10 +1,10 @@
 # SmartUI PhotoCraft 本地制作插件
 
-SmartUI PhotoCraft v0.15.1 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
+SmartUI PhotoCraft v0.16.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
 
 ## 安装
 
-需要 Windows、Python 3.12 及以上、uv、正常安装的 PhotoCraft，以及支持本地 stdio MCP 的 Codex。已实测 PhotoCraft v0.20.1 构建 `327c4cc82`，可通过 [PhotoCraft 官方发布页](https://github.com/storytold/photocraft/releases/tag/v0.20.1)安装。服务查找正常安装位置或 PATH 中的 CLI；也可设置 `SMARTUI_PHOTOCRAFT_CLI` 为 CLI 的绝对路径。执行前检查实际必需接口与命令；其他构建标记为尚未验证，通过能力检查后可以执行。应用缺失、能力缺失或查询失败时明确报错，运行时不自动下载应用。
+需要 Windows、Python 3.12 及以上、uv、PhotoCraft，以及支持本地 stdio MCP 的 Codex。可从官方发布页安装 PhotoCraft。自定义 CLI 路径和检查本机可用功能的方法见制作接口文档。 [PhotoCraft 官方发布页](https://github.com/storytold/photocraft/releases)、[PhotoCraft 制作接口](docs/photocraft-contract.md)
 
 首次安装时，在本仓库根目录运行以下命令：
 
@@ -26,7 +26,9 @@ codex plugin add smartui-photocraft@smartui-local
 
 先用少量代表组件校准参考匹配度，必要时合成一个典型小区域。发现具体偏差且有可执行的改法时再修改。整页检查在实际页面任务中复用已有构建快照。检查与记录方法见[参考复现与视觉自审](docs/style-reproduction-validation.md)。
 
-源文件为 `.pcraft`。程序返回 PhotoCraft 原生形状、像素和分组节点的计划；保存重开后检查结果。更新时可用 `layers` 指定稳定节点 key，省略则更新全部。当前画布或节点结构变化需使用新组件 ID。项目程序是可信本机代码，独立进程不等同于安全沙箱。
+绘制程序返回形状、像素和分组节点的制作计划。工具用 PhotoCraft 创建或更新 `.pcraft`，在保存重开后核对结果。如何为后续修改选择图层、定位属性和交接源文件，见[游戏 UI 组件的可编辑制作与交接](docs/editable-component-artwork.md)。
+
+更新时可用 `layers` 指定稳定节点 key，省略则更新全部。当前画布或节点结构变化需使用新组件 ID。项目程序是可信本机代码，独立进程不等同于安全沙箱。
 
 `photocraft_status` 查询实际 CLI 和版本，`photocraft_inspect_document` 检查源文件，`photocraft_preview` 返回原尺寸 PNG。项目接口见[项目工具说明](docs/project-tools.md)，制作计划见[绘制程序约定](docs/drawing-programs.md)，后端边界见[PhotoCraft 接口](docs/photocraft-contract.md)。
 
@@ -38,7 +40,9 @@ codex plugin add smartui-photocraft@smartui-local
 
 `.smartui/` 是 Git 忽略的本机目录，保存缓存、临时文件、诊断、锁和 schema 升级迁移备份。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。其他成员取得业务项目提交后，可以用自己机器上的依赖继续制作。项目锁和 revision 检查当前目录的并发操作，跨分支冲突由团队在 Git 中处理。
 
-正式导出记录当前组件产物、来源区域、文件摘要及[伸缩几何](docs/asset-geometry.md)。页面布局按资产 ID 引用当前资产，支持九宫格、独立文本框和嵌套分组。容器可横排、竖排、叠放或使用局部坐标；共享边距、等距分布、内容宽度、弹性区域及文字基线用于保持布局关系。组件可声明文字区域、点击范围、动画中心和所需状态，由引用它的页面复用并检查。
+可伸缩组件可以交付紧凑的切片 PNG。切线选择与 Unity 验收见[切片制作指南](docs/asset-geometry.md)，样片尺寸和来源记录见[正式 PNG 导出](docs/project-tools.md#正式-png-导出)。
+
+页面布局按资产 ID 引用当前资产，支持九宫格、独立文本框和嵌套分组。容器可横排、竖排、叠放或使用局部坐标；共享边距、等距分布、内容宽度、弹性区域及文字基线用于保持布局关系。组件可声明文字区域、点击范围、动画中心和所需状态，由引用它的页面复用并检查。
 
 文字默认使用项目规范的固定字号。需要有限缩字时显式声明最小字号，工具先按可用空间换行，再按策略处理溢出；无法完整显示时明确报错。浏览器预览可显示内容框、可见边界、辅助线和基线，并报告几何与组件约定问题。`project_preview_layout_variants` 批量检查文案、画布和安全区组合，本机检查资料保存到 `.smartui/`，正式页面构建保存在项目资料目录的 `previews/`。
 

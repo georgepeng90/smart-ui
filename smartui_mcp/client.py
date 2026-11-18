@@ -14,8 +14,6 @@ import threading
 import time
 from uuid import uuid4
 
-VERIFIED_VERSION = "photocraft-cli 0.20.1 (327c4cc82, 2026-11-03)"
-VERIFIED_SHA256 = "e56a7ad28cc37b633015175e9e716e196d074c3581c22fe8724c1a2ae80c68ac"
 PREVIEW_METHODS = frozenset({"doc.open", "doc.render"})
 DRAW_METHODS = PREVIEW_METHODS | {
     "doc.new", "doc.inspect", "doc.save", "doc.close", "engine.execute", "engine.commands",
@@ -97,9 +95,7 @@ class PhotoCraftClient:
             raise PhotoCraftError(f"PhotoCraft --version 未返回版本：{cli_path}")
         with cli_path.open("rb") as executable:
             sha256 = hashlib.file_digest(executable, "sha256").hexdigest()
-        verified = (version, sha256) == (VERIFIED_VERSION, VERIFIED_SHA256)
-        backend = {"cli_path": str(cli_path), "version": version, "sha256": sha256,
-                   "build_verification": "verified" if verified else "unverified"}
+        backend = {"cli_path": str(cli_path), "version": version, "sha256": sha256}
         return PhotoCraftSession(backend, root, self.timeout)
 
     def status(self):

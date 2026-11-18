@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 import shutil
 
-from PIL import Image
+from PIL import Image, ImageCms
 import pytest
 
 from smartui_mcp.exports import prepare_exports, publish_exports
 from smartui_mcp.image_assets import register_image_file, verify_image_record
 from smartui_mcp.layout import ProjectLayout
+from smartui_mcp.slicing import image_patches
 
 
 def fixture(tmp_path):
@@ -47,6 +48,120 @@ def save_state(state, result):
     state["exports"][result["id"]] = result
     for item in result["items"]:
         state["images"][item["asset_id"]] = item["record"]
+
+
+def sample_fixture(tmp_path, mode, sample_size, *, icc_profile=None):
+    state, item, source = fixture(tmp_path)
+    left, right = (0, 0) if mode == "vertical" else (2, 2)
+    top, bottom = (0, 0) if mode == "horizontal" else (1, 2)
+    item["geometry"] = {"mode": mode, "content_rect": {"x": 1, "y": 1, "width": 6, "height": 4},
+                        "borders": {"left": left, "right": right, "top": top, "bottom": bottom}}
+    item["slice_sample_size"] = dict(zip(("width", "height"), sample_size))
+    with Image.new("RGBA", (12, 10)) as image:
+        for y in range(6):
+            row = top if sample_size[1] < 6 and top <= y < 6 - bottom else y
+            for x in range(8):
+                column = left if sample_size[0] < 8 and left <= x < 8 - right else x
+                image.putpixel((x + 2, y + 1), (column * 23, row * 37, column + row, (column + row) * 16))
+        image.save(source, icc_profile=icc_profile)
+    state["components"]["button"]["latest_run"]["artifact_hashes"]["preview"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    return state, item, source
+
+
+@pytest.mark.parametrize("mode,sample_size", [
+    ("horizontal", (5, 6)), ("vertical", (8, 4)), ("nine_slice", (5, 6)),
+    ("nine_slice", (8, 4)), ("nine_slice", (5, 4)), ("nine_slice", (6, 5)),
+])
+def test_slice_sample_reconstructs_original_region_pixels_and_offsets(tmp_path, mode, sample_size):
+    state, item, source = sample_fixture(tmp_path, mode, sample_size)
+    original_bytes = source.read_bytes()
+    exported = publish_exports(prepare(tmp_path, state, item))["items"][0]["record"]
+    verify_image_record(exported)
+    assert (exported["width"], exported["height"]) == sample_size
+    assert exported["has_transparency"] is True
+    assert exported["provenance"]["source_geometry"] == item["geometry"]
+    assert exported["provenance"]["slice_sample_size"] == item["slice_sample_size"]
+    assert exported["provenance"]["region"] == item["region"]
+    assert exported["geometry"]["borders"] == item["geometry"]["borders"]
+    assert exported["geometry"]["content_rect"] == {"x": 1, "y": 1, "width": sample_size[0] - 2, "height": sample_size[1] - 2}
+
+    patches = image_patches(exported["geometry"], sample_size, (6, 4))
+    assert patches["image_size"] == [8, 6]
+    assert patches["content_offset"] == [-1, -1]
+    with Image.open(exported["path"]) as sample, Image.open(source) as original, Image.new("RGBA", (8, 6)) as restored:
+        for patch in patches["patches"]:
+            x, y, width, height = patch["source"]
+            dx, dy, dw, dh = patch["target"]
+            with sample.crop((x, y, x + width, y + height)) as piece, piece.resize((dw, dh), Image.Resampling.NEAREST) as scaled:
+                restored.paste(scaled, (dx, dy))
+        assert restored.tobytes() == original.crop((2, 1, 10, 7)).tobytes()
+    assert source.read_bytes() == original_bytes
+
+
+def test_compact_slice_sample_preserves_the_original_png_color_profile(tmp_path):
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    state, item, _ = sample_fixture(tmp_path, "nine_slice", (5, 4), icc_profile=profile)
+    full = {key: value for key, value in item.items() if key != "slice_sample_size"}
+    for definition, expected_size in ((full, (8, 6)), (item, (5, 4))):
+        result = publish_exports(prepare(tmp_path, state, definition))
+        save_state(state, result)
+        with Image.open(result["items"][0]["record"]["path"]) as output:
+            assert output.size == expected_size
+            assert output.info.get("icc_profile") == profile
+
+
+@pytest.mark.parametrize("patch,reason", [
+    ({"slice_sample_size": None}, "正整数"), ({"slice_sample_size": {"width": True, "height": 6}}, "正整数"),
+    ({"slice_sample_size": {"width": 5}}, "正整数"),
+    ({"slice_sample_size": {"width": 9, "height": 6}}, "不能大于"),
+    ({"slice_sample_size": {"width": 4, "height": 6}}, "正中心"),
+    ({"slice_sample_size": {"width": 5, "height": 5}}, "horizontal"),
+    ({"geometry": {"mode": "stretch", "content_rect": {"x": 1, "y": 1, "width": 6, "height": 4}}}, "只支持"),
+])
+def test_invalid_slice_sample_request_leaves_no_outputs(tmp_path, patch, reason):
+    state, item, _ = sample_fixture(tmp_path, "horizontal", (5, 6))
+    with pytest.raises(ValueError, match=rf"slice_sample_size.*{reason}|{reason}.*slice_sample_size"):
+        prepare(tmp_path, state, item | patch)
+    assert not (tmp_path / "smart-ui/exports").exists()
+
+
+def test_nonuniform_center_rejects_entire_batch_even_for_transparent_rgb(tmp_path):
+    state, item, source = sample_fixture(tmp_path, "horizontal", (5, 6))
+    full = {key: value for key, value in item.items() if key != "slice_sample_size"}
+    first = publish_exports(prepare(tmp_path, state, full))
+    save_state(state, first)
+    target, manifest = (tmp_path / item["output_path"]), Path(first["manifest"]["path"])
+    original = target.read_bytes(), manifest.read_bytes()
+    with Image.open(source) as image:
+        updated = image.copy()
+    with updated:
+        for x in range(4, 8):
+            updated.putpixel((x, 1), (34, 12, 67, 0))
+        updated.putpixel((7, 1), (34, 12, 66, 0))
+        updated.save(source)
+    state["components"]["button"]["latest_run"]["artifact_hashes"]["preview"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    new = item | {"asset_id": "short", "output_path": "smart-ui/exports/ui/short.png"}
+    with pytest.raises(ValueError, match=r"slice_sample_size\.width 无法无损收短"):
+        prepare_exports(str(tmp_path), ProjectLayout(tmp_path).paths, state, "button", [full, new])
+    assert (target.read_bytes(), manifest.read_bytes()) == original
+    assert not (tmp_path / new["output_path"]).exists()
+
+
+def test_sample_record_validates_source_geometry_size_and_signature(tmp_path):
+    state, item, _ = sample_fixture(tmp_path, "nine_slice", (5, 4))
+    record = publish_exports(prepare(tmp_path, state, item))["items"][0]["record"]
+    wrong_size = deepcopy(record)
+    wrong_size["provenance"]["slice_sample_size"]["width"] = 6
+    with pytest.raises(ValueError, match="切片样片尺寸或几何"):
+        verify_image_record(wrong_size)
+    missing_geometry = deepcopy(record)
+    del missing_geometry["provenance"]["source_geometry"]
+    with pytest.raises(ValueError, match="source_geometry"):
+        verify_image_record(missing_geometry)
+    changed_origin = deepcopy(record)
+    changed_origin["provenance"]["region"]["x"] += 1
+    with pytest.raises(ValueError, match="导出摘要"):
+        verify_image_record(changed_origin)
 
 
 def test_prepare_is_read_only_and_publish_keeps_exact_region_and_evidence(tmp_path):

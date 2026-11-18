@@ -53,6 +53,37 @@ def test_export_updates_current_asset_and_survives_project_move(project, tmp_pat
     assert repeat["export"]["items"] == restored["items"]
 
 
+def test_reexport_can_switch_between_full_region_and_compact_sample(project):
+    store, context = project
+    root = context["project_root"]
+    definition = export_item()
+    explicit_full = definition | {"slice_sample_size": {"width": 8, "height": 6}}
+    resized = definition | {"slice_sample_size": {"width": 5, "height": 5}}
+    path = Path(root) / definition["output_path"]
+    result = store.export_assets(root, context["revision"], "sample", [definition])
+    original = result["export"]["items"][0]["record"]
+    full_bytes, full_stamp = path.read_bytes(), path.stat().st_mtime_ns
+
+    result = store.export_assets(root, result["revision"], "sample", [explicit_full])
+    full = result["export"]["items"][0]["record"]
+    assert full["sha256"] == original["sha256"] and full["export_signature"] != original["export_signature"]
+    assert full["provenance"]["slice_sample_size"] == explicit_full["slice_sample_size"]
+    assert path.stat().st_mtime_ns == full_stamp
+
+    result = store.export_assets(root, result["revision"], "sample", [resized])
+    sampled = result["export"]["items"][0]["record"]
+    assert (sampled["width"], sampled["height"]) == (5, 5)
+    assert sampled["id"] == original["id"] and sampled["path"] == original["path"]
+    stamp = path.stat().st_mtime_ns
+    result = store.export_assets(root, result["revision"], "sample", [resized])
+    assert result["export"]["items"][0]["record"] == sampled
+    assert path.stat().st_mtime_ns == stamp
+
+    result = store.export_assets(root, result["revision"], "sample", [definition])
+    assert result["export"]["items"][0]["record"] == original
+    assert path.read_bytes() == full_bytes
+
+
 def test_export_checks_revision_and_entire_batch_before_write(project):
     store, context = project
     root = Path(context["project_root"])
@@ -111,18 +142,23 @@ def test_git_checkout_preserves_program_and_export_manifest_bytes(project):
 
 
 def test_export_tools_work_over_stdio(project):
-    store, context = project
+    _, context = project
 
     async def scenario():
         parameters = StdioServerParameters(command=sys.executable, args=["-m", "smartui_mcp"],
                                            env={**os.environ, "PYTHONUTF8": "1"})
         async with project_session(parameters) as session:
+            definition = export_item() | {"slice_sample_size": {"width": 5, "height": 5}}
             result = await session.call_tool("project_export_assets", {
                 "project_root": context["project_root"], "expected_revision": context["revision"],
-                "component_id": "sample", "exports": [export_item()],
+                "component_id": "sample", "exports": [definition],
             })
             assert not result.isError, result
             exported = json.loads(result.content[0].text)
+            record = exported["export"]["items"][0]["record"]
+            assert (record["width"], record["height"]) == (5, 5)
+            assert record["provenance"]["region"] == definition["region"]
+            assert record["provenance"]["source_geometry"] == definition["geometry"]
             fetched = await session.call_tool("project_get_export", {
                 "project_root": context["project_root"], "export_id": exported["export"]["id"],
             })

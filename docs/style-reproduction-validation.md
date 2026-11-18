@@ -22,7 +22,7 @@
 
 先选覆盖主要画法及当前关键状态的少量代表组件，校准后再推广到整组。已有样片适用时直接复用，不为新任务重复建立相同校准。代表组件使用后续制作的同一程序和共用参数，避免验证一套画法、批量制作另一套。
 
-定义程序入口 `build(parameters, spec, component_id)`，用 `project_save_program` 保存，再用 `project_define_component` 通过 `spec.program_id` 关联。首次编写或需要诊断计划时，用 `project_plan_component` 单独查看计划与几何约束；`project_draw_component` 本身也执行程序并严格预检，已明确的参数调整无需重复单独预检。实际制作前核对 PhotoCraft 版本。
+定义程序入口 `build(parameters, spec, component_id)`，用 `project_save_program` 保存，再用 `project_define_component` 通过 `spec.program_id` 关联。首次编写或需要诊断计划时，用 `project_plan_component` 单独查看计划与几何约束。`project_draw_component` 本身也会执行程序并严格预检，已明确的参数调整可直接绘制。
 
 程序保存只检查语法；预检和绘制入口都会在独立 Python 进程运行源码，60 秒超时，属于可信本机代码，不是安全沙箱。图层数量、命名、分组、蒙版和绘制步骤服务于编辑需求。
 

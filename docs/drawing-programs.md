@@ -32,12 +32,27 @@ def build(parameters, spec, component_id):
 | 节点类型 | 制作内容 |
 | --- | --- |
 | `shape` | `shape` 对象使用原生形状参数：`rect`、`roundedRect`、`ellipse`、`polygon`、`star`、`line`、`path` |
-| `pixel` | `strokes` 数组描述原生像素笔触 |
+| `pixel` | 在节点顶层用 `strokes` 数组描述原生像素笔触 |
 | `group` | 管理父子结构；不隐式将局部选择扩展为全部子节点 |
 
 `properties` 可表达 `visible`、0–1 的 `opacity` 和 `blend`。分组默认使用 `PassThrough`（穿透），其他节点默认使用 `Normal`（正常）。`effects` 为 `kind/params` 列表。像素和分组可使用矢量路径 `mask`；形状不能单独设置 `mask`，需要额外裁剪时放入带蒙版的父分组。程序预检严格拒绝未知或非法字段，不静默近似复杂参数。
 
-形状实色填充使用颜色字符串；描边例如 `{"width":3,"color":"#14294A","align":"inside"}`。圆角矩形示例为 `{"kind":"roundedRect","rect":[8,8,184,84],"radii":12,"fill":"#247CDA"}`。渐变填充例如：
+形状实色填充使用颜色字符串。下面的节点将底色、内描边和独立投影保存在同一个圆角矩形图层。 [PhotoCraft 中的编辑入口](editable-component-artwork.md#photocraft-editing)
+
+```json
+{
+  "key": "surface", "name": "底板", "kind": "shape", "parent": "root",
+  "shape": {
+    "kind": "roundedRect", "rect": [8,8,184,84], "radii": 12,
+    "fill": "#247CDA", "stroke": {"width": 3, "color": "#14294A", "align": "inside"}
+  },
+  "effects": [
+    {"kind": "dropShadow", "params": {"color": "#101C2C", "opacity": 35, "distance": 2, "size": 3}}
+  ]
+}
+```
+
+渐变作为底面本身的填色时，把色标保存在 `shape.fill` 中：
 
 ```json
 {"gradient":{"stops":[[0,"#6FC6FF"],[1,"#247CDA"]],"angle":90,"scale":100,"style":"linear","reverse":false,"dither":false}}
@@ -83,6 +98,8 @@ def build(parameters, spec, component_id):
 `points` 每项必须为 `[x,y,pressure]`，其中压力范围为 0–1。`size` 范围 0.5–5000，`opacity` 为 0–1，`seed` 是非负 64 位整数。`strokes:[]` 表示合法空白像素层。`brush` 仅接受八个受控参数：`hardness`、`spacing`、`flow`、`pressureSize`、`pressureOpacity`、`angle`、`roundness` 和 `aliased`。省略时依次补为 `1`、`0.1`、`1`、`false`、`false`、`0`、`1` 和 `false`；这些是校验器规定的固定值，不代表图形界面默认值，也不依赖外部笔刷预设。
 
 ### 图层效果
+
+用 `effects` 声明样式描边，例如 `{"kind":"stroke","params":{"size":3,"position":"inside","color":"#14294A"}}`。形状的路径描边由 `shape.stroke` 声明，宽度和位置对应 `width` 和 `align`。 [按后续修改选择画法](editable-component-artwork.md#按接手后的修改选择做法)
 
 `effects` 最多 32 项，每项为 `{"kind":"dropShadow","params":{"color":"#000000","opacity":40,"distance":3,"size":4}}`。支持 dropShadow、innerShadow、outerGlow、innerGlow、stroke、colorOverlay、gradientOverlay、bevelEmboss 和 satin；不同效果只接受对应参数。效果 opacity 为 0–100；angle 为 −360 至 360；size/distance 为 0–1000。颜色、blend、轮廓及效果专用字段经过严格校验，未知字段报错。通过空效果数组可以明确移除当前节点的效果。
 

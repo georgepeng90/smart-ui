@@ -4,7 +4,7 @@
 锚点、枢轴及滚动视口和内容内缩。通用构建将锚点和枢轴写入受管 RectTransform，以父节点参考尺寸换算
 位置和尺寸差值，并在复验时读回。滚动视口和内容内缩由项目根据其 ScrollRect 结构配置并验收。
 
-SmartUI PhotoCraft v0.15.1 已提供控件目录、制作定义、正式页面控件预览、Unity CLI 调度和通用 uGUI 构建脚本。基础预制体、变体及页面嵌套的工具链实现已具备，真实工程尚待选择并验证。运行时布局、完整字体效果和业务适配仍属后续范围。当前接口见 [Unity 接入工具](unity-tools.md)，具体边界见[预制体复用方案](unity-prefab-reuse-plan.md)。本文承接[总体规划](toolchain-roadmap.md)中的资源交付、Unity uGUI 和工程端持续维护。
+SmartUI PhotoCraft v0.16.0 已提供控件目录、制作定义、正式页面控件预览、Unity CLI 调度和通用 uGUI 构建脚本。基础预制体、变体及页面嵌套的工具链实现已具备，真实工程尚待选择并验证。运行时布局、完整字体效果和业务适配仍属后续范围。当前接口见 [Unity 接入工具](unity-tools.md)，具体边界见[预制体复用方案](unity-prefab-reuse-plan.md)。本文承接[总体规划](toolchain-roadmap.md)中的资源交付、Unity uGUI 和工程端持续维护。
 
 接入目标是把 SmartUI 的页面设计变成可以接入项目框架、响应运行时内容变化、保留业务引用并持续更新的 uGUI 预制体。建议采用“设计数据导出、Unity 导入器、项目适配器”三部分：设计数据表达布局和资源语义，导入器管理资源与对象更新，项目适配器接入具体控件、字体、本地化、加载和业务绑定。
 
@@ -168,9 +168,7 @@ anchoredPosition = (x + px * w, -(y + py * h))
 
 以上要求一个设计单位等于一个 Canvas 逻辑单位；有其他单位比例时，先统一换算长度。`x`、`y` 已包含一次父级内边距，不重复叠加。伸缩锚点和受运行时布局驱动的节点由对应布局控制器设置，不能机械套用静态公式。枢轴改变时保持内容框位置，动画缩放才不会改变初始排版。
 
-Sprite 切片边距使用 Unity 的 `(left, bottom, right, top)` 顺序。设计中的上、下边距必须正确交换位置。[Unity spriteBorder](https://docs.unity3d.com/cn/6000.0/ScriptReference/TextureImporterSettings-spriteBorder.html)
-
-项目配置明确 Sprite 的 Pixels Per Unit（每单位像素数）、Canvas 的 `referencePixelsPerUnit` 和 Image 的 `pixelsPerUnitMultiplier`。一个设计像素等于一个 Canvas 单位时，可令前两者相同、后者为 1；已有工程采用其他值时必须换算。CanvasScaler 还会把逻辑单位缩放到实际屏幕，不能重复乘入设计几何。[CanvasScaler](https://docs.unity3d.com/Packages/com.unity.ugui@2.0/manual/script-CanvasScaler.html)
+切片边距的导入顺序，以及从 Sprite 像素到 Canvas 布局单位的换算，见 [Unity uGUI 的导入与验收](asset-geometry.md#unity-ugui-的导入与验收)。CanvasScaler 再将布局单位缩放到屏幕像素，设计坐标只需换算一次。 [CanvasScaler](https://docs.unity3d.com/Packages/com.unity.ugui@2.0/manual/script-CanvasScaler.html)
 
 | 模式 | Unity 显示策略 |
 | --- | --- |
@@ -179,7 +177,7 @@ Sprite 切片边距使用 Unity 的 `(left, bottom, right, top)` 顺序。设计
 | `nine_slice` | 使用完整图像范围和 Sprite border，保持外扩及固定边；检查目标中心为正 |
 | `horizontal` / `vertical` | 按声明设置单轴切片，另一轴保持原尺寸；运行时尺寸变化也遵守此约束 |
 
-Unity 原生 Sliced Image 在尺寸不足时可能压缩边框；SmartUI 的约定要求中心严格为正，必须在导入及运行时布局检查中拒绝非法尺寸，不能用 Unity 的压缩结果代替校验。[uGUI Image 实现](https://github.com/Unity-Technologies/uGUI/blob/main/com.unity.ugui/Runtime/UGUI/UI/Core/Image.cs)
+若运行时布局还会改变控件尺寸，目标工程也应按[伸缩模式的最小尺寸约束](asset-geometry.md#伸缩模式)检查变化后的结果。
 
 基准导入采用可保持完整矩形和源像素几何的设置。自动裁透明边、纹理缩小、图集旋转或紧密打包均不能未经核对便启用。项目需要压缩、图集或平台缩放时，将其作为显式资源策略验证，并检查最终纹理尺寸、切片和透明边，而不是只检查 PNG 文件。
 

@@ -1,5 +1,6 @@
 """从成功组件运行导出有稳定身份、来源和几何信息的正式 PNG。"""
 
+from contextlib import ExitStack
 from copy import deepcopy
 import hashlib
 from io import BytesIO
@@ -21,6 +22,7 @@ from .slicing import validate_geometry
 ENCODER = {"library": "Pillow", "version": PILLOW_VERSION, "format": "PNG",
            "mode": "RGBA", "compress_level": 6, "optimize": False}
 _FIELDS = {"asset_id", "name", "output_path", "region", "state", "purpose", "geometry"}
+_SAMPLE_FIELDS = {"source_geometry", "slice_sample_size"}
 
 
 def _digest(data):
@@ -77,6 +79,58 @@ def _signature(record):
                          ("name", "output_path", "state", "purpose", "geometry", "provenance")}))
 
 
+def _sample_geometry(source_geometry, source_size, sample_size):
+    """将原裁切区域中的内容框映射到指定像素尺寸的切片样片。"""
+    if (not isinstance(sample_size, dict) or sample_size.keys() != {"width", "height"} or
+            any(type(value) is not int or value < 1 for value in sample_size.values())):
+        raise ValueError("slice_sample_size 必须恰好包含正整数 width、height")
+    mode = source_geometry["mode"]
+    if mode not in ("horizontal", "vertical", "nine_slice"):
+        raise ValueError("slice_sample_size 只支持 horizontal、vertical 或 nine_slice")
+    geometry = deepcopy(source_geometry)
+    for axis, original, fixed, first, last in (
+        ("width", source_size[0], mode == "vertical", "left", "right"),
+        ("height", source_size[1], mode == "horizontal", "top", "bottom"),
+    ):
+        target = sample_size[axis]
+        if fixed and target != original:
+            raise ValueError(f"{mode} 的 slice_sample_size.{axis} 必须等于原裁切区域的 {axis}")
+        if target > original:
+            raise ValueError(f"slice_sample_size.{axis} 不能大于原裁切区域的 {axis}")
+        if target <= geometry["borders"][first] + geometry["borders"][last]:
+            raise ValueError(f"slice_sample_size.{axis} 必须大于固定边之和，保留正中心尺寸")
+        geometry["content_rect"][axis] -= original - target
+    return geometry
+
+
+def _sample_axis(image, axis, target, start, fixed_end):
+    """保留两端和指定长度的中心，仅在整条可伸缩区域的 RGBA 重复时收短。"""
+    source_end = image.size[axis] - fixed_end
+    target_end = target - fixed_end
+
+    def box(first, last):
+        return ((first, 0, last, image.height) if axis == 0 else (0, first, image.width, last))
+
+    with image.crop(box(start, start + 1)) as strip:
+        pixels = strip.tobytes()
+    for position in range(start + 1, source_end):
+        with image.crop(box(position, position + 1)) as strip:
+            if strip.tobytes() != pixels:
+                dimension = "width" if axis == 0 else "height"
+                raise ValueError(f"slice_sample_size.{dimension} 无法无损收短，中心区域的 RGBA 沿该轴不一致")
+
+    size = list(image.size)
+    size[axis] = target
+    sample = Image.new("RGBA", size)
+    sample.info = image.info.copy()
+    with image.crop(box(0, target_end)) as main:
+        sample.paste(main)
+    if fixed_end:
+        with image.crop(box(source_end, image.size[axis])) as end:
+            sample.paste(end, (target_end, 0) if axis == 0 else (0, target_end))
+    return sample
+
+
 def validate_export_record(record):
     """核对正式导出记录的来源与几何摘要。"""
     provenance = record.get("provenance")
@@ -106,7 +160,18 @@ def validate_export_record(record):
         raise ValueError("正式资产来源预览摘要无效或不一致")
     region = provenance.get("region")
     _region(region, None)
-    if (region["width"], region["height"]) != (record["width"], record["height"]):
+    source_size = (region["width"], region["height"])
+    size = (record["width"], record["height"])
+    sample_fields = _SAMPLE_FIELDS & provenance.keys()
+    if sample_fields:
+        if sample_fields != _SAMPLE_FIELDS:
+            raise ValueError("切片样片来源必须同时包含 source_geometry 和 slice_sample_size")
+        source_geometry = validate_geometry(provenance["source_geometry"], *source_size)
+        sample_size = provenance["slice_sample_size"]
+        geometry = _sample_geometry(source_geometry, source_size, sample_size)
+        if size != (sample_size["width"], sample_size["height"]) or record.get("geometry") != geometry:
+            raise ValueError("切片样片尺寸或几何与原裁切区域及采样要求不一致")
+    elif source_size != size:
         raise ValueError("正式资产来源区域与图像尺寸不一致")
     if not isinstance(provenance.get("encoder"), dict) or set(provenance["encoder"]) != set(ENCODER):
         raise ValueError("正式资产缺少完整 PNG 编码设置")
@@ -196,8 +261,8 @@ def prepare_exports(project_root, paths, state, component_id, exports):
         snapshot = original.copy()
     with snapshot as image:
         for index, item in enumerate(exports):
-            if not isinstance(item, dict) or set(item) != _FIELDS:
-                raise ValueError(f"exports[{index}] 必须恰好包含 {sorted(_FIELDS)}")
+            if not isinstance(item, dict) or not _FIELDS <= item.keys() or item.keys() - _FIELDS - {"slice_sample_size"}:
+                raise ValueError(f"exports[{index}] 必须包含 {sorted(_FIELDS)}，可选 slice_sample_size")
             asset_id = item["asset_id"]
             _identifier(asset_id, f"exports[{index}].asset_id")
             for key in ("name", "state", "purpose"):
@@ -226,19 +291,34 @@ def prepare_exports(project_root, paths, state, component_id, exports):
                 expected_target = previous["sha256"]
             _check_existing(target, expected_target, "正式导出输出")
             rect = _region(item["region"], image.size)
-            geometry = validate_geometry(item["geometry"], rect["width"], rect["height"])
-            x, y, width, height = (rect[key] for key in ("x", "y", "width", "height"))
-            with image.crop((x, y, x + width, y + height)) as crop, crop.convert("RGBA") as rgba:
+            x, y, source_width, source_height = (rect[key] for key in ("x", "y", "width", "height"))
+            source_size = (source_width, source_height)
+            geometry = validate_geometry(item["geometry"], *source_size)
+            provenance = {"kind": "component_export", "source": deepcopy(source),
+                          "region": rect, "encoder": deepcopy(ENCODER)}
+            if "slice_sample_size" in item:
+                sample_size = item["slice_sample_size"]
+                provenance.update(source_geometry=geometry, slice_sample_size=deepcopy(sample_size))
+                geometry = _sample_geometry(geometry, source_size, sample_size)
+            with ExitStack() as image_resources:
+                crop = image_resources.enter_context(image.crop((x, y, x + source_width, y + source_height)))
+                rgba = image_resources.enter_context(crop.convert("RGBA"))
+                if "slice_sample_size" in provenance:
+                    borders = geometry["borders"]
+                    for axis, dimension, first, last in ((0, "width", "left", "right"), (1, "height", "top", "bottom")):
+                        if sample_size[dimension] < rgba.size[axis]:
+                            rgba = image_resources.enter_context(_sample_axis(rgba, axis, sample_size[dimension],
+                                                                              borders[first], borders[last]))
                 output = BytesIO()
                 rgba.save(output, format="PNG", compress_level=ENCODER["compress_level"], optimize=ENCODER["optimize"])
                 png = output.getvalue()
+                width, height = rgba.size
                 transparent = rgba.getchannel("A").getextrema()[0] < 255
             record = {"id": asset_id, "name": item["name"], "output_path": relative, "path": str(target),
                       "state": item["state"], "purpose": item["purpose"], "geometry": geometry,
                       "sha256": _digest(png), "width": width, "height": height,
                       "mode": "RGBA", "has_transparency": transparent,
-                      "provenance": {"kind": "component_export", "source": deepcopy(source),
-                                     "region": rect, "encoder": deepcopy(ENCODER)}}
+                      "provenance": provenance}
             record["export_signature"] = _signature(record)
             validate_export_record(record)
             items.append({"asset_id": asset_id, "name": item["name"], "output_path": relative,

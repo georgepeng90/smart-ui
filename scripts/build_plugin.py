@@ -19,7 +19,7 @@ def main():
         shutil.rmtree(target)
     target.mkdir(parents=True)
     files = ["plugin.json", "mcp.json", "pyproject.toml", "uv.lock", "README.md",
-             "docs/photocraft-contract.md", "docs/project-tools.md", "docs/drawing-programs.md",
+             "docs/photocraft-contract.md", "docs/project-tools.md", "docs/drawing-programs.md", "docs/editable-component-artwork.md",
              "docs/toolchain-roadmap.md", "docs/typography-plan.md", "docs/style-reproduction-validation.md", "docs/asset-geometry.md",
              "docs/unity-integration-plan.md", "docs/unity-tools.md", "docs/unity-prefab-reuse-plan.md",
              "docs/ui-delivery-plan.md", "docs/ui-delivery-checklists.md",

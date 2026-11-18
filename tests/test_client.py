@@ -6,7 +6,7 @@ import queue
 from types import SimpleNamespace
 
 import pytest
-from smartui_mcp.client import (DRAW_COMMANDS, DRAW_METHODS, PREVIEW_METHODS, VERIFIED_VERSION,
+from smartui_mcp.client import (DRAW_COMMANDS, DRAW_METHODS, PREVIEW_METHODS,
     PhotoCraftCapabilityError, PhotoCraftClient, PhotoCraftSession, PhotoCraftError,
     PhotoCraftProtocolError, PhotoCraftRemoteError, PhotoCraftTimeoutError)
 
@@ -131,17 +131,18 @@ def use_cli(monkeypatch, exe, version, replies):
     return process
 
 
-@pytest.mark.parametrize("version", [VERIFIED_VERSION, "photocraft-cli 0.20.2 (future, 2026-11-04)"])
-def test_unverified_build_can_draw_when_capabilities_are_present(tmp_path, monkeypatch, installed_cli, version):
+def test_cli_can_draw_when_required_capabilities_are_present(tmp_path, monkeypatch, installed_cli):
     exe = installed_cli
+    version = "photocraft-cli 99.0.0 (test-build, 2026-11-18)"
     process = use_cli(monkeypatch, exe, version, registry_replies())
     client = PhotoCraftClient()
     status = client.status()
-    assert status["cli_path"] == str(exe.resolve())
-    assert status["version"] == version
-    assert status["sha256"] == hashlib.sha256(b"installed").hexdigest()
-    assert status["build_verification"] == "unverified"
-    assert status["missing_capabilities"] == []
+    assert status == {
+        "cli_path": str(exe.resolve()),
+        "version": version,
+        "sha256": hashlib.sha256(b"installed").hexdigest(),
+        "missing_capabilities": [],
+    }
     assert [r["method"] for r in process.requests] == ["methods", "engine.commands"]
     process = use_cli(monkeypatch, exe, version, registry_replies() + [success(3, {"width": 8})])
     trace = []
@@ -154,11 +155,11 @@ def test_unverified_build_can_draw_when_capabilities_are_present(tmp_path, monke
 
 def test_missing_drawing_capabilities_reported_and_block_before_writes(tmp_path, monkeypatch, installed_cli):
     replies = registry_replies(missing_methods=["doc.save"], missing_commands=["shape.edit"])
-    use_cli(monkeypatch, installed_cli, VERIFIED_VERSION, replies)
+    use_cli(monkeypatch, installed_cli, "photocraft-cli test", replies)
     client = PhotoCraftClient()
     status = client.status()
     assert status["missing_capabilities"] == ["method:doc.save", "command:shape.edit"]
-    process = use_cli(monkeypatch, installed_cli, VERIFIED_VERSION, replies)
+    process = use_cli(monkeypatch, installed_cli, "photocraft-cli test", replies)
     with pytest.raises(PhotoCraftCapabilityError, match="缺少必需能力.*doc.save.*shape.edit") as error:
         with client.session(tmp_path):
             pytest.fail("缺少制作能力不得开放会话")
@@ -172,7 +173,7 @@ def test_missing_drawing_capabilities_reported_and_block_before_writes(tmp_path,
 ])
 def test_unusable_probe_reports_which_interface_failed(tmp_path, monkeypatch, installed_cli, reply, probe):
     replies = [reply] if probe == "methods" else registry_replies()[:1] + [reply]
-    process = use_cli(monkeypatch, installed_cli, VERIFIED_VERSION, replies)
+    process = use_cli(monkeypatch, installed_cli, "photocraft-cli test", replies)
     with pytest.raises(PhotoCraftCapabilityError, match="无法核验.*" + probe):
         with PhotoCraftClient().session(tmp_path):
             pytest.fail("查询失败不得开放会话")
@@ -181,7 +182,7 @@ def test_unusable_probe_reports_which_interface_failed(tmp_path, monkeypatch, in
 
 def test_preview_requires_only_open_and_render(tmp_path, monkeypatch, installed_cli):
     replies = [success(1, sorted(PREVIEW_METHODS | {"methods"})), success(2, {"width": 8})]
-    process = use_cli(monkeypatch, installed_cli, VERIFIED_VERSION, replies)
+    process = use_cli(monkeypatch, installed_cli, "photocraft-cli test", replies)
     with PhotoCraftClient().session(tmp_path, preview_only=True) as session:
         assert session.call("doc.open", {"path": "preview.pcraft"}) == {"width": 8}
     assert [r["method"] for r in process.requests] == ["methods", "doc.open"]

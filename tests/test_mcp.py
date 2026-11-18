@@ -61,7 +61,8 @@ class FakeClient:
 
     def status(self):
         self.calls.append(("status", {}))
-        return {"version": "synthetic transport fixture", "cli_path": "test", "sha256": "0" * 64}
+        return {"version": "synthetic transport fixture", "cli_path": "test", "sha256": "0" * 64,
+                "missing_capabilities": ["method:doc.save"]}
 
     @contextmanager
     def session(self, root, *, preview_only):
@@ -303,10 +304,22 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(next(t for t in tools if t.name == "photocraft_preview").outputSchema)
             document = str(root / "测试.pcraft")
             Path(document).write_bytes(b"synthetic document")
-            await server.call_tool("photocraft_status", {})
-            with patch("smartui_mcp.server.read_document", return_value={"width": 1, "nodes": [], "manifest": {}}) as inspect:
-                await server.call_tool("photocraft_inspect_document", {"document": document})
+            status = await server.call_tool("photocraft_status", {})
+            self.assertEqual(json.loads(status[0].text), {
+                "version": "synthetic transport fixture", "cli_path": "test", "sha256": "0" * 64,
+                "missing_capabilities": ["method:doc.save"],
+            })
+            identity = {"id": 7, "name": "底面", "kind": "shape", "parent": "root"}
+            native = {"content": {"fill": {"Solid": {}}, "stroke": {"paint": {"Solid": {}}}},
+                      "effects": {"enabled": True, "items": [{"DropShadow": {}}]}}
+            inspection = {"width": 1, "height": 1, "nodes": [identity | {"manifest": native}]}
+            with patch("smartui_mcp.server.read_document", return_value=inspection | {"manifest": {}}) as inspect:
+                full = await server.call_tool("photocraft_inspect_document", {"document": document})
+                self.assertEqual(json.loads(full[0].text), inspection)
                 inspect.assert_called_once_with(Path(document))
+                compact = await server.call_tool("photocraft_inspect_document", {"document": document, "view": "editable"})
+                self.assertEqual(json.loads(compact[0].text)["nodes"], [
+                    identity | {"fill": "Solid", "stroke": "Solid", "effects": ["DropShadow"], "effects_enabled": True}])
             preview = await server.call_tool("photocraft_preview", {"document": document})
             session_directory = Path(fake.calls[1][1])
             self.assertEqual(session_directory.parent, root / ".smartui" / "temp")

@@ -13,7 +13,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, StrictStr
 
 from .client import PhotoCraftClient
-from .photocraft import read_document
+from .photocraft import editable_parts, read_document
 from .projects import ProjectStore, ProjectError
 from .references import register_reference, inspect_reference
 from .pipeline import draw_component, plan_component
@@ -145,13 +145,17 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
 
     @server.tool()
     async def photocraft_status() -> Any:
-        """检查 PhotoCraft CLI，返回实际路径、完整版本、可执行文件摘要、构建验证状态和缺失能力。"""
+        """返回本机 PhotoCraft CLI 的路径、完整版本、可执行文件的 SHA-256 和制作所缺的接口与命令。"""
         return await asyncio.to_thread(renderer.status)
 
     @server.tool()
-    async def photocraft_inspect_document(document: str) -> Any:
-        """读取绝对 .pcraft 路径，核验原生数据并返回图层 ID、完整属性和内容摘要。"""
+    async def photocraft_inspect_document(document: str, view: Literal["full", "editable"] = "full") -> Any:
+        """核验绝对路径的 .pcraft。editable 按图层列出形状填充、路径描边和有序图层效果，full 返回原生属性与内容摘要。"""
         result = await asyncio.to_thread(read_document, Path(_document_path(document)))
+        if view == "editable":
+            return {"width": result["width"], "height": result["height"],
+                    "nodes": [{key: node[key] for key in ("id", "name", "kind", "parent")} | editable_parts(node)
+                              for node in result["nodes"]]}
         return {key: value for key, value in result.items() if key != "manifest"}
 
     @server.tool(structured_output=False)
@@ -336,7 +340,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_export_assets(project_root: str, expected_revision: str, component_id: StrictStr,
                                     exports: list[dict[str, Any]]) -> Any:
-        """导出正式 PNG；Unity 图元写入 Assets，普通项目写入 smart-ui/exports，清单保存于 smart-ui/exports/manifests。"""
+        """导出正式 PNG。切片资产可用 slice_sample_size 指定缩短均匀中段后的 PNG 宽高。Unity 图元写入 Assets，普通项目写入 smart-ui/exports。"""
         return await asyncio.to_thread(projects.export_assets, project_root, expected_revision, component_id, exports)
 
     @server.tool()

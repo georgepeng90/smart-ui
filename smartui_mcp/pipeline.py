@@ -12,7 +12,7 @@ from PIL import Image
 
 from .client import PhotoCraftCapabilityError, PhotoCraftClient
 from .layout import ProjectLayout
-from .photocraft import apply_plan, read_document
+from .photocraft import NativeDocumentError, apply_plan, editable_parts, read_document
 from .projects import ProjectError, ProjectStore, spec_sha256, style_sha256
 from .programs import run_program
 
@@ -74,6 +74,32 @@ def _check_identity(inspection, plan, layer_ids):
         parent = "root" if node["parent"] == "root" else layer_ids[node["parent"]]
         if actual["name"] != node["name"] or actual["kind"] != node["kind"] or actual["parent"] != parent:
             raise ValueError("源文件节点名称、类型或父子关系与计划不一致：" + node["key"])
+    return nodes
+
+
+def _check_editable_parts(nodes, plan, layer_ids):
+    def paint_kind(paint):
+        if paint is None:
+            return None
+        return "Gradient" if isinstance(paint, dict) else "Solid"
+
+    for node in plan["nodes"]:
+        key = node["key"]
+        actual = editable_parts(nodes[layer_ids[key]])
+        # PhotoCraft 原生枚举名称与命令参数中的类型名仅首字母大小写不同。
+        effects = [effect["kind"][0].upper() + effect["kind"][1:] for effect in node["effects"]]
+        if effects != actual["effects"]:
+            raise NativeDocumentError(f"节点 {key} 的可编辑效果类型或顺序与计划不一致，预期 {effects}，实际 {actual['effects']}")
+        if effects and not actual["effects_enabled"]:
+            raise NativeDocumentError(f"节点 {key} 的可编辑效果在原生源文件中未启用")
+        if node["kind"] != "shape":
+            continue
+        shape = node["shape"]
+        stroke = shape["stroke"]
+        for field, label, paint in (("fill", "填充", shape["fill"]), ("stroke", "描边", None if stroke is None else stroke["color"])):
+            expected = paint_kind(paint)
+            if actual[field] != expected:
+                raise NativeDocumentError(f"节点 {key} 的可编辑{label}与计划不一致，预期 {expected or '无'}，实际 {actual[field] or '无'}")
 
 
 def _summary(inspection):
@@ -170,7 +196,8 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
             session.call("doc.render", {"path": relative(before_preview), "maxSide": 0})
             session.call("doc.save", {"path": relative(output)})
             saved = read_document(output)
-            _check_identity(saved, plan, layer_ids)
+            nodes = _check_identity(saved, plan, layer_ids)
+            _check_editable_parts(nodes, plan, layer_ids)
             if layers is not None:
                 selected_ids = {layer_ids[key] for key in layers}
                 old_nodes, new_nodes = _node_map(before), _node_map(saved)

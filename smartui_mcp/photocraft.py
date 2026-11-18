@@ -115,7 +115,7 @@ def read_document(path):
                         fmt = value["format"]
                         if type(fmt) is not dict or type(value["tiles"]) is not list:
                             raise NativeDocumentError(f"{path} {label} 像素表面结构错误")
-                        channels = {"Rgb": 3, "Gray": 1, "Cmyk": 4, "Lab": 3, "Indexed": 1, "Bitmap": 1}.get(fmt.get("mode"))
+                        channels = {"Rgb": 3, "Gray": 1, "Grayscale": 1, "Cmyk": 4, "Lab": 3, "Indexed": 1, "Bitmap": 1}.get(fmt.get("mode"))
                         sample_bytes = {"U8": 1, "U16": 2, "F32": 4}.get(fmt.get("sample"))
                         if channels is None or sample_bytes is None or type(fmt.get("alpha")) is not bool:
                             raise NativeDocumentError(f"{path} {label} 不支持的像素格式：{fmt}")
@@ -179,6 +179,31 @@ def read_document(path):
             "manifest": manifest, "manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(),
             "sha256": hashlib.sha256(data).hexdigest(), "nodes": nodes,
             "objects": object_hashes, "referenced_objects": sorted(references)}
+
+
+def editable_parts(node):
+    """读取原生图层的填充、描边和有序效果类型，包括重复的同类效果。"""
+    layer = node["manifest"]
+    label = f"原生图层 {node['name']}（ID {node['id']}）"
+
+    def variant(value, field):
+        if type(value) is not dict or len(value) != 1 or type(next(iter(value.values()))) is not dict:
+            raise NativeDocumentError(f"{label}的{field}缺少有效的类型记录")
+        return next(iter(value))
+
+    effects = layer.get("effects")
+    if type(effects) is not dict or type(effects.get("items")) is not list or type(effects.get("enabled")) is not bool:
+        raise NativeDocumentError(f"{label}的效果记录无效")
+    result = {"effects": [variant(effect, "效果") for effect in effects["items"]],
+              "effects_enabled": effects["enabled"]}
+    if node["kind"] == "shape":
+        content = layer["content"]
+        fill, stroke = content.get("fill"), content.get("stroke")
+        if stroke is not None and type(stroke) is not dict:
+            raise NativeDocumentError(f"{label}的描边记录无效")
+        result["fill"] = None if fill is None else variant(fill, "填充")
+        result["stroke"] = None if stroke is None else variant(stroke.get("paint"), "描边")
+    return result
 
 
 def _command(session, command, params=None):

@@ -26,7 +26,10 @@ def test_themes_change_colors_and_preserve_geometry(state):
     for result, theme in ((a, "lagoon"), (b, "ember")):
         roles = parameters["states"][state]
         assert result["nodes"][0]["shape"].pop("fill") == parameters["themes"][theme][roles["surface"]].lower()
-        assert result["nodes"][0]["shape"]["stroke"].pop("color") == parameters["themes"][theme]["outline"].lower()
+        surface = result["nodes"][0]
+        assert surface["shape"]["stroke"].pop("color") == parameters["themes"][theme]["outline"].lower()
+        effect, = surface["effects"]
+        assert effect["kind"] == "dropShadow"
         result["nodes"][1]["shape"].pop("fill")
     assert a == b
 
@@ -38,7 +41,9 @@ def test_states_only_change_declared_colors_and_marker_visibility():
     disabled = plan(parameters, state="disabled")
     assert available["nodes"][0] == selected["nodes"][0]
     assert selected["nodes"][1]["properties"]["visible"] is True
+    assert selected["nodes"][1]["shape"]["fill"] == parameters["themes"]["lagoon"]["selection"].lower()
     assert available["nodes"][1]["properties"]["visible"] is False
+    assert available["nodes"][1]["shape"]["fill"] is None
     disabled["nodes"][0]["shape"]["fill"] = available["nodes"][0]["shape"]["fill"]
     assert disabled == available
 
@@ -53,6 +58,18 @@ def test_shared_role_change_does_not_change_unrelated_state():
     changed["nodes"][0]["shape"]["fill"] = available["nodes"][0]["shape"]["fill"]
     assert changed == available
     assert plan(parameters, state="disabled") == disabled
+
+
+@pytest.mark.parametrize("state", ["available", "selected", "disabled"])
+def test_outline_color_only_changes_native_shape_stroke(state):
+    parameters = _program.example_parameters()
+    original = plan(parameters, state=state)
+    parameters["themes"]["lagoon"]["outline"] = "#A34E36"
+    changed = plan(parameters, state=state)
+    stroke = changed["nodes"][0]["shape"]["stroke"]
+    assert stroke["color"] == "#a34e36"
+    stroke["color"] = original["nodes"][0]["shape"]["stroke"]["color"]
+    assert changed == original
 
 
 @pytest.mark.parametrize("path,state", [

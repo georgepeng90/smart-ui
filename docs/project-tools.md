@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.15.1 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.16.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -136,7 +136,16 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 
 `project_export_assets` 接收组件 ID 和导出项，使用组件当前成功产物的预览按声明区域裁切。整图导出也要显式声明区域。需要无字的背景时，源程序应提供无示例文案的导出区域。工具处理 PNG，不修改 Unity `.meta` 或导入设置。
 
-每项导出必须完整声明以下字段；`exports` 包含 1 至 64 项，资产 ID 和输出路径在批次内唯一：
+每项导出声明资产 ID、名称、输出路径、来源区域、状态、用途和几何。`exports` 包含 1 至 64 项，资产 ID 和输出路径在批次内唯一。`region` 相对来源预览，输入的 `geometry` 相对裁切后的原图。省略 `slice_sample_size` 时，直接输出裁切区域的像素。[几何字段约束](asset-geometry.md#几何字段)
+
+`slice_sample_size` 指定最终 PNG 的完整宽高，仅适用于横向三切片（`horizontal`）、纵向三切片（`vertical`）和九宫格切片（`nine_slice`）。
+
+- 必须且只能提供 `width` 和 `height`，两者都是以像素为单位的正整数，布尔值不合法。
+- 各轴的目标尺寸可以等于实际裁切尺寸，且不得超过它。横向三切片的高度、纵向三切片的宽度必须等于实际裁切尺寸。
+- 目标宽度必须大于 `left + right`，目标高度必须大于 `top + bottom`，确保中心区有正宽高。
+- 缩短宽度时，可伸缩中段内的像素列必须在整个图高上逐像素相同，包括 R、G、B 和 A 通道。缩短高度时，对整个图宽的像素行执行同样的检查。沿纵向变化且每列相同的渐变可以随横向压缩保留。缩短轴上的中段像素不一致时，导出会报错。工具保留两端固定区与外扩。[为切片伸缩制作 UI 图形](asset-geometry.md#为切片伸缩制作-ui-图形)
+
+下面的样片保留固定四边，只缩短横向中段。
 
 ```json
 {
@@ -144,6 +153,7 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
   "name": "主按钮背景",
   "output_path": "smart-ui/exports/primary-button.png",
   "region": {"x": 0, "y": 0, "width": 120, "height": 60},
+  "slice_sample_size": {"width": 48, "height": 60},
   "state": "normal",
   "purpose": "主操作按钮的背景，不含文字",
   "geometry": {
@@ -154,7 +164,9 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 }
 ```
 
-`region` 相对来源预览，`geometry` 相对裁切后的 PNG，约束见[内容区域与伸缩几何](asset-geometry.md)。`output_path` 是工程相对 PNG 路径。上述示例用于普通项目，PNG 保存到 `smart-ui/exports/`，其中 `manifests/` 保留给清单。Unity 项目须使用 `Assets` 下的路径，例如 `Assets/UI/Sprites/action-background.png`。已登记的正式资产需沿用对应输出路径。导出记录包括来源组件、区域、文件摘要、状态、用途和几何。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
+此例的中段由 80 列缩为 8 列，左右各 20 像素、外扩及高度保持原样。资产记录的 `width`、`height` 和 `geometry.content_rect` 对应实际导出 PNG，本例输出 48 × 60，内容区域为 `x=8, y=8, width=32, height=44`。布局实例单独声明所需的显示尺寸。来源记录保留原 `region`，显式指定样片尺寸时还保存 `provenance.source_geometry` 和 `provenance.slice_sample_size`。
+
+`output_path` 是工程相对 PNG 路径。上述示例用于普通项目，PNG 保存到 `smart-ui/exports/`，其中 `manifests/` 保留给清单。Unity 项目须使用 `Assets` 下的路径，例如 `Assets/UI/Sprites/action-background.png`。已登记的正式资产需沿用对应输出路径。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
 
 ## 页面制作的项目约定
 

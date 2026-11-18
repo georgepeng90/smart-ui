@@ -1,4 +1,4 @@
-"""共用颜色用途、原生形状和组件状态的通用示例。"""
+"""共用颜色用途、原生形状、图层样式和组件状态的通用示例。"""
 
 
 def example_parameters():
@@ -41,13 +41,14 @@ def build(parameters, spec, component_id):
     surface_role = _required(state, "surface", state_path, str)
     surface = _required(theme, surface_role, theme_path, str)
     outline = _required(theme, "outline", theme_path, str)
-    marker = _required(theme, _required(state, "marker", state_path, str), theme_path, str) if "marker" in state else outline
+    marker = _required(theme, _required(state, "marker", state_path, str), theme_path, str) if "marker" in state else None
     return {
         "schema_version": 1, "width": width, "height": height,
         "nodes": [
             {"key": "surface", "name": f"{component_id}/底面", "kind": "shape", "parent": "root",
              "shape": {"kind": "roundedRect", "rect": [4, 4, width - 8, height - 8], "radii": 10,
-                       "fill": surface, "stroke": {"width": 3, "color": outline, "align": "inside"}}},
+                       "fill": surface, "stroke": {"width": 3, "color": outline, "align": "inside"}},
+             "effects": [{"kind": "dropShadow", "params": {"opacity": 35, "angle": 90, "distance": 2, "size": 2}}]},
             {"key": "marker", "name": f"{component_id}/状态标记", "kind": "shape", "parent": "root",
              "shape": {"kind": "ellipse", "rect": [width - 22, 10, 10, 10], "fill": marker},
              "properties": {"visible": "marker" in state}},
