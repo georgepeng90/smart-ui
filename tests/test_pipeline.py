@@ -60,10 +60,13 @@ class MissingClient:
 def project(tmp_path, request):
     store = ProjectStore()
     context = store.create(str(tmp_path / "project"), "demo", "通用绘制项目")
+    context = store.update_ui_settings(context["project_root"], context["revision"],
+                                       {"reference_size": {"width": 400, "height": 160}})
     context = store.save_program(context["project_root"], context["revision"], "drawing", "组件程序", "", PROGRAM)
     context = store.update_style(context["project_root"], context["revision"], "项目参数", [], {"color": "#123456"}, [])
     context = store.define_component(context["project_root"], context["revision"], "sample", "示例组件",
-                                     {"program_id": "drawing", "width": 96, "height": 64})
+                                     {"program_id": "drawing", "width": 96, "height": 64,
+                                      "design": {"width": 96, "height": 64, "basis": "示例按钮的默认设计尺寸"}})
     return store, context
 
 
@@ -223,7 +226,8 @@ def test_local_edit_cannot_change_unselected_nodes(project, changes):
 @pytest.mark.parametrize("changes", [{"width": 120}, {"height": 72}])
 def test_update_cannot_change_canvas(project, changes):
     store, context = project
-    context = change_spec(store, record_source(store, context), changes)
+    old_design = context["data"]["components"]["sample"]["spec"]["design"]
+    context = change_spec(store, record_source(store, context), {**changes, "design": old_design | changes})
     assert_preflight_rejected(store, context, "不能改变画布或图层结构", ["ink"])
 
 

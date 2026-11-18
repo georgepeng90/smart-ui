@@ -12,18 +12,19 @@
 
 ```python
 def build(parameters, spec, component_id):
+    width, height = spec["design"]["width"], spec["design"]["height"]
     return {
-        "schema_version": 1, "width": spec["width"], "height": spec["height"],
+        "schema_version": 1, "width": width, "height": height,
         "nodes": [{
             "key": "surface", "name": component_id + "/底面",
             "kind": "shape", "parent": "root",
-            "shape": {"kind": "rect", "rect": [0, 0, spec["width"], spec["height"]],
+            "shape": {"kind": "rect", "rect": [0, 0, width, height],
                       "fill": spec["color"]},
         }],
     }
 ```
 
-组件规格例如 `{"program_id":"flat-panel","width":320,"height":120,"color":"#6AAD3D"}`。示例直接索引必需字段，缺失即失败。
+组件规格例如 `{"program_id":"flat-panel","design":{"width":320,"height":120,"basis":"面板规范规定主体宽 320、高 120，无外扩"},"color":"#6AAD3D"}`。先登记项目基础分辨率和主体规格，再由程序生成 1× 画布。带外扩的单件和多图素源稿见[组件的设计尺寸与制作区域](project-tools.md#组件的设计尺寸与制作区域)。
 
 ## 计划与节点
 
@@ -107,9 +108,25 @@ def build(parameters, spec, component_id):
 
 ## 共用配色与状态示例
 
-[semantic_palette.py](../examples/drawing-programs/semantic_palette.py) 提供 `example_parameters()`，含两套颜色用途和三个状态。将其返回值存入项目风格参数，组件规格指定 `theme/state/width/height`；改变主题只改变颜色，状态只改变声明的颜色用途和标记可见性。示例不需要外部项目或笔刷资源。
+[semantic_palette.py](../examples/drawing-programs/semantic_palette.py) 提供 `example_parameters()`，含两套颜色用途和三个状态。将返回值存入项目风格参数，并将该程序保存为 `semantic-palette`。以下组件规格为 152 × 56 的底板预留四边各 4 像素，程序的 `width` 和 `height` 是包含外扩的画布宽高。
 
-为不同样片使用不同组件 ID，绘制后用[视觉检查](project-tools.md#多产物视觉检查)比较目标尺寸下的轮廓、留白和状态。自动测试验证参数复用，不代表参考风格通过。
+```json
+{
+  "program_id": "semantic-palette",
+  "theme": "lagoon",
+  "state": "selected",
+  "width": 160,
+  "height": 64,
+  "design": {
+    "width": 152,
+    "height": 56,
+    "basis": "样片的按钮底板固定为 152 × 56",
+    "outsets": {"left": 4, "right": 4, "top": 4, "bottom": 4}
+  }
+}
+```
+
+为不同样片使用不同组件 ID。改变主题只改变颜色，状态只改变声明的颜色用途和标记可见性。绘制后用[视觉检查](project-tools.md#多产物视觉检查)比较目标尺寸下的轮廓、留白和状态。自动测试验证参数复用，参考风格以实际样片验收。
 
 ## 更新与证据
 

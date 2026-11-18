@@ -122,6 +122,8 @@ namespace SmartUI.UGUI.Editor
         public Dictionary<string, Dictionary<string, SlotFileId>> Instances = new();
         public string[] SourceGuids = System.Array.Empty<string>();
         public JObject ManagedDifferences;
+        // Empty when the Prefab has no Canvas and no instance has a Canvas in a loaded scene.
+        public Dictionary<string, float> CanvasReferencePixelsPerUnit = new();
     }
 
     internal sealed class SlotFileId

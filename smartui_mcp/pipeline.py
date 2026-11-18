@@ -15,6 +15,7 @@ from .layout import ProjectLayout
 from .photocraft import NativeDocumentError, apply_plan, editable_parts, read_document
 from .projects import ProjectError, ProjectStore, spec_sha256, style_sha256
 from .programs import run_program
+from .production_design import check_artwork_size, current_design
 
 
 def _write(path, value):
@@ -32,10 +33,12 @@ def _prepare(project_root, component_id, store, expected_revision=None):
     if component_id not in context["data"]["components"]:
         raise ProjectError("尚未定义组件：" + component_id)
     spec = context["data"]["components"][component_id]["spec"]
+    design = current_design(context["data"], component_id)
     program = store.get_program(project_root, spec["program_id"])
     if program["sha256"] != context["data"]["programs"][spec["program_id"]]["sha256"]:
         raise ProjectError("读取期间绘制程序已变化，请重新读取 project_context")
     plan = run_program(program["source"], context["data"]["style"]["parameters"], spec, component_id)
+    check_artwork_size(design, (plan["width"], plan["height"]), component_id)
     return context, program, plan
 
 
@@ -211,6 +214,9 @@ def draw_component(project_root, expected_revision, component_id, layers=None, *
             session.call("doc.render", {"path": relative(preview), "maxSide": 0})
             session.call("doc.save", {"path": relative(reopened_path)})
             reopened = read_document(reopened_path)
+        design = component["spec"]["design"]
+        for inspection in (saved, reopened):
+            check_artwork_size(design, (inspection["width"], inspection["height"]), component_id)
         saved_nodes, reopened_nodes = _node_map(saved), _node_map(reopened)
         verification = {"reopened": True,
                         "stable_node_ids": list(saved_nodes) == list(reopened_nodes),

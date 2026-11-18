@@ -476,6 +476,8 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                         return json.loads(result.content[0].text)
 
                     project = await call("project_create", project_root=str(project_root), project_id="custom", name="程序项目")
+                    project = await call("project_update_ui_settings", project_root=str(project_root),
+                                         expected_revision=project["revision"], settings={"reference_size": {"width": 400, "height": 160}})
                     project = await call("project_update_style", project_root=str(project_root),
                                          expected_revision=project["revision"], description="自定义线条草稿", rules=[],
                                          parameters={"draft": True, "color": "#204060", "line_count": 96}, reference_ids=[])
@@ -488,7 +490,8 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(fetched["sha256"], hashlib.sha256(source.encode()).hexdigest())
                     project = await call("project_define_component", project_root=str(project_root),
                                          expected_revision=project["revision"], component_id="stripes", name="条纹图案",
-                                         spec={"program_id": "lines", "extent": 120, "custom": {"任意参数": True}})
+                                         spec={"program_id": "lines", "extent": 120, "custom": {"任意参数": True},
+                                               "design": {"width": 120, "height": 120, "basis": "方形条纹图案的设计目标"}})
                     plan_result = await call("project_plan_component", project_root=str(project_root), component_id="stripes")
                     self.assertEqual(marker.read_text(encoding="utf-8"), "已执行")
                     self.assertEqual(plan_result["revision"], project["revision"])
@@ -513,9 +516,11 @@ class MCPToolTests(unittest.IsolatedAsyncioTestCase):
                     fetched = await call("project_get_program", project_root=str(project_root), program_id="lines")
                     self.assertEqual(fetched["source"], modified)
                     self.assertEqual((project_root / fetched["source_path"]).read_text(encoding="utf-8"), modified)
-                    changed_plan = await call("project_plan_component", project_root=str(project_root), component_id="stripes")
-                    self.assertEqual(changed_plan["plan"]["width"], 121)
-                    self.assertEqual(changed_plan["program_sha256"], hashlib.sha256(modified.encode()).hexdigest())
+                    changed_plan = await session.call_tool("project_plan_component", {
+                        "project_root": str(project_root), "component_id": "stripes",
+                    })
+                    self.assertTrue(changed_plan.isError)
+                    self.assertIn("1×", changed_plan.content[0].text)
 
                     syntax_failure = await session.call_tool("project_save_program", {
                         "project_root": str(project_root), "expected_revision": project["revision"],

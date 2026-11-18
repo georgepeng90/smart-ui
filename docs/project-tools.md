@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.17.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.18.0 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -90,7 +90,7 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 
 `project_save_program.source` 是完整 Python 源码。保存不执行源码，也不检查程序是否已定义可用的 build；`project_plan_component` 和 `project_draw_component` 都会执行程序并严格预检计划。需要先查看或诊断计划时使用独立预检入口，已明确的参数调整不要求重复调用两个入口。程序作为可信本机代码运行，独立进程与 60 秒超时不是安全沙箱。
 
-组件规格最少包含已保存的程序标识，其余字段由程序解释。例如采用[最小矩形程序](drawing-programs.md#最小程序示例)：
+通过 `project_update_ui_settings` 保存项目基础分辨率，并将[最小矩形程序](drawing-programs.md#最小程序示例)保存为 `flat-panel`。调用 `project_define_component` 时提供已登记的 `program_id` 和绘制所需的 `design`，再按程序填写其他参数。以下请求可定义一个 320 × 120 的面板。
 
 ```json
 {
@@ -98,11 +98,15 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
   "expected_revision":"替换为最新revision",
   "component_id":"panel.primary",
   "name":"主面板",
-  "spec":{"program_id":"flat-panel", "width":320, "height":120, "color":"#6AAD3D"}
+  "spec": {
+    "program_id": "flat-panel",
+    "design": {"width": 320, "height": 120, "basis": "面板规范规定主体宽 320、高 120，无外扩"},
+    "color": "#6AAD3D"
+  }
 }
 ```
 
-执行时 `style.parameters` 作为 `parameters`，完整组件规格作为 `spec`，组件 ID 作为 `component_id`。程序负责其业务参数的必要字段、几何约束及错误说明。通用工具只校验程序返回的计划是否可执行；组件的具体画法由项目程序定义。
+执行时 `style.parameters` 作为 `parameters`，完整组件规格作为 `spec`，组件 ID 作为 `component_id`。项目程序负责业务参数、几何约束和具体画法。工具校验计划，并按[组件的设计尺寸与制作区域](#组件的设计尺寸与制作区域)核对 1× 画布或图集裁区。绘制发布前还会核对保存及重开的源文件和实际 PNG 尺寸。
 
 ## 原文件更新
 
@@ -131,6 +135,24 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 用 `project_create_visual_check` 并排查看多个当前组件产物。传入稳定的 `check_id`，按显示顺序给出 1 至 16 个检查项。每项使用 `component_id`、`label` 和可选的 `region`、`scale`，倍率默认 1。用 `background` 指定 `#RRGGBB` 纯色背景，`columns` 为 1 至 16 的整数，默认 3。灰度总览默认开启，只看彩色时显式传 `grayscale=false`。
 
 检查保留原尺寸裁切、显示尺寸、背景和来源摘要。已有同条件检查可通过 `project_get_visual_check` 读取；更新检查时复用原 ID。工具不执行 PhotoCraft 绘制，图像处理不做 ICC 转换，视觉判断由查看者完成。
+
+## 组件的设计尺寸与制作区域
+
+先通过 `project_update_ui_settings` 保存项目基础分辨率 `ui_settings.reference_size`。一个设计单位对应 1× 源稿中的一个像素。整页参考只有在页面范围和宽高比都对应时，才可以映射到设计坐标。局部截图、带裁边的截图或宽高比不同的参考，先标明参考区域和对应的布局目标，再观察和取样。
+
+绘制前通过 `project_define_component` 保存 `spec.design`。其中 `width` 和 `height` 是布局主体的设计宽高。阴影、描边或透明留边所需的外扩用 `outsets` 指定四边的非负整数，省略表示没有外扩。例如，主体为 104 × 44、四边外扩各 8 像素的按钮使用下列规格。
+
+```json
+{
+  "width": 104, "height": 44,
+  "basis": {"layout_id": "menu", "node_id": "primary-action"},
+  "outsets": {"left": 8, "top": 8, "right": 8, "bottom": 8}
+}
+```
+
+这个 `basis` 引用基础分辨率页面中已保存、具有固定宽高的节点。工具核对节点与规格的主体尺寸，引用发生变化后会报告受影响的导出。按控件规格或明确设计目标开工时，`basis` 也可写成非空文字，例如“操作栏规范规定主按钮主体为 104 × 44”。文字依据的准确性由制作者核对。工具在保存时绑定当前项目分辨率，绘制时按已保存的规格检查计划。参考像素、预览倍率和最终样片尺寸都不参与设计尺寸推导。
+
+单件的制作画布为主体加四边外扩。一个源稿包含多个图素时，使用 `design.sprites`，每个键是要导出的资产 ID，值包含各自的 `width`、`height`、`basis`、可选的 `outsets`，以及裁切区域在源稿中的左上角 `x`、`y`。工具检查这些区域都能放进画布，导出时逐项核对。画布里留给其他图素或空白区的像素不计入单个图素尺寸。
 
 ## 正式 PNG 导出
 
@@ -164,7 +186,9 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 }
 ```
 
-此例的中段由 80 列缩为 8 列，左右各 20 像素、外扩及高度保持原样。资产记录的 `width`、`height` 和 `geometry.content_rect` 对应实际导出 PNG，本例输出 48 × 60，内容区域为 `x=8, y=8, width=32, height=44`。布局实例单独声明所需的显示尺寸。来源记录保留原 `region`，显式指定样片尺寸时还保存 `provenance.source_geometry` 和 `provenance.slice_sample_size`。
+导出先按上节规格核对来源 PNG、120 × 60 裁区和其中 104 × 44 的主体，再把中段由 80 列缩为 8 列。左右各 20 像素、外扩及高度保持原样。正式 PNG 为 48 × 60，其中 `geometry.content_rect` 为 `x=8, y=8, width=32, height=44`。页面实例单独声明目标内容宽高。来源保留 `provenance.design` 和原 `region`，显式指定样片尺寸时还保存 `provenance.source_geometry` 和 `provenance.slice_sample_size`。
+
+已有导出缺少设计依据时，仍可读取原文件和清单。正式页面构建及 Unity 接入会指出需要补核的资产。先根据原布局确定 1× 规格，列出设计尺寸、原画布、裁区和固定边的差异。尺寸正确时可按原规格重新制作、导出。需要更换已有源稿画布时，使用新组件及资产 ID 按 1× 重做边角、描边和外扩，显式更新引用并复验。缩放整图、只改切片边距或调高 Unity Multiplier 都会绕过原始像素问题。
 
 `output_path` 是工程相对 PNG 路径。上述示例用于普通项目，PNG 保存到 `smart-ui/exports/`，其中 `manifests/` 保留给清单。Unity 项目须使用 `Assets` 下的路径，例如 `Assets/UI/Sprites/action-background.png`。已登记的正式资产需沿用对应输出路径。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
 
@@ -174,7 +198,7 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 图集、本地化和资源加载路径沿用工程约定。布局对齐、边距及适配检查见页面布局和构建说明。
 
 `project_update_ui_settings(project_root, expected_revision, settings)` 保存完整的项目 UI 设置。
-两个字段均按任务需要填写，`project_context` 返回已保存的 `ui_settings`。
+制作组件和基础分辨率验收需要设置 `reference_size`。滚动设置按页面需要填写，`project_context` 返回已保存的 `ui_settings`。
 
 - `reference_size` 包含正整数 `width` 与 `height`，作为正式页面的项目参考尺寸。
 - `scroll` 包含 `movement`（`Elastic` 或 `Clamped`）和布尔值 `drag_short_content`。
@@ -357,7 +381,9 @@ schema 升级的本机备份按 `.smartui/migrations/<源版本>-to-<目标版�
 
 `effect_insets` 记录四边效果预留：可见描边占总宽度的一半；投影从字形产生，模糊值大于 0 时每侧预算为 `ceil(2 × blur) + 1` 像素，无模糊时为 0，再分别加减水平和垂直偏移。每侧取描边、投影和 0 的最大值。`effects_bounds` 联合实际断行宽度、CSS 行高及 Canvas 字形外伸，再扩展效果预算；负字距及字体负边距也参与检查。它是布局校验范围，精确像素以 PNG 为准，不能直接作为 Unity 的描边或投影参数。
 
-`project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像、实际使用的文字样式或控件定义变化后显式重建。含控件的构建以 `control_dependencies` 记录实际使用的控件、基础控件和嵌套控件的定义摘要。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时才校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
+`project_build_layout` 用已安装的 Chromium 构建当前定义，保存离线 HTML、同页 PNG 和渲染所用资源。每个布局保留一份当前构建，`project_get_page_build` 的 `build_id` 与 `layout_id` 相同。布局、图像、实际使用的文字样式或控件定义变化后显式重建。含控件的构建以 `control_dependencies` 记录实际使用的控件、基础控件和嵌套控件的定义摘要。读取快照不依赖源字体和图像仍然存在；一致性标记比较当前登记资料，重新保存或构建时校验实际来源文件。浏览器在不同系统上的字体栅格化可能不同，保存的 PNG 记录实际输出。页面观察和复查见[页面对照与反馈](style-reproduction-validation.md#页面对照与反馈)。
+
+构建和读取快照均返回 `reference_size_check`。`match` 表示画布与 `ui_settings.reference_size` 一致，`different` 表示尺寸不同，`not_configured` 表示项目尚未设置基础分辨率。按基础分辨率验收时确认状态为 `match`。页面构建允许其他画布尺寸，HTML 缩放仅调整查看倍率。
 
 构建中的图像快照按资产 ID 保存在页面目录，字体快照键由工程相对字体路径确定。完整字体按内容 SHA-256 存入项目的 `smart-ui/previews/fonts/`，页面间复用同一份字节。`inputs.json` 记录相对于页面目录的资源路径，快照清单、节点引用和文件摘要须一致。共享字体随预览目录一起保留，供构建记录独立校验。
 
@@ -395,7 +421,9 @@ HTML 可缩放，并可显示安全区、布局框、内容框、可见范围和
 
 `provenance.kind` 为 `generated` 或 `edited` 时填写非空 `tool` 和 `prompt`，为 `imported` 时填写非空 `description`。如实记录已取得的模型、种子或参考等信息。正式组件导出由导出工具登记来源。
 
-静态组合提供固定坐标的简单 PNG 检查。用 `project_create_composition` 指定稳定的 `composition_id`、正整数画布尺寸、`#RRGGBB` 背景和按叠放顺序排列的节点。每项使用唯一 ID 和画布像素位置；支持当前组件预览、当前独立图像和单行文字。文字也使用工程内的持久 TTF/OTF 文件。
+静态组合将整图或指定裁区等比放进目标框，用于观察和局部对照，结果的 `preview_scope` 说明这一范围。正式切片效果使用 `project_build_layout`。它以当前资产 ID 取得交付 PNG 与几何，按实际节点尺寸计算切片，快照记录图像摘要、布局和各片位置。
+
+用 `project_create_composition` 指定稳定的 `composition_id`、正整数画布尺寸、`#RRGGBB` 背景和按叠放顺序排列的节点。每项使用唯一 ID 和画布像素位置，支持当前组件预览、图像资产和单行文字。文字使用工程内的持久 TTF/OTF 文件。
 
 | `kind` | 除 `id`、`x`、`y` 外的必填字段 | 可选字段 |
 | --- | --- | --- |

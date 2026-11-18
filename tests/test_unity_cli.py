@@ -39,13 +39,13 @@ if "--detail" in args:
         }))
         sys.exit(1)
     registration = {
-        "name": "run_script", "package": "Unity.Pipeline.Editor",
+        "name": "run", "group": "script", "package": "Unity.Pipeline.Editor",
         "parameters": [
             {"name": "file", "type": "String", "required": True},
             {"name": "entry", "type": "String", "required": False},
             {"name": "args", "type": "JArray", "required": False},
             {"name": "mode", "type": "String", "required": False},
-            {"name": "timeout_ms", "type": "Int32", "required": False},
+            {"name": "timeout", "type": "Double", "required": False},
             {"name": "dry_run", "type": "Boolean", "required": False},
         ],
     }
@@ -77,11 +77,13 @@ else:
     assert "class PrefabBuild" in path.read_text(encoding="utf-8")
     receipt = {"request_id": "a" * 32, "result_path": "result.json", "status": "success"}
     execution = {"success": True, "result": receipt, "diagnostics": []}
-    if case == "inner_failure":
+    if case == "pipeline_result":
+        del execution["success"]
+    elif case == "inner_failure":
         execution = {"success": False, "errorDetails": "Compilation failed"}
     elif case == "missing_receipt":
         execution["result"] = None
-    print(json.dumps({"success": True, "data": {"result": execution}}))
+    print(json.dumps({"success": True, "data": {"success": True, "result": execution}}))
 """,
         encoding="utf-8",
     )
@@ -105,8 +107,10 @@ else:
     return UnityCliClient(), project, request, calls
 
 
-def test_discovers_then_executes_fixed_command(cli):
+@pytest.mark.parametrize("case", ["ok", "pipeline_result"])
+def test_discovers_then_executes_fixed_command(cli, monkeypatch, case):
     client, project, request, calls = cli
+    monkeypatch.setenv("SMARTUI_TEST_CLI_CASE", case)
     assert client.execute(project, request) == {
         "request_id": "a" * 32, "result_path": "result.json", "status": "success",
     }
@@ -120,9 +124,9 @@ def test_discovers_then_executes_fixed_command(cli):
     assert script.is_absolute() and not script.is_relative_to(project)
     assert script.name == "SmartUIBuild.cs"
     assert execute == [
-        *common_args, "run_script", "--file", str(script),
+        *common_args, "script run", "--file", str(script),
         "--entry", "SmartUI.UGUI.Editor.PrefabBuild.Execute", "--args", json.dumps([str(request)]),
-        "--mode", "ephemeral", "--timeout_ms", "180000",
+        "--mode", "ephemeral", "--timeout", "180",
     ]
 
 
@@ -144,7 +148,7 @@ def test_inspection_reports_missing_registration(cli, monkeypatch, case):
     client, project, request, calls = cli
     monkeypatch.setenv("SMARTUI_TEST_CLI_CASE", case)
     assert client.inspect(project) == {
-        "project_path": str(project), "command": "run_script",
+        "project_path": str(project), "command": "script run",
         "available": False, "registration": None,
     }
     with pytest.raises(UnityCliError, match="未登记官方命令") as error:

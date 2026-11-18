@@ -337,14 +337,23 @@ namespace SmartUI.UGUI.Editor
             RequireSameStructure(target, state.Declaration);
             if (target.Kind != "page")
                 UpdateControl(target, state.Guid, state.Identities);
-            var old = Inspect(target, state.Guid, result, false, state.Managed);
+            bool inheritedResize = target.Kind == "variant" &&
+                (target.Width != state.Declaration.Width || target.Height != state.Declaration.Height);
+            var old = Inspect(target, state.Guid, result, false, state.Managed,
+                state.DirectSha256 == target.DirectSha256 && !inheritedResize, state.Declaration, inheritedResize);
             ManagedProperties.RequireEqual(old.identities, state.Identities, target.Path + " identity");
             if (request.AdoptMatching && request.Operation == "apply")
             {
                 Inspect(target, state.Guid, result, true);
                 return (state, "verify");
             }
-            ManagedProperties.RequireEqual(old.managed, state.Managed, target.Path);
+            // Before multiplier ownership, sliced Images already used uGUI's default of one.
+            // Compare that contract to the live field without rewriting a legacy baseline.
+            var expectedManaged = (JObject)state.Managed.DeepClone();
+            foreach (var field in old.managed.Properties())
+                if (field.Name.EndsWith("/m_PixelsPerUnitMultiplier", StringComparison.Ordinal) && expectedManaged.Property(field.Name) == null)
+                    expectedManaged.Add(field.Name, 1.0);
+            ManagedProperties.RequireEqual(old.managed, expectedManaged, target.Path + " (SmartUI import baseline and design pixel scale)");
             if (state.DirectSha256 != target.DirectSha256)
             {
                 if (IsVerify)
@@ -382,6 +391,15 @@ namespace SmartUI.UGUI.Editor
                 UpdateControl(target, result.Guid, found.identities);
             if (!IsVerify && (write || action != "keep"))
             {
+                // Refreshing other fields does not opt a pre-existing sliced Image into the new baseline field.
+                if (previous != null && !request.AdoptMatching)
+                    foreach (var node in target.Nodes.Where(node => node.Kind == "image"))
+                    {
+                        string key = node.Id + "/m_PixelsPerUnitMultiplier";
+                        if (previous.Managed.Property(key) == null &&
+                            (int?)previous.Managed[node.Id + "/m_Type"] == (int)UnityEngine.UI.Image.Type.Sliced)
+                            found.managed.Remove(key);
+                    }
                 target.Expected = null;
                 var state = new TargetState
                 {
@@ -420,6 +438,10 @@ namespace SmartUI.UGUI.Editor
                 var graph = new PrefabGraph(request, resources, target, root, create);
                 var properties = graph.Properties(true);
                 var desired = properties.Desired();
+                // Unity initially gives a variant root local width and height even when equal to its base.
+                // Release only those axes that should inherit, preserving all other instance overrides.
+                if (create && target.Kind == "variant")
+                    VariantSizeOverrides(root, true, true, remove: true);
                 if (!create && JToken.DeepEquals(properties.Snapshot(), desired))
                     return false;
                 properties.Apply();
@@ -446,7 +468,7 @@ namespace SmartUI.UGUI.Editor
         }
 
         (JObject managed, JObject identities) Inspect(Target target, string guid, TargetResult result,
-            bool verifyDesired, JObject baseline = null)
+            bool verifyDesired, JObject baseline = null, bool sameDesign = false, Target previous = null, bool inheritedResize = false)
         {
             var asset = PrefabAssets.RequirePrefab(target.Path, guid);
             PrefabAssets.RequireClean(target.Path, asset);
@@ -466,31 +488,47 @@ namespace SmartUI.UGUI.Editor
             try
             {
                 var graph = new PrefabGraph(request, resources, target, loaded, false);
-                var properties = graph.Properties(verifyDesired);
+                if (inheritedResize)
+                    CheckInheritedSizeBeforeResize(target, previous, loaded);
+                var properties = graph.Properties(verifyDesired, baseline);
                 var managed = properties.Snapshot();
                 if (baseline != null && !JToken.DeepEquals(baseline, managed))
                 {
-                    var desired = graph.Properties(true).Desired();
-                    result.ManagedDifferences = new JObject();
+                    JObject desired = null;
                     foreach (string key in baseline.Properties().Select(item => item.Name)
                                  .Union(managed.Properties().Select(item => item.Name)))
                     {
                         if (JToken.DeepEquals(baseline[key], managed[key]))
                             continue;
+                        bool multiplier = key.EndsWith("/m_PixelsPerUnitMultiplier", StringComparison.Ordinal);
+                        if (multiplier && baseline.Property(key) == null && (float?)managed[key] == 1f)
+                            continue;
+                        result.ManagedDifferences ??= new JObject();
+                        if (!multiplier)
+                            desired ??= graph.Properties(true).Desired();
                         result.ManagedDifferences[key] = new JObject
                         {
                             ["baseline"] = baseline[key]?.DeepClone(),
                             ["unity"] = managed[key]?.DeepClone(),
-                            ["design"] = desired[key]?.DeepClone()
+                            ["design"] = multiplier ? new JValue(1.0) : desired[key]?.DeepClone(),
+                            ["source"] = multiplier ? "SmartUI sliced Image design pixel scale" : target.Kind + "/" + target.Id
                         };
                     }
                 }
+                // Preflight reads the saved declaration before new Sprite imports or base updates.
+                // Explicit adoption and the post-save readback compare against the requested design.
+                var readDeclaration = request.AdoptMatching ? target : previous ?? target;
+                var readBaseline = request.AdoptMatching ? null : baseline;
+                resources.CheckHostAndImages(loaded, readDeclaration, result, readBaseline);
+                resources.CheckLoadedHosts(asset, readDeclaration, result, readBaseline);
                 if (verifyDesired)
                 {
                     ManagedProperties.RequireEqual(managed, properties.Desired(), target.Path);
                     properties.RequireEffectiveOverrides();
                     graph.RequireTextFits();
                 }
+                if (verifyDesired || (sameDesign && result.ManagedDifferences == null))
+                    graph.RequireDesignRectangles();
                 UpdateFileResult(result);
                 return (managed, identities);
             }
@@ -498,6 +536,35 @@ namespace SmartUI.UGUI.Editor
             {
                 PrefabUtility.UnloadPrefabContents(loaded);
             }
+        }
+
+        void CheckInheritedSizeBeforeResize(Target target, Target previous, GameObject variant)
+        {
+            // All targets are preflighted before any base is saved. ExecuteTarget verifies the new design after inheritance.
+            var source = request.Controls[target.BaseControlId];
+            var baseRect = (RectTransform)PrefabAssets.RequirePrefab(source.Path, source.Guid).transform;
+            var inherited = baseRect.rect.size;
+            var actual = ((RectTransform)variant.transform).rect.size;
+            bool Matches(float value, float baseline, float desired, float sourceValue) =>
+                value == baseline || value == desired && value == sourceValue;
+            if (!Matches(actual.x, previous.Width, target.Width, inherited.x) ||
+                !Matches(actual.y, previous.Height, target.Height, inherited.y))
+                throw new InvalidOperationException($"'{target.Path}' root RectTransform expected recorded {new Vector2(previous.Width, previous.Height)} or the new design inherited from '{source.Path}', actual {actual}.");
+            var axes = VariantSizeOverrides(variant, actual.x != target.Width, actual.y != target.Height, remove: false);
+            if (axes.Length > 0)
+                throw new InvalidOperationException($"'{target.Path}' root RectTransform has local overrides {string.Join(", ", axes)}. Expected to inherit {new Vector2(target.Width, target.Height)} from '{source.Path}', actual {actual}. Review and explicitly revert these overrides before resizing.");
+        }
+
+        static string[] VariantSizeOverrides(GameObject variant, bool width, bool height, bool remove)
+        {
+            var source = PrefabUtility.GetCorrespondingObjectFromSource(variant.transform);
+            var original = PrefabUtility.GetCorrespondingObjectFromOriginalSource(variant.transform);
+            var changes = PrefabUtility.GetPropertyModifications(variant) ?? Array.Empty<PropertyModification>();
+            var size = changes.Where(change => change.target != null && (change.target == source || change.target == original) &&
+                ((width && change.propertyPath == "m_SizeDelta.x") || (height && change.propertyPath == "m_SizeDelta.y"))).ToArray();
+            if (remove && size.Length > 0)
+                PrefabUtility.SetPropertyModifications(variant, changes.Except(size).ToArray());
+            return size.Select(change => change.propertyPath).ToArray();
         }
 
         void UpdateControl(Target target, string guid, JObject identities)

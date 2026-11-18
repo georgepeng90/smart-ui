@@ -2,7 +2,7 @@
 
 第二阶段以“一个基础控件、一个变体、两个页面”验证预制体复用：共用外观在基础预制体上修改，页面保留独立文案和引用，两个页面预制体文件不因继承变化而重写。
 
-当前实现基线为 SmartUI PhotoCraft v0.17.0，接口见 [Unity 接入工具](unity-tools.md)。已提供控件制作定义、浏览器控件节点、Unity CLI 调度和通用 Editor 构建脚本。本文说明实现边界及尚待实际工程执行的验收。验证工程待选；工程数据留在业务工程，工具代码与通用说明留在本仓库。当前 C# 脚本的 Unity 编译、实际导入、保存重开和运行效果待工程验证。
+当前实现基线为 SmartUI PhotoCraft v0.18.0，接口见 [Unity 接入工具](unity-tools.md)。已提供控件制作定义、浏览器控件节点、Unity CLI 调度和通用 Editor 构建脚本。本文说明实现边界及尚待实际工程执行的验收。通用切片控件已在 Unity Editor 核对 Sprite 导入、Prefab 保存和基础分辨率下的显示。业务工程的对象引用、继承和运行效果需在相应场景验收。
 
 ## 1 本阶段的范围
 
@@ -70,7 +70,7 @@ Unity 页面输入保留有序分组、普通图文及控件引用。首轮支�
 ```text
 SmartUI 制作定义和构建计划
   → Unity CLI 指定当前工程
-  → 官方 run_script 编译插件脚本并调用固定入口
+  → 官方 script run 编译插件脚本并调用固定入口
   → Unity 创建 GameObject、组件、层级及资源引用
   → Unity 保存 Prefab，重新加载并核验
   → 返回真实资产身份与结果，更新控件登记和使用文档
@@ -78,11 +78,11 @@ SmartUI 制作定义和构建计划
 
 Python 工具负责生成和校验制作输入、调度 CLI、检查执行结果及维护项目资料。Editor 构建器负责创建 RectTransform、Image、TextMeshProUGUI、Button 等对象和组件，导入 Sprite、绑定字体，以及创建基础 Prefab、变体和嵌套页面。预制体序列化和对象 fileID 由 Unity 生成，登记依据实际保存结果。
 
-Python 客户端先通过 Unity CLI 查询工程实际能力，再以目标工程绝对路径调用官方 `run_script`。Unity Pipeline 在内存中编译外部脚本，向固定静态入口传入包含请求路径的 JSON 参数。构建请求的 `operation` 为 `plan/apply/verify`，分别执行预检、应用或只读复验。超时后查询同一次请求的结果。
+Python 客户端先通过 Unity CLI 查询工程实际能力，再以目标工程绝对路径调用官方 `script run`。Unity Pipeline 在内存中编译外部脚本，向固定静态入口传入包含请求路径的 JSON 参数。构建请求的 `operation` 为 `plan/apply/verify`，分别执行预检、应用或只读复验。超时后查询同一次请求的结果。
 
 ### 构建脚本和工程依赖
 
-构建脚本随 SmartUI 插件分发，通过 Unity 原生 API 处理受管属性、资源导入和预制体保存。目标工程须具备 Unity Pipeline 的 `run_script` 能力、uGUI、TextMeshPro 和 Newtonsoft JSON。项目显式映射字体和材质。宿主挂载和业务引用由后续项目适配器处理。
+构建脚本随 SmartUI 插件分发，通过 Unity 原生 API 处理受管属性、资源导入和预制体保存。目标工程须具备 Unity Pipeline 的 `script run` 能力、uGUI、TextMeshPro 和 Newtonsoft JSON。项目显式映射字体和材质。宿主挂载和业务引用由后续项目适配器处理。
 
 选定验证工程后，先确认 CLI 能连接当前 Editor 并调用官方脚本入口。SmartUI 报告缺少的能力或资源，工程依赖按项目流程维护。构建输入、执行资料和持久输出清单保存在项目根目录的 `smart-ui/`。
 
@@ -160,7 +160,7 @@ Unity 覆写 Prefab 时会尝试按名称维持引用，同名对象及同一对
 | 条件 | 在首次写入前需要确认的内容 |
 | --- | --- |
 | 工程和 Editor | 当前目录、当前分支、实际 Unity 版本；脚本可编译，所需场景或局部 UI 测试入口可运行 |
-| 调用入口 | Unity CLI 能明确定位该工程和已有 Editor；CLI 能调用 Pipeline 的 `run_script`，并能找到适用的复验与测试入口 |
+| 调用入口 | Unity CLI 能明确定位该工程和已有 Editor；CLI 能调用 Pipeline 的 `script run`，并能找到适用的复验与测试入口 |
 | UI 依赖 | 已安装的 uGUI、TextMeshPro、Newtonsoft JSON 和测试依赖版本明确；脚本可以编译 |
 | 资源序列化 | 目标 Prefab 使用当前文本格式，`.meta` 随 Git 保存；路径、GUID 和对象 fileID 可核对，无 Missing Script |
 | 可写范围 | 基础、变体、页面、测试夹具和 SmartUI 资料各有明确目录；不覆盖来源不明的同名文件 |
@@ -203,7 +203,7 @@ Unity 覆写 Prefab 时会尝试按名称维持引用，同名对象及同一对
 | 步骤 | 交付 | 进入下一步的条件 |
 | --- | --- | --- |
 | 1 通用制作输入与页面预览 | 已实现控件树、变体差异、槽位目标、业务键、`control` 节点、派生预览及控件依赖 | Python 回归验证引用、过期状态及同一正式页面驱动导出 |
-| 2 通用 CLI 与 Editor 构建实现 | 已提供 CLI 命令发现和执行、真实结果登记、Sprite/TMP 映射、基础与变体构建、页面嵌套及有限更新 | Python 与离线编译只覆盖工具层；实际资源保存语义仍待验证 |
+| 2 通用 CLI 与 Editor 构建实现 | 已提供 CLI 命令发现和执行、真实结果登记、Sprite/TMP 映射、基础与变体构建、页面嵌套及有限更新 | 通用样片覆盖导入与固定尺寸显示，复杂继承与业务引用仍需工程验收 |
 | 3 工程接入 | 待选工程并确认字体、官方脚本入口及测试入口 | 实际 CLI 调用和对象保存重开通过 |
 | 4 复用验收 | 待执行本节样例矩阵，核对场景中的具体对象引用 | 共用外观生效且两个页面不重写；等值覆盖、恢复继承、中断处理及引用保持均有实际结果 |
 

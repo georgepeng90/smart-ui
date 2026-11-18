@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from smartui_mcp.projects import ProjectError, ProjectStore, spec_sha256, style_sha256
 
@@ -19,9 +20,12 @@ def project(store, tmp_path):
 
 def define(store, project, spec=None):
     if "button" not in project["data"]["programs"]:
+        project = store.update_ui_settings(project["project_root"], project["revision"],
+                                           {"reference_size": {"width": 400, "height": 160}})
         project = store.save_program(project["project_root"], project["revision"], "button", "按钮程序", "通用绘制程序", "result = []\n")
     return store.define_component(project["project_root"], project["revision"], "primary-button", "主按钮",
-                                  {"program_id": "button", **(spec or {"width": 160, "text": "开始"})})
+                                  {"program_id": "button", "design": {"basis": "主按钮规格", "width": 160, "height": 48},
+                                   **(spec or {"width": 160, "text": "开始"})})
 
 
 def successful_run(project, tmp_path, run_id="run-1", status="drawn"):
@@ -35,6 +39,7 @@ def successful_run(project, tmp_path, run_id="run-1", status="drawn"):
         path = tmp_path / filename
         path.write_bytes(f"实际产物 {field}".encode())
         run[field] = str(path)
+    Image.new("RGBA", (160, 48)).save(run["preview"])
     plan = tmp_path / "plan.json"
     plan.write_text('{"operations": []}', encoding="utf-8")
     run.update(plan_path=str(plan),

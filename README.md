@@ -1,6 +1,6 @@
 # SmartUI PhotoCraft 本地制作插件
 
-SmartUI PhotoCraft v0.17.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
+SmartUI PhotoCraft v0.18.0 是通用游戏 UI 制作工具。通过项目 Python 程序制作 PhotoCraft 可编辑组件，管理参考、风格、文字规范、图像资产、正式 PNG 导出和页面布局。页面支持分组排列、对齐、弹性区域、安全区及多场景预览。独立图标由宿主图像工具生成或编辑，SmartUI 登记实际文件和真实来源。Unity 接入工具维护控件制作定义和预制体登记，正式页面可以引用控件并用于静态预览和 uGUI 构建。
 
 ## 安装
 
@@ -22,7 +22,7 @@ codex plugin add smartui-photocraft@smartui-local
 
 使用 `reference-style` 分析参考；使用 `photocraft-drawing` 制作与修改基础组件；独立图标使用 `icon-assets`；已有资产排版、移动实例和改文案使用 `page-composition`。
 
-先调用 `project_context` 读取已有项目。新项目创建后登记并查看参考，保存风格、共用参数和 Python 程序，定义组件后制作并查看预览。首次编写或需诊断时单独预检计划；绘制入口自身也会严格预检，已明确的参数调整无需重复调用。写入使用对应工具最近返回的 `revision`。技术检查、模型视觉判断和用户确认分别表达。
+先调用 `project_context` 读取项目。制作组件前，通过 `project_update_ui_settings` 确定项目基础分辨率，再按布局节点、控件规格或明确的设计目标登记组件的 1× 主体尺寸和外扩。参考图用于观察和取样。按这份规格绘制、导出，再将正式 PNG 放入实际布局查看切片效果。写入使用对应工具最近返回的 `revision`。[组件的设计尺寸与制作区域](docs/project-tools.md#组件的设计尺寸与制作区域)
 
 参考风格做新设计时，用代表样片检查新组件与整套 UI 是否协调。按定稿制作图素时，以用户指定的效果图为准，按原图还原高光、阴影和材质纹理。交付前把每个关键部位与成品按相同显示尺寸并排查看，提供各处对照和仍有差异的部分。多层图素还要按实际层序检查组合效果。[绘制与逐处对照方法](docs/style-reproduction-validation.md)
 
@@ -40,7 +40,7 @@ codex plugin add smartui-photocraft@smartui-local
 
 `.smartui/` 是 Git 忽略的本机目录，保存缓存、临时文件、诊断、锁和 schema 升级迁移备份。停止工具后可清理本机数据，清理前请另存仍需保留的迁移备份。其他成员取得业务项目提交后，可以用自己机器上的依赖继续制作。项目锁和 revision 检查当前目录的并发操作，跨分支冲突由团队在 Git 中处理。
 
-可伸缩组件可以交付紧凑的切片 PNG。切线选择与 Unity 验收见[切片制作指南](docs/asset-geometry.md)，样片尺寸和来源记录见[正式 PNG 导出](docs/project-tools.md#正式-png-导出)。
+可伸缩组件可以交付只收短中段的切片 PNG。Unity 按目标布局尺寸显示，受管 Sprite 和宿主 Canvas 的参考 PPU 均为 100，切片 Image 的 Pixels Per Unit Multiplier 为 1。切线选择与 Unity 验收见[切片制作指南](docs/asset-geometry.md)，样片尺寸和来源记录见[正式 PNG 导出](docs/project-tools.md#正式-png-导出)。
 
 页面布局按资产 ID 引用当前资产，支持九宫格、独立文本框和嵌套分组。容器可横排、竖排、叠放或使用局部坐标；共享边距、等距分布、内容宽度、弹性区域及文字基线用于保持布局关系。组件可声明文字区域、点击范围、动画中心和所需状态，由引用它的页面复用并检查。
 
@@ -48,7 +48,7 @@ codex plugin add smartui-photocraft@smartui-local
 
 `project_page_dependencies` 查询组件、图像、文字样式的页面使用位置及过期原因，`project_rebuild_pages` 集中重建指定页面。源组件变化而导出未更新时，先重新制作和导出再重建。接口见[项目工具说明](docs/project-tools.md)。
 
-使用 `unity-integration` 定义并登记控件，在页面布局中以 `control` 节点引用控件。浏览器展开控件图文来预览，Unity CLI 的 `run_script` 在目标 Editor 中运行插件随附的构建脚本，生成基础 Prefab、Prefab Variant 和包含嵌套实例的页面 Prefab。实际工程的保存重开、覆盖语义、对象引用及运行效果分别验收。接口、适配范围和工程接入条件见 [Unity 接入工具](docs/unity-tools.md)。
+使用 `unity-integration` 定义并登记控件，在页面布局中以 `control` 节点引用控件。浏览器展开控件图文来预览，Unity CLI 的 `script run` 在目标 Editor 中运行插件随附的构建脚本，生成基础 Prefab、Prefab Variant 和包含嵌套实例的页面 Prefab。实际工程的保存重开、覆盖语义、对象引用及运行效果分别验收。接口、适配范围和工程接入条件见 [Unity 接入工具](docs/unity-tools.md)。
 
 工具仓库只保存通用代码、Skill、文档、测试及示例。具体项目的参考、程序、源文件和当前制作资料留在项目中，`projects/` 保持忽略。
 

@@ -218,6 +218,14 @@ def image_geometry(record):
                                                    "height": record["height"]}, "mode": "contain"})
 
 
+def reference_size_check(state, page):
+    """按同一项目基准报告正式页面或构建快照的画布尺寸。"""
+    reference = state.get("ui_settings", {}).get("reference_size")
+    actual = {axis: page[axis] for axis in ("width", "height")}
+    return {"reference": reference, "actual": actual,
+            "status": "not_configured" if reference is None else "match" if reference == actual else "different"}
+
+
 def _apply_component_padding(state, node, usages):
     component_id = node["component_id"]
     if component_id not in usages:

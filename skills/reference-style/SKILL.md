@@ -15,6 +15,8 @@ description: 分析项目视觉参考，为参考风格的新设计提炼规则�
 
 已有项目先 `project_context`，查看已有规则、组件规格和预览，避免重复建立矛盾规范。新项目先 `project_create`。用 `project_add_reference` 登记只读原图，用 `project_inspect_reference` 查看整图、关键区域和需要的色块。坐标相对完整参考，按预览测量时传 coordinate_size。
 
+参考坐标服务于取样。整页参考先确认页面范围及宽高比，再将其映射到 `ui_settings.reference_size`。局部、裁边或不同比例的参考须先确定对应的布局区域。按项目布局、控件规格或明确设计目标登记 1× 主体尺寸，记录参考原像素与该区域的对应关系。
+
 先实际查看完整图片和相关局部。根据用户指定的用途选择以下做法，以实际需要确定分析维度。
 
 - **参考风格做新设计**。用户把图片用作风格参考时，提炼决定目标尺寸下观感的少量特征，说明它们如何用于本次设计。具体造型、用色及细节按本次设计要求确定，用实际样片检验规则是否抓住了参考的风格。
@@ -50,7 +52,7 @@ ICON 图像采用独立的宿主生图或图像编辑流程。SmartUI 不内置�
 
 ## 维护项目文档与校准
 
-用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。说明规则适用于基础 UI、ICON 还是两者，参数按实际用途组织，不强加固定色板、圆角或高光字段。需要通过 PhotoCraft 制作的组件用 `project_define_component` 保存完整规格，其中 program_id 引用已保存的程序；定义规格不表示已经生成资产。ICON 占位和独立生成图像不登记为待绘制组件。
+用 `project_update_style` 保存 description、rules、parameters 和 reference_ids，证据可用 `{reference_id, note}`。说明规则适用于基础 UI、ICON 还是两者，参数按实际用途组织，不强加固定色板、圆角或高光字段。需要通过 PhotoCraft 制作的组件用 `project_define_component` 保存规格，`spec.program_id` 引用已保存的程序，`spec.design` 记录上述 1× 尺寸及其依据。保存规格后通过绘制工具生成资产。ICON 占位和独立生成图像按独立图像流程处理。
 
 每次写入用最新 revision，冲突时重新读取核对。`smart-ui/docs/style.md` 和 `smart-ui/docs/components.md` 由 MCP 根据项目资料生成，通过工具更新原始资料。
 

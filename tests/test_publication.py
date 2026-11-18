@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from smartui_mcp.client import PhotoCraftClient
 from smartui_mcp.pipeline import draw_component
@@ -27,15 +28,17 @@ def test_publication_keeps_source_and_record_consistent_during_concurrent_update
     root = str(tmp_path)
     store = ProjectStore()
     context = store.create(root, "publication", "发布并发验证")
+    context = store.update_ui_settings(root, context["revision"], {"reference_size": {"width": 64, "height": 48}})
     context = store.save_program(root, context["revision"], "drawing", "drawing", "drawing", PROGRAM)
+    design = {"width": 32, "height": 32, "basis": "并发验证使用的方形按钮"}
     context = store.define_component(root, context["revision"], "button", "button",
-                                     {"program_id": "drawing", "color": "#ff0000"})
+                                     {"program_id": "drawing", "color": "#ff0000", "design": design})
     created = draw_component(root, context["revision"], "button", client=client, store=store)
     document = Path(created["document"])
     original_source = document.read_bytes()
     context = store.context(root)
     context = store.define_component(root, context["revision"], "button", "button",
-                                     {"program_id": "drawing", "color": "#00ff00"})
+                                     {"program_id": "drawing", "color": "#00ff00", "design": design})
     publish = store.publish_run
 
     def update_before_publication(*args, **kwargs):
@@ -88,6 +91,7 @@ def publication_candidate(root, context, run_id):
         path.write_bytes(f"{run_id} {filename}".encode())
         files[field] = str(path)
     data = context["data"]
+    Image.new("RGBA", (32, 32), data["components"]["button"]["spec"].get("color", "#ffffff")).save(files["preview"])
     return {
         **files, "run_id": run_id, "status": "verified",
         "document": str(root / "smart-ui/sources/button.pcraft"),
@@ -108,8 +112,10 @@ def test_publication_checks_blocked_preview_before_writing_source(tmp_path):
     root = tmp_path.resolve()
     store = ProjectStore()
     context = store.create(str(root), "publication", "发布验证")
+    context = store.update_ui_settings(str(root), context["revision"], {"reference_size": {"width": 64, "height": 48}})
     context = store.save_program(str(root), context["revision"], "drawing", "Drawing", "", PROGRAM)
-    context = store.define_component(str(root), context["revision"], "button", "按钮", {"program_id": "drawing"})
+    context = store.define_component(str(root), context["revision"], "button", "按钮", {
+        "program_id": "drawing", "design": {"basis": "方形按钮的控件规格", "width": 32, "height": 32}})
     blocked = root / "smart-ui/previews/components"
     blocked.parent.mkdir()
     blocked.write_bytes(b"blocked")
@@ -130,8 +136,9 @@ def test_publication_restores_persistent_files_after_replace_error(tmp_path, mon
     root = tmp_path.resolve()
     store = ProjectStore()
     context = store.create(str(root), "publication", "发布验证")
+    context = store.update_ui_settings(str(root), context["revision"], {"reference_size": {"width": 64, "height": 48}})
     context = store.save_program(str(root), context["revision"], "drawing", "Drawing", "", PROGRAM)
-    spec = {"program_id": "drawing", "color": "#ff0000"}
+    spec = {"program_id": "drawing", "color": "#ff0000", "design": {"basis": "方形按钮的控件规格", "width": 32, "height": 32}}
     context = store.define_component(str(root), context["revision"], "button", "按钮", spec)
     first = publication_candidate(root, context, "first")
     context = store.publish_run(str(root), context["revision"], "button", first)

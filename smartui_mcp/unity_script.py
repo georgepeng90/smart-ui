@@ -1,4 +1,4 @@
-"""Build the single C# source file consumed by Unity CLI run_script."""
+"""Build the single C# source file consumed by Unity CLI script run."""
 
 from pathlib import Path
 

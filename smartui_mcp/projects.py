@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,8 @@ import re
 import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
+
+from PIL import Image
 
 from .layout import SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
 
@@ -229,6 +232,7 @@ class ProjectStore:
     def define_component(self, project_root: str, expected_revision: str,
                          component_id: str, name: str, spec: dict) -> dict:
         from .component_usage import validate_usage
+        from .production_design import bind_design
 
         _identifier(component_id, "component_id")
         _text(name, "name")
@@ -242,8 +246,14 @@ class ProjectStore:
         def change(state):
             self._component_program(state, spec)
             self._check_id_collision(state["components"], component_id, "component_id")
+            saved_spec = deepcopy(spec)
+            if "design" in spec:
+                try:
+                    saved_spec["design"] = bind_design(spec["design"], state)
+                except ValueError as error:
+                    raise ProjectError(f"组件 {component_id}：{error}") from error
             component = state["components"].setdefault(component_id, {"latest_run": None})
-            component.update(name=name, spec=deepcopy(spec),
+            component.update(name=name, spec=saved_spec,
                              user_confirmation=None)
         return self._update(project_root, expected_revision, change)
 
@@ -252,6 +262,8 @@ class ProjectStore:
                             lambda state: self._record_run(state, component_id, run))
 
     def _record_run(self, state, component_id, run, document_artifact=None):
+        from .production_design import check_artwork_size, current_design
+
         if component_id not in state["components"]:
             raise ProjectError(f"组件不存在：{component_id}")
         if not isinstance(run, dict):
@@ -300,7 +312,16 @@ class ProjectStore:
                 raise ProjectError(f"run.{field} 必须是现存文件的绝对路径：{path_value}")
             if suffix and path.suffix.lower() != suffix:
                 raise ProjectError(f"run.{field} 文件必须使用 {suffix} 扩展名：{path}")
-            record["artifact_hashes"][field] = _sha(path.read_bytes())
+            payload = path.read_bytes()
+            if field == "preview":
+                try:
+                    design = current_design(state, component_id)
+                    with Image.open(BytesIO(payload), formats=["PNG"]) as png:
+                        check_artwork_size(design, png.size, component_id)
+                        png.verify()
+                except (ValueError, OSError, SyntaxError) as error:
+                    raise ProjectError(f"组件 {component_id} 无法登记预览 {path}：{error}") from error
+            record["artifact_hashes"][field] = _sha(payload)
         record["user_confirmation"] = None
         component["latest_run"] = record
         component["user_confirmation"] = None
@@ -694,8 +715,8 @@ class ProjectStore:
                 revision = result["revision"]
             return {"project_root": str(root), "revision": revision, "completed_layout_ids": completed}
 
-    def get_page_build(self, project_root: str, build_id: str) -> dict:
-        """读取已保存构建，只依赖快照，不要求原始图像和字体继续存在。"""
+    def get_page_build(self, project_root: str, build_id: str, *, for_unity_comparison=False) -> dict:
+        """读取构建快照。基础分辨率下的 Unity 对照额外核对当前布局和交付图像。"""
         from .page_builds import verify_build
 
         _identifier(build_id, "build_id")
@@ -704,15 +725,40 @@ class ProjectStore:
         if record is None:
             raise ProjectError(f"页面构建不存在：{build_id}")
         verify_build(record)
-        return self._page_build_result(context, build_id)
+        result = self._page_build_result(context, build_id)
+        if for_unity_comparison:
+            from .image_assets import verify_image_record
+            from .typography import resolve_style, validate_font
+
+            size = result["reference_size_check"]
+            if size["status"] != "match":
+                reference = size["reference"]
+                expected = f"{reference['width']}×{reference['height']}" if reference else "未设置"
+                raise ProjectError(f"页面 {build_id} 的基础分辨率对照要求 ui_settings.reference_size "
+                                   f"与正式画布一致，项目设置为 {expected}，实际画布为 {record['width']}×{record['height']}")
+            if not result["is_current"]:
+                differences = [key for key in ("matches_layout", "matches_images", "matches_sources",
+                                               "matches_typography", "matches_component_usage", "matches_unity_controls")
+                               if not result[key]]
+                raise ProjectError(f"页面 {build_id} 的快照已过期，请按当前输入重新构建。差异 {differences}，"
+                                   f"资产来源 {result['source_issues']}")
+            for asset_id in {node["asset_id"] for node in record["nodes"] if node["kind"] == "image"}:
+                verify_image_record(context["data"]["images"][asset_id])
+            for style_id in {node["text_style_id"] for node in record["nodes"] if node["kind"] == "text"}:
+                style = resolve_style(context["data"]["typography"], style_id)
+                validate_font(style["font_path"], style["font_sha256"], label=f"Unity 对照文字角色 {style_id}")
+        return result
 
     @staticmethod
     def _page_build_result(context, build_id):
+        from .page_layouts import reference_size_check
+
         state = context["data"]
         record = state.get("page_builds", {}).get(build_id)
         if record is None:
             raise ProjectError(f"页面构建不存在：{build_id}")
         return {"project_root": context["project_root"], "revision": context["revision"], "page_build": deepcopy(record),
+                "reference_size_check": reference_size_check(state, record),
                 **state["page_status"][build_id]}
 
     @staticmethod
@@ -769,7 +815,8 @@ class ProjectStore:
         record = context["data"].get("compositions", {}).get(composition_id)
         if record is None:
             raise ProjectError(f"组合预览不存在：{composition_id}")
-        return {"project_root": context["project_root"], "revision": context["revision"], "composition": record}
+        return {"project_root": context["project_root"], "revision": context["revision"], "composition": record,
+                "preview_scope": "裁图等比组合，仅用于观察和局部对照。切片与 Unity 尺寸请用正式页面构建核对。"}
 
     def _review_run(self, state, component_id):
         component = state["components"].get(component_id)

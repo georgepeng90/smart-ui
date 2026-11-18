@@ -139,12 +139,14 @@ def run(output_root):
         store = ProjectStore()
         root = str(output_root)
         ctx = store.create(root, "native-workflow-verification", "PhotoCraft 通用工作流验证")
+        ctx = store.update_ui_settings(root, ctx["revision"], {"reference_size": {"width": 400, "height": 160}})
         example_path = ROOT / "examples/drawing-programs/semantic_palette.py"
         parameters = runpy.run_path(str(example_path))["example_parameters"]()
         ctx = store.update_style(root, ctx["revision"], "通用配色及状态验证", [], parameters, [])
         ctx = store.save_program(root, ctx["revision"], "semantic-palette", "通用状态程序",
                                  "验证原生形状、投影样式和局部更新", example_path.read_text(encoding="utf-8"))
-        spec = {"program_id": "semantic-palette", "theme": "lagoon", "state": "selected", "width": 200, "height": 64}
+        spec = {"program_id": "semantic-palette", "theme": "lagoon", "state": "selected", "width": 200, "height": 64,
+                "design": {"width": 200, "height": 64, "basis": "验证页面中的操作按钮采用 200×64 的默认尺寸"}}
         ctx = store.define_component(root, ctx["revision"], "action", "操作背景", spec)
         report["plan"] = plan_component(root, "action", store=store)
         first = draw_component(root, ctx["revision"], "action", client=client, store=store)

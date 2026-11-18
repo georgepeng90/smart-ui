@@ -295,6 +295,8 @@ class UnityBuildStore:
         return deepcopy(bindings)
 
     def prepare(self, project_root, expected_revision, control_ids, page_ids, operation="plan", adopt_matching=False):
+        from .page_layouts import reference_size_check
+
         root = self.projects._root(project_root)
         if operation not in ("plan", "apply", "verify"):
             raise ProjectError("operation 必须是 plan、apply 或 verify")
@@ -326,16 +328,8 @@ class UnityBuildStore:
                       "error": None, "result_sha256": None}
             self.projects._publish_batch(ProjectLayout(root), {
                 root / request_path: _bytes(request), layout.persistent(f"{OPERATIONS}/{request_id}/operation.json"): _bytes(record)})
-            reference = source.get("ui_settings", {}).get("reference_size")
-            size_checks = {}
-            for target in request["targets"]:
-                if target["kind"] != "page":
-                    continue
-                actual = {axis: target[axis] for axis in ("width", "height")}
-                size_checks[target["id"]] = {
-                    "reference": reference, "actual": actual,
-                    "status": "not_configured" if reference is None else "match" if reference == actual else "different",
-                }
+            size_checks = {target["id"]: reference_size_check(source, target)
+                           for target in request["targets"] if target["kind"] == "page"}
             return {"request_id": request_id, "request_path": str(root / request_path), "request": request,
                     "reference_size_checks": size_checks,
                     "status": "prepared", "unity_execution": "not_performed"}

@@ -4,12 +4,14 @@ from .comparisons import RUN_FIELDS
 from .component_usage import check_component_states
 from .page_layouts import iter_layout_nodes, iter_page_preview_nodes
 from .projects import ProjectError, spec_sha256, style_sha256
+from .production_design import asset_design_issue, design_issue
 
 
 def component_needs_review(state, component, current_style_sha256):
     latest = component["latest_run"]
     program = state["programs"][component["spec"]["program_id"]]
-    return (latest is None or latest["style_sha256"] != current_style_sha256 or
+    return (latest is None or design_issue(state, component["spec"].get("design")) is not None or
+            latest["style_sha256"] != current_style_sha256 or
             latest["spec_sha256"] != spec_sha256(component["spec"]) or
             latest.get("program_id") != program["id"] or latest.get("program_sha256") != program["sha256"])
 
@@ -28,7 +30,11 @@ def asset_source_issues(state):
         latest = component["latest_run"] if component is not None else None
         latest_run_id = latest["run_id"] if latest is not None else None
         export_run_id = source["run"]["run_id"]
-        if latest is None or latest["status"] not in ("drawn", "verified"):
+        design_problem = asset_design_issue(state, asset)
+        if design_problem:
+            reason = "production_design_unverified"
+            action = design_problem
+        elif latest is None or latest["status"] not in ("drawn", "verified"):
             reason = "component_has_no_successful_run"
             action = "先绘制组件，再重新导出资产"
         elif component_needs_review(state, component, current_style):

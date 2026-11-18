@@ -6,6 +6,8 @@ using Newtonsoft.Json.Linq;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 using ImageComponent = UnityEngine.UI.Image;
 using Object = UnityEngine.Object;
 
@@ -13,7 +15,10 @@ namespace SmartUI.UGUI.Editor
 {
     internal sealed class BuildResources
     {
+        internal const float DesignPixelsPerUnit = 100f;
         readonly BuildRequest request;
+        readonly Dictionary<(Target, bool), DeclaredNode[]> declaredNodes = new();
+        readonly Dictionary<string, TargetState> controlStates = new();
         readonly Dictionary<string, (TextStyle style, TMP_FontAsset font, Material material)> fonts = new();
 
         internal BuildResources(BuildRequest request) => this.request = request;
@@ -84,11 +89,234 @@ namespace SmartUI.UGUI.Editor
         {
             string path = ImagePath(asset);
             var sprites = AssetDatabase.LoadAllAssetsAtPath(path).OfType<Sprite>().ToArray();
-            if (sprites.Length != 1 || sprites[0].rect != new Rect(0, 0, asset.Width, asset.Height) ||
-                sprites[0].border != Borders(asset) || (Sliced(asset) && sprites[0].pixelsPerUnit != 100))
-                throw new InvalidOperationException($"'{path}' must import as a single full-size Sprite with the declared borders and 100 pixels per unit when sliced.");
+            if (sprites.Length != 1)
+                throw new InvalidOperationException($"'{path}' expected 1 Sprite from '{asset.Path}', actual {sprites.Length}.");
+            var sprite = sprites[0];
+            var expectedRect = new Rect(0, 0, asset.Width, asset.Height);
+            if (sprite.rect != expectedRect)
+                throw new InvalidOperationException($"'{path}' Sprite.rect expected {expectedRect} from PNG '{asset.Path}', actual {sprite.rect}.");
+            if (sprite.border != Borders(asset))
+                throw new InvalidOperationException($"'{path}' Sprite.border (left,bottom,right,top) expected {Borders(asset)} from '{asset.Path}' geometry.borders, actual {sprite.border}.");
+            // The 100 PPU contract applies to generated Sprites and mapped sliced artwork.
+            if ((asset.OutputPath != null || Sliced(asset)) && sprite.pixelsPerUnit != DesignPixelsPerUnit)
+                throw new InvalidOperationException($"'{path}' Sprite.pixelsPerUnit expected {DesignPixelsPerUnit} from the SmartUI design pixel scale for '{asset.Path}', actual {sprite.pixelsPerUnit}.");
             PrefabAssets.RequireClean(path, sprites[0]);
             return sprites[0];
+        }
+
+        internal static void RequireCanvasScale(Canvas canvas, string source)
+        {
+            void Require(float actual, string property)
+            {
+                if (actual != DesignPixelsPerUnit)
+                    throw new InvalidOperationException($"'{source}' {property} expected {DesignPixelsPerUnit} from the SmartUI design pixel scale, actual {actual}.");
+            }
+            Require(canvas.referencePixelsPerUnit, "Canvas.referencePixelsPerUnit");
+            var scaler = canvas.rootCanvas.GetComponent<CanvasScaler>();
+            if (scaler != null && scaler.enabled)
+                Require(scaler.referencePixelsPerUnit, "CanvasScaler.referencePixelsPerUnit");
+        }
+
+        internal void CheckHostAndImages(GameObject scope, Target target, TargetResult result, JObject baseline = null, string sceneSource = null)
+        {
+            var canvases = new HashSet<Canvas>();
+            void ReadCanvas(Canvas canvas)
+            {
+                if (canvas == null || !canvases.Add(canvas))
+                    return;
+                string source = (scope.scene.path == "" ? target.Path : scope.scene.path) + "/" + Hierarchy(canvas.transform);
+                result.CanvasReferencePixelsPerUnit[source] = canvas.referencePixelsPerUnit;
+                RequireCanvasScale(canvas, source);
+            }
+            ReadCanvas(scope.GetComponentsInParent<Canvas>().FirstOrDefault(canvas => canvas.isActiveAndEnabled));
+            var sourceRoot = sceneSource == null ? null : PrefabUtility.GetCorrespondingObjectFromSourceAtPath(scope, sceneSource);
+            foreach (var node in Nodes(target, baseline))
+            {
+                var rect = scope.transform.Find(node.Path) as RectTransform;
+                if (sceneSource == null && node.OwnerPath != target.Path)
+                {
+                    var owner = AssetDatabase.LoadAssetAtPath<GameObject>(node.OwnerPath);
+                    var original = owner.transform.Find(node.OwnerNodePath) as RectTransform;
+                    if (rect == null || original == null || rect.anchorMin != original.anchorMin ||
+                        rect.anchorMax != original.anchorMax || rect.pivot != original.pivot ||
+                        rect.anchoredPosition != original.anchoredPosition || rect.sizeDelta != original.sizeDelta)
+                        throw new InvalidOperationException($"'{target.Path}/{node.Path}' RectTransform expected {RectLayout(original)} from '{node.OwnerPath}/{node.OwnerNodePath}', actual {RectLayout(rect)}.");
+                }
+                if (node.SpritePath == null)
+                    continue;
+                var image = rect?.GetComponent<ImageComponent>();
+                var source = sourceRoot == null ? null : sourceRoot.transform.Find(node.Path)?.GetComponent<ImageComponent>();
+                if (image == null)
+                {
+                    if (sceneSource == null || source != null && source.type == ImageComponent.Type.Sliced)
+                        throw new InvalidOperationException($"'{scope.scene.path}/{Hierarchy(scope.transform)}/{node.Path}' expected {node.ImageType} Image from '{sceneSource ?? target.Path}', actual Image missing.");
+                    continue;
+                }
+                ReadCanvas(image.canvas);
+                if (source != null && source.type == ImageComponent.Type.Sliced)
+                    RequireSceneImage(image, source, sceneSource);
+                else if (sceneSource == null)
+                {
+                    string location = $"'{target.Path}/{node.Path}'";
+                    if (image.type != node.ImageType)
+                        throw new InvalidOperationException($"{location} Image.type expected {node.ImageType} from '{node.OwnerPath}/{node.OwnerNodePath}', actual {image.type}.");
+                    if (image.type == ImageComponent.Type.Sliced && image.pixelsPerUnitMultiplier != 1f)
+                        throw new InvalidOperationException($"{location} Image.pixelsPerUnitMultiplier expected 1 from the SmartUI sliced Image design pixel scale, actual {image.pixelsPerUnitMultiplier}.");
+                    if (image.sprite == null || AssetDatabase.GetAssetPath(image.sprite) != node.SpritePath)
+                        throw new InvalidOperationException($"{location} Image.sprite expected '{node.SpritePath}' from the declared artwork and Sprite overrides, actual {SpriteDescription(image.sprite)}.");
+                }
+            }
+        }
+
+        static string RectLayout(RectTransform rect) => rect == null ? "missing" :
+            $"anchors {rect.anchorMin:G9}..{rect.anchorMax:G9}, pivot {rect.pivot:G9}, anchoredPosition {rect.anchoredPosition:G9}, sizeDelta {rect.sizeDelta:G9}";
+
+        static void RequireSceneImage(ImageComponent image, ImageComponent source, string sourcePath)
+        {
+            // The enclosing Prefab includes its Variant and nested instance Sprite parameters.
+            string location = $"'{image.gameObject.scene.path}/{Hierarchy(image.transform)}'";
+            string declaration = $"'{sourcePath}/{Hierarchy(source.transform)}'";
+            if (image.type != ImageComponent.Type.Sliced)
+                throw new InvalidOperationException($"{location} Image.type expected Sliced from {declaration}, actual {image.type}.");
+            if (image.pixelsPerUnitMultiplier != 1f)
+                throw new InvalidOperationException($"{location} Image.pixelsPerUnitMultiplier expected 1 from {declaration}, actual {image.pixelsPerUnitMultiplier}.");
+            if (image.sprite != source.sprite)
+                throw new InvalidOperationException($"{location} Image.sprite expected {SpriteDescription(source.sprite)} from {declaration}, actual {SpriteDescription(image.sprite)}.");
+
+            var actual = image.overrideSprite; // uGUI returns the Sprite currently used for drawing.
+            if (actual == null || (actual != source.sprite && !IsButtonState(source, actual)))
+                throw new InvalidOperationException($"{location} Image active Sprite expected {SpriteDescription(source.sprite)} or a declared SpriteSwap state from {declaration}, actual {SpriteDescription(actual)}.");
+            if (actual.pixelsPerUnit != DesignPixelsPerUnit)
+                throw new InvalidOperationException($"{location} Sprite.pixelsPerUnit expected {DesignPixelsPerUnit} from {declaration}, actual {SpriteDescription(actual)}.");
+        }
+
+        static string SpriteDescription(Sprite sprite) => sprite == null ? "null" :
+            $"'{AssetDatabase.GetAssetPath(sprite)}' ({sprite.name}, PPU {sprite.pixelsPerUnit})";
+
+        static bool IsButtonState(ImageComponent source, Sprite sprite)
+        {
+            foreach (var button in source.GetComponentsInParent<Button>(true))
+            {
+                if (button.targetGraphic != source || button.transition != Selectable.Transition.SpriteSwap)
+                    continue;
+                var states = button.spriteState;
+                if (sprite == states.highlightedSprite || sprite == states.pressedSprite ||
+                    sprite == states.selectedSprite || sprite == states.disabledSprite)
+                    return true;
+            }
+            return false;
+        }
+
+        struct DeclaredNode
+        {
+            internal string Id, Path, OwnerPath, OwnerNodePath, SpritePath;
+            internal ImageComponent.Type ImageType;
+        }
+
+        DeclaredNode[] Nodes(Target target, JObject baseline)
+        {
+            var key = (target, baseline != null);
+            if (!declaredNodes.TryGetValue(key, out var nodes))
+                declaredNodes.Add(key, nodes = ResolveNodes(target, baseline).ToArray());
+            return nodes;
+        }
+
+        IEnumerable<DeclaredNode> ResolveNodes(Target target, JObject baseline)
+        {
+            DeclaredNode[] ControlNodes(string controlId)
+            {
+                var selected = request.Targets.FirstOrDefault(item => item.Kind != "page" && item.Id == controlId);
+                if (baseline == null && selected != null)
+                    return Nodes(selected, null);
+                if (!controlStates.TryGetValue(controlId, out var state))
+                {
+                    foreach (var kind in new[] { "base", "variant" })
+                    {
+                        state = BuildFiles.Read<TargetState>(BuildFiles.StatePath(request.DataRoot, kind, controlId));
+                        if (state?.ProjectId == request.ProjectId && state.Path == request.Controls[controlId].Path)
+                            break;
+                        state = null;
+                    }
+                    controlStates.Add(controlId, state);
+                }
+                // External controls have no generated declaration.
+                return state == null ? Array.Empty<DeclaredNode>() : Nodes(state.Declaration, state.Managed);
+            }
+            string SpritePath(string id, string field, bool local) => baseline == null ? ImagePath(Image(id)) :
+                AssetDatabase.GUIDToAssetPath((string)(local ? baseline[field]["reference"] : baseline[field])[0]);
+            if (target.Kind == "variant")
+            {
+                foreach (var inherited in ControlNodes(target.BaseControlId))
+                {
+                    var node = inherited;
+                    var change = target.Overrides.SingleOrDefault(entry => entry.NodeId == node.Id && entry.Property == "asset_id");
+                    if (change != null)
+                        node.SpritePath = SpritePath((string)change.Value, node.Id + "/override/m_Sprite", true);
+                    yield return node;
+                }
+                yield break;
+            }
+            var paths = new Dictionary<string, string>();
+            foreach (var node in target.Nodes)
+            {
+                string path = (node.ParentId == null ? "" : paths[node.ParentId] + "/") + PrefabGraph.NodeName(node.Id);
+                paths.Add(node.Id, path);
+                var declared = new DeclaredNode { Id = node.Id, Path = path, OwnerPath = target.Path, OwnerNodePath = path };
+                if (node.Kind == "image")
+                {
+                    declared.SpritePath = SpritePath(node.AssetId, node.Id + "/m_Sprite", false);
+                    declared.ImageType = baseline != null ? (ImageComponent.Type)(int)baseline[node.Id + "/m_Type"] :
+                        Sliced(Image(node.AssetId)) ? ImageComponent.Type.Sliced : ImageComponent.Type.Simple;
+                }
+                yield return declared;
+                if (node.Kind != "control")
+                    continue;
+                var control = request.Controls[node.ControlId];
+                string instance = path + "/" + PrefabGraph.InstanceName(node.Id);
+                yield return new DeclaredNode { Path = instance, OwnerPath = target.Path, OwnerNodePath = instance };
+                foreach (var child in ControlNodes(node.ControlId))
+                {
+                    var nested = child;
+                    foreach (var pair in node.Parameters)
+                    {
+                        var parameter = control.Parameters[pair.Key];
+                        if (parameter.Property == "asset_id" && control.Slots[parameter.SlotId].NodeId == child.Id)
+                            nested.SpritePath = SpritePath((string)pair.Value, node.Id + "/parameter/" + pair.Key, true);
+                    }
+                    nested.Id = null; // The enclosing control exposes its own nodes as public slots.
+                    nested.Path = instance + "/" + child.Path;
+                    yield return nested;
+                }
+            }
+        }
+
+        static string Hierarchy(Transform node) => node.parent == null ? node.name : Hierarchy(node.parent) + "/" + node.name;
+
+        internal void CheckLoadedHosts(GameObject asset, Target target, TargetResult result, JObject baseline)
+        {
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var scene = SceneManager.GetSceneAt(i);
+                if (!scene.isLoaded || UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(scene))
+                    continue;
+                foreach (var sceneRoot in scene.GetRootGameObjects())
+                    foreach (var rect in sceneRoot.GetComponentsInChildren<RectTransform>(true))
+                        if (PrefabUtility.IsAnyPrefabInstanceRoot(rect.gameObject) &&
+                            PrefabUtility.GetCorrespondingObjectFromSourceAtPath(rect.gameObject, target.Path) == asset)
+                        {
+                            var sourcePath = target.Path;
+                            for (var parent = rect.transform; parent != null; parent = parent.parent)
+                            {
+                                if (!PrefabUtility.IsAnyPrefabInstanceRoot(parent.gameObject))
+                                    continue;
+                                string path = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(parent.gameObject);
+                                if (path.StartsWith("Assets/SmartUI/Controls/", StringComparison.Ordinal) ||
+                                    path.StartsWith("Assets/SmartUI/Pages/", StringComparison.Ordinal))
+                                    sourcePath = path;
+                            }
+                            CheckHostAndImages(rect.gameObject, target, result, baseline, sourcePath);
+                        }
+            }
         }
 
         internal void ValidateImages(bool verifying)
@@ -137,6 +365,12 @@ namespace SmartUI.UGUI.Editor
                     throw new InvalidOperationException($"'{path}' has no matching SmartUI Sprite ownership record.");
                 if (state != null)
                 {
+                    var existingImporter = AssetImporter.GetAtPath(path) as TextureImporter;
+                    if (existingImporter != null && existingImporter.spritePixelsPerUnit != DesignPixelsPerUnit)
+                        throw new InvalidOperationException($"'{path}' TextureImporter.spritePixelsPerUnit expected {DesignPixelsPerUnit} from the SmartUI design pixel scale for '{asset.Path}', actual {existingImporter.spritePixelsPerUnit}.");
+                    // Report which import setting drifted before reporting the .meta digest conflict.
+                    if (files.MetaSha256 != state.Files.MetaSha256)
+                        LoadSprite(asset);
                     BuildFiles.RequireSnapshot(path, files, state.Files);
                     PrefabAssets.RequireClean(path, AssetImporter.GetAtPath(path));
                 }
@@ -185,7 +419,7 @@ namespace SmartUI.UGUI.Editor
                     importer.textureType = TextureImporterType.Sprite;
                     importer.spriteImportMode = SpriteImportMode.Single;
                     importer.spriteBorder = Borders(asset);
-                    importer.spritePixelsPerUnit = 100;
+                    importer.spritePixelsPerUnit = DesignPixelsPerUnit;
                     var settings = new TextureImporterSettings();
                     importer.ReadTextureSettings(settings);
                     settings.spriteMeshType = SpriteMeshType.FullRect;
@@ -214,7 +448,7 @@ namespace SmartUI.UGUI.Editor
         {
             if (importer == null || importer.textureType != TextureImporterType.Sprite ||
                 importer.spriteImportMode != SpriteImportMode.Single || importer.spriteBorder != Borders(asset) ||
-                importer.spritePixelsPerUnit != 100 || importer.maxTextureSize != MaxTextureSize(asset))
+                importer.spritePixelsPerUnit != DesignPixelsPerUnit || importer.maxTextureSize != MaxTextureSize(asset))
                 return true;
             var settings = new TextureImporterSettings();
             importer.ReadTextureSettings(settings);

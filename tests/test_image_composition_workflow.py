@@ -92,6 +92,8 @@ def test_image_and_composition_updates_keep_current_paths_and_detect_staleness(p
     first = _compose(store, registered)
     original = first["composition"]
     assert original["is_current"]
+    with pytest.raises(ProjectError, match="页面构建不存在"):
+        store.get_page_build(root, original["id"], for_unity_comparison=True)
     assert original["nodes"][0]["run"]["run_id"] == "first"
     with Image.open(original["images"]["overview"]["path"]) as image:
         assert image.getpixel((1, 1)) == (150, 20, 20, 255)
@@ -201,6 +203,7 @@ def test_stdio_registration_composition_and_strict_parameters(project, tmp_path)
                 assert store.context(root)["revision"] == registered["revision"]
             created_response = await session.call_tool("project_create_composition", arguments)
             created = _response(created_response)
+            assert "局部对照" in created["preview_scope"]
             record = created["composition"]
             _image_response(created_response, record["images"]["overview"]["sha256"])
         async with project_session(parameters) as session:

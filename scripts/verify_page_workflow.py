@@ -171,13 +171,18 @@ def run(output_root, font_path):
         store = ProjectStore()
         root = str(output_root)
         context = store.create(root, "page-workflow-verification", "浏览器页面工具链验证")
+        context = store.update_ui_settings(root, context["revision"], {"reference_size": {"width": 760, "height": 700}})
         project_font = output_root / "smart-ui" / "sources" / "fonts" / ("verification" + font.suffix.lower())
         project_font.parent.mkdir(parents=True)
         shutil.copyfile(font, project_font)
         report["font"] = {"path": str(project_font), "sha256": _sha(project_font)}
         context = store.save_program(root, context["revision"], "synthetic-fixtures", "工具链验证用模拟程序", SCOPE, PROGRAM)
+        edges = dict.fromkeys(("left", "right", "top", "bottom"), 12)
+        design = {"sprites": {
+            "panel": {"x": 0, "y": 0, "width": 320, "height": 280, "basis": "验证面板的基础尺寸", "outsets": edges},
+            "button": {"x": 384, "y": 0, "width": 232, "height": 72, "basis": "验证按钮的基础尺寸", "outsets": edges}}}
         context = store.define_component(root, context["revision"], "fixture-sheet", "工具链验证用模拟资产", {
-            "program_id": "synthetic-fixtures", "width": 660, "height": 330, "simulation_notice": SCOPE})
+            "program_id": "synthetic-fixtures", "width": 660, "height": 330, "simulation_notice": SCOPE, "design": design})
         context = _record_simulated_run(store, context, "simulated-blue", False)
         exports = _export_items()
         exported = store.export_assets(root, context["revision"], "fixture-sheet", exports)

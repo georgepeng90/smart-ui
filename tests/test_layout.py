@@ -12,7 +12,7 @@ from smartui_mcp.references import register_reference, inspect_reference
 from PIL import Image
 from test_export_workflow import export_item
 from test_page_layouts import image_node, save
-from test_review_workflow import PROGRAM, compare, record_sample_run
+from test_review_workflow import PROGRAM, SAMPLE_DESIGN, compare, record_sample_run
 
 
 def test_fixed_layout_and_relative_links_survive_project_move_without_cache(tmp_path):
@@ -114,8 +114,9 @@ def test_unity_data_and_exported_sprites_reopen_without_cache(unity_root, tmp_pa
     registered = store.register_image(root, context["revision"], "icon", "图标", str(source),
                                       {"kind": "imported", "description": "合成图像"})
     context = store.save_program(root, registered["revision"], "drawing", "绘制程序", "", PROGRAM)
+    context = store.update_ui_settings(root, context["revision"], {"reference_size": {"width": 64, "height": 48}})
     context = store.define_component(root, context["revision"], "sample", "样片",
-                                     {"program_id": "drawing", "width": 8, "height": 6})
+                                     {"program_id": "drawing", "width": 8, "height": 6, "design": SAMPLE_DESIGN})
     context = record_sample_run(store, context, "first", (150, 20, 20, 255))
     comparison = compare(store, context)
     visual = store.create_visual_check(root, comparison["revision"], "review", [{"component_id": "sample", "label": "样片"}],

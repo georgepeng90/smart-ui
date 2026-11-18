@@ -15,6 +15,8 @@ from PIL import Image, __version__ as PILLOW_VERSION
 from .comparisons import RUN_FIELDS, _check_output_size, _open_verified_image
 from .image_assets import _file_path, verify_image_record
 from .layout import ProjectLayout
+from .production_design import check_artwork_size, check_export_region, current_design, export_design
+from .projects import spec_sha256
 from .references import _sha256, _temporary_directory
 from .slicing import validate_geometry
 
@@ -173,9 +175,12 @@ def validate_export_record(record):
             raise ValueError("切片样片尺寸或几何与原裁切区域及采样要求不一致")
     elif source_size != size:
         raise ValueError("正式资产来源区域与图像尺寸不一致")
+    validate_geometry(record.get("geometry"), record["width"], record["height"])
+    if "design" in provenance:
+        original_geometry = provenance.get("source_geometry", record["geometry"])
+        check_export_region(provenance["design"], region, original_geometry["content_rect"], record["id"])
     if not isinstance(provenance.get("encoder"), dict) or set(provenance["encoder"]) != set(ENCODER):
         raise ValueError("正式资产缺少完整 PNG 编码设置")
-    validate_geometry(record.get("geometry"), record["width"], record["height"])
     if record.get("export_signature") != _signature(record):
         raise ValueError("正式资产几何、来源或元数据与导出摘要不一致")
 
@@ -233,6 +238,9 @@ def prepare_exports(project_root, paths, state, component_id, exports):
     if not isinstance(exports, list) or not 1 <= len(exports) <= 64:
         raise ValueError("exports 必须包含 1 到 64 项导出定义")
     source_path, source = _source(layout, state, component_id)
+    design = current_design(state, component_id)
+    if source["run"]["spec_sha256"] != spec_sha256(state["components"][component_id]["spec"]):
+        raise ValueError(f"组件 {component_id} 的成功产物与当前规格不一致，请按已登记的 1× 规格重新绘制再导出")
     manifest_path = _manifest_path(layout, component_id)
     previous_export = state.get("exports", {}).get(component_id)
     manifest_hash = None
@@ -256,6 +264,7 @@ def prepare_exports(project_root, paths, state, component_id, exports):
         if original.format != "PNG":
             raise ValueError(f"正式导出来源必须是 PNG 预览：{source_path}")
         _check_output_size(original.size, "正式导出来源")
+        check_artwork_size(design, original.size, component_id)
         original.load()
         # 释放源图读取锁后再检查现有图像。
         snapshot = original.copy()
@@ -294,8 +303,10 @@ def prepare_exports(project_root, paths, state, component_id, exports):
             x, y, source_width, source_height = (rect[key] for key in ("x", "y", "width", "height"))
             source_size = (source_width, source_height)
             geometry = validate_geometry(item["geometry"], *source_size)
+            sprite_design = export_design(design, asset_id)
+            check_export_region(sprite_design, rect, geometry["content_rect"], asset_id)
             provenance = {"kind": "component_export", "source": deepcopy(source),
-                          "region": rect, "encoder": deepcopy(ENCODER)}
+                          "region": rect, "design": deepcopy(sprite_design), "encoder": deepcopy(ENCODER)}
             if "slice_sample_size" in item:
                 sample_size = item["slice_sample_size"]
                 provenance.update(source_geometry=geometry, slice_sample_size=deepcopy(sample_size))

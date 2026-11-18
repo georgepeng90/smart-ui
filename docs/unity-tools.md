@@ -29,13 +29,13 @@ SmartUI 保存公开控件目录、控件制作定义和预制体登记。正式
 
 ## 检查目标工程的 Unity CLI 能力
 
-在目标 Unity 6 工程的当前目录和分支操作。工程须启用 Force Text 资源序列化，已具备 Unity Pipeline 的 `run_script` 能力及 uGUI、TextMeshPro 和 Newtonsoft JSON。运行构建时 Editor 须处于空闲的编辑模式。用以下命令核对所选工程的命令目录。
+在目标 Unity 6 工程的当前目录和分支操作。工程须启用 Force Text 资源序列化，已具备 Unity Pipeline 的 `script run` 能力及 uGUI、TextMeshPro 和 Newtonsoft JSON。运行构建时 Editor 须处于空闲的编辑模式。用以下命令核对所选工程的命令目录。
 
 ```powershell
 unity --format json --no-banner --non-interactive command --project-path "<Unity 工程绝对路径>" --detail full
 ```
 
-SmartUI 通过同一个绝对工程路径发现并调用官方 `run_script`。Unity Pipeline 接收插件随附的固定 C# 脚本，在内存中编译，并把请求路径作为 JSON 参数交给固定静态入口。构建使用 Unity 原生 API 导入资源、保存预制体及核对受管属性。构建脚本位于工程 `Assets` 之外，工程依赖由项目维护。必需的命令、程序集或字体材质缺失时，工具明确报错。
+SmartUI 通过同一个绝对工程路径发现并调用 Unity Pipeline 注册的 `script run`。直接使用 CLI 时，将带空格的命令名作为一个参数传给 `unity command`。Unity Pipeline 接收插件随附的固定 C# 脚本，在内存中编译，并把请求路径作为 JSON 参数交给固定静态入口。构建使用 Unity 原生 API 导入资源、保存预制体及核对受管属性。构建脚本位于工程 `Assets` 之外，工程依赖由项目维护。必需的命令、程序集或字体材质缺失时，工具明确报错。
 
 ## 定义控件
 
@@ -173,12 +173,25 @@ SmartUI 通过同一个绝对工程路径发现并调用官方 `run_script`。Un
 回执可包含 `managed_differences`，给出基线、Unity 与当前设计值。显式设置 `adopt_matching=true` 的
 `apply` 请求可在对象身份与全部受管属性通过复验后采用当前文件，更新基线。
 
-`project_compare_unity_screenshot` 将已核验的参考尺寸设计稿与同尺寸 Unity 截图并排显示，左侧为设计，
-右侧为 Unity，并返回布局及图像摘要。其他尺寸使用对应场景预览比对。
+### 基础分辨率下的尺寸回读
+
+正式页面和 Unity 请求使用同一份布局、控件定义、交付 PNG 和 `geometry`。受管 Sprite 的 PPU（每单位像素数）为 100，切片 Image 的 Pixels Per Unit Multiplier 为 1。Sprite Border 从交付 PNG 的固定边距按左、下、右、上换算。Editor 用布局节点的目标内容框及外扩核对实际 RectTransform，子节点的位置相对各自父级核对。
+
+目标回执的 `canvas_reference_pixels_per_unit` 按层级路径记录所查 Canvas 的参考 PPU。对已加载场景中的实例，Editor 核对图像实际使用的 Canvas，跳过层级中被禁用的 Canvas。宿主 Canvas 和启用的根 CanvasScaler 的参考 PPU 均应为 100。空字典表示本次没有读到宿主，需在实际挂载后复验。CanvasScaler 的屏幕适配和动画缩放仍由项目控制。
+
+回读已保存的变体和页面 Prefab 时，Editor 核对嵌套控件内部节点继承的锚点、枢轴、位置和尺寸，并按制作定义及实例换图参数检查 Image 类型、Sprite 和切片倍率。即使页面没有挂入场景，手工改动嵌套图像的类型或位置也会报告具体对象、来源、期望值和实际值。
+
+对已加载的场景实例，受管切片图像还会按所属 Prefab 检查 Image 类型、倍率和实际显示的 Sprite。Button 声明的 SpriteSwap 状态可以使用对应的状态图。
+
+旧基线缺少 Multiplier 时，工具读取当前受管切片 Image 的实际值。实际值为 1 时可正常复验。需要把该字段写入基线时，使用 `apply` 和 `adopt_matching=true`，所有受管属性和对象身份都须匹配设计。实际值为 2 时，先报告对象、设计要求和读到的倍率，保留现场。根据原设计核查源图的固定边和高光尺寸，按 1× 规格迁移后显式修正对应的 Unity 对象。
+
+生成型变体的根宽高继承基础 Prefab。基础控件改尺寸时，工具先检查变体在受影响轴上的本地覆盖，再回读更新后的实际尺寸。已有的 `m_SizeDelta.x` 或 `.y` 覆盖可能来自 Unity 的默认序列化，也可能是手工设置。即使当前值与旧设计相等，工具也会在写入前报告需要改尺寸的轴。原尺寸仍可正常复验。确认该轴应随基础尺寸变化后，在 Unity 撤销对应覆盖，再执行构建。
+
+`project_compare_unity_screenshot` 只接收正式页面构建 ID。工具核对布局和项目基础分辨率，并读取该页使用的交付 PNG 和字体文件，确认内容摘要与构建记录一致，然后并排显示正式页面和同尺寸的 Unity 截图。普通快照读取仍可用于查看历史构建。其他屏幕尺寸使用对应的场景预览比对。
 `project_check_localization` 比对项目适配器按语言提供的源表与生成值，按本次使用的 Key 报告缺项、
 值差异和适配器标记的占位。
 
-Python 与 MCP 回归覆盖资料目录和 Unity 输出目录的分离。当前 C# 脚本仍需在提供官方 `run_script` 命令的 Editor 中完成编译验证；资源导入、保存重开、重复嵌套实例、持久对象引用、覆盖与恢复继承，以及显示和点击待工程验收。
+通用样片在 Unity 6 Editor 中核对受管 Sprite、切片 Image 和嵌套页面的基础分辨率显示。业务实例的持久对象引用、覆盖与恢复继承、点击和目标设备显示按项目验收。
 
 ## 登记实际预制体
 

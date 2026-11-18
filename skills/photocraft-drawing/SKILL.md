@@ -11,6 +11,8 @@ description: 使用 PhotoCraft 为新设计或定稿图素制作可编辑的基�
 
 新建组件前用 `project_search_reusable` 查同用途控件和图素，已有候选满足需求时直接引用。
 
+开工先读 `ui_settings.reference_size`，在项目基础分辨率下确定主体尺寸、边角细节及外扩。已有固定尺寸的布局节点时，用 `spec.design.basis` 引用其 `layout_id` 和 `node_id`。依据控件规格或明确设计决定时，写明出处和尺寸。整页参考须先核对页面范围和比例，局部参考须指出对应的目标区域。单件和多图素源稿的填写方法见[组件的设计尺寸与制作区域](../../docs/project-tools.md#组件的设计尺寸与制作区域)。
+
 1. 用 `photocraft_status` 确认本机 CLI 可用，并查看是否缺少制作所需的接口或命令。依赖缺失时报告具体缺项，不自动下载或替换后端。 [PhotoCraft 制作接口](../../docs/photocraft-contract.md#mcp-工具)
 2. 保存实现 `build(parameters, spec, component_id)` 的程序，定义引用 `program_id` 的组件。缺少必需参数明确报错，不能添加制作兜底。
 3. 首次编写或需要诊断计划时，用 `project_plan_component` 检查原生形状、分组、像素节点、效果及蒙版。`project_draw_component` 本身会执行程序并严格预检；已明确的参数调整无需为了固定顺序重复单独预检。预检不代表文件已经生成。
@@ -27,7 +29,7 @@ description: 使用 PhotoCraft 为新设计或定稿图素制作可编辑的基�
 
 组件会用于页面分组时，可在 `spec.usage` 声明共享内边距、文字范围、点击范围、枢轴及所需状态。更新组件外观后，用 `project_page_dependencies` 查找需要重新导出的资产和受影响页面，再从当前产物导出对应状态。字段要求见[组件使用规格](../../docs/project-tools.md#组件使用规格)。
 
-组件需要随排版伸缩时，在正式导出阶段随 PNG 交付切片边距和伸缩方向，并保留正常显示尺寸的可编辑源文件和预览。用正式资产在目标尺寸检查边角和接缝。 [切片选取与验收](../../docs/asset-geometry.md#为切片伸缩制作-ui-图形)、[正式 PNG 导出参数](../../docs/project-tools.md#正式-png-导出)
+按 1× 绘制圆角、描边、高光和留边。导出核对源稿裁区与设计规格后，用 `slice_sample_size` 收短均匀中段，固定边按原像素保留。在正式页面的目标内容框中检查交付 PNG 的角、边和接缝。遇到两倍源稿时列明依据及差异，按 1× 重绘或显式迁移后再交付。 [切片选取与验收](../../docs/asset-geometry.md#为切片伸缩制作-ui-图形)、[正式 PNG 导出参数](../../docs/project-tools.md#正式-png-导出)
 
 展示实际 PNG、可编辑源文件、实际使用的程序和风格依据、技术检查和待修正的视觉偏差。工具成功、模型判断和用户确认分别报告。程序是可信本机代码，不是安全沙箱；失败或超时后先核对 `.smartui/` 中的诊断和当前持久资料，不自动重放。项目参数见[项目工具](../../docs/project-tools.md)，后端边界见[PhotoCraft 接口](../../docs/photocraft-contract.md)。
 

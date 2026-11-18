@@ -11,8 +11,11 @@ import sys
 
 import pytest
 from mcp import StdioServerParameters
+from PIL import Image
 
+from smartui_mcp.pipeline import plan_component
 from smartui_mcp.projects import ProjectError
+from smartui_mcp.references import register_reference
 from test_review_workflow import project, project_session, record_sample_run
 
 
@@ -21,6 +24,107 @@ def export_item():
             "region": {"x": 0, "y": 0, "width": 8, "height": 6}, "state": "normal", "purpose": "按钮背景",
             "geometry": {"mode": "nine_slice", "content_rect": {"x": 1, "y": 1, "width": 6, "height": 4},
                          "borders": {"left": 2, "top": 2, "right": 2, "bottom": 2}}}
+
+
+def test_layout_basis_detects_matching_double_size_claims_and_changed_base_node(project, tmp_path):
+    store, context = project
+    root = context["project_root"]
+    context = store.update_ui_settings(root, context["revision"], {"reference_size": {"width": 200, "height": 100}})
+    reference = tmp_path / "high-resolution.png"
+    Image.new("RGBA", (160, 80)).save(reference)
+    context = store.add_reference(root, context["revision"], register_reference(root, "large-guide", str(reference)))
+    context = store.update_style(root, context["revision"], "按高分辨率参考制作按钮", [], {}, ["large-guide"])
+    icon = store.register_image(root, context["revision"], "placeholder", "设计占位图", str(reference),
+                                {"kind": "imported", "description": "布局草稿的占位图"})
+    base = {"id": "base", "kind": "image", "asset_id": "placeholder", "x": 0, "y": 0, "width": 80, "height": 40}
+    layout = store.save_layout(root, icon["revision"], "menu", "按钮设计", 200, 100, "#FFFFFF", [base])
+    basis = {"layout_id": "menu", "node_id": "base"}
+    spec = {"program_id": "drawing", "width": 160, "height": 80, "design": {"basis": basis, "width": 160, "height": 80}}
+    with pytest.raises(ProjectError, match="80×40.*160×80"):
+        store.define_component(root, layout["revision"], "sample", "按钮", spec)
+    context = store.define_component(root, layout["revision"], "sample", "按钮", {
+        **spec, "width": 80, "height": 40, "design": {"basis": basis, "width": 80, "height": 40}})
+    run = record_sample_run(store, context, "at-design-size", (30, 60, 80, 255))
+    item = export_item()
+    item["geometry"] = {"mode": "horizontal", "content_rect": {"x": 0, "y": 0, "width": 80, "height": 40},
+                        "borders": {"left": 4, "right": 4, "top": 0, "bottom": 0}}
+    item["region"] = item["geometry"]["content_rect"].copy()
+    item["slice_sample_size"] = {"width": 12, "height": 40}
+    result = store.export_assets(root, run["revision"], "sample", [item])
+    asset = result["export"]["items"][0]["record"]
+    assert asset["width"] == 12 and asset["provenance"]["design"]["width"] == 80
+    assert asset["geometry"]["borders"] == item["geometry"]["borders"]
+
+    instance = {**base, "id": "wide-instance", "y": 40, "width": 160, "asset_id": "button"}
+    saved = store.save_layout(root, result["revision"], "menu", "按钮设计", 200, 100, "#FFFFFF", [base, instance])
+    assert store.page_dependencies(root)["assets"]["button"]["source_issue"] is None
+    changed = store.save_layout(root, saved["revision"], "menu", "按钮设计", 200, 100, "#FFFFFF",
+                                [{**base, "width": 90}, instance])
+    assert "90×40" in store.page_dependencies(root)["assets"]["button"]["source_issue"]["action"]
+    with pytest.raises(ValueError, match="90×40.*80×40"):
+        plan_component(root, "sample", store=store)
+    with pytest.raises(ValueError, match="90×40.*80×40"):
+        store.export_assets(root, changed["revision"], "sample", [item])
+
+
+def test_changed_project_resolution_and_old_artwork_require_explicit_design(project):
+    store, context = project
+    root = context["project_root"]
+    spec = context["data"]["components"]["sample"]["spec"]
+    result = store.export_assets(root, context["revision"], "sample", [export_item()])
+    changed = store.update_ui_settings(root, result["revision"], {"reference_size": {"width": 128, "height": 96}})
+    issue = store.page_dependencies(root)["assets"]["button"]["source_issue"]
+    assert issue["reason"] == "production_design_unverified" and "reference_size" in issue["action"]
+    with pytest.raises(ProjectError, match="design.reference_size"):
+        store.define_component(root, changed["revision"], "sample", "按钮", spec)
+    draft = store.define_component(root, changed["revision"], "sample", "旧规格",
+                                   {key: value for key, value in spec.items() if key != "design"})
+    with pytest.raises(ValueError, match="缺少独立的 1×"):
+        plan_component(root, "sample", store=store)
+    with pytest.raises(ValueError, match="缺少独立的 1×"):
+        store.export_assets(root, draft["revision"], "sample", [export_item()])
+    updated_design = {key: value for key, value in spec["design"].items() if key != "reference_size"}
+    updated = store.define_component(root, draft["revision"], "sample", "按钮", {**spec, "design": updated_design})
+    with pytest.raises(ValueError, match="请按已登记的 1× 规格重新绘制"):
+        store.export_assets(root, updated["revision"], "sample", [export_item()])
+
+
+@pytest.mark.parametrize("custom_fields, detail", [
+    ({"width": 8, "height": 6}, "basis"),
+    ({"sprites": ["button"]}, "design.sprites"),
+    ({"sprites": {"button": {"x": 0, "y": 0}}}, "basis"),
+    ({"basis": {"layout_id": "menu"}, "width": 8, "height": 6}, "node_id"),
+])
+def test_reading_legacy_custom_design_reports_missing_evidence(project, custom_fields, detail):
+    store, context = project
+    root = context["project_root"]
+    store.export_assets(root, context["revision"], "sample", [export_item()])
+    # 旧版允许组件程序任意定义 design，直接重建这样的磁盘记录，绕过当前的写入检查。
+    component_path = Path(root) / "smart-ui/components/sample.json"
+    component = json.loads(component_path.read_bytes())
+    custom = {"reference_size": {"width": 64, "height": 48}, **custom_fields}
+    component["spec"]["design"] = custom
+    component_path.write_text(json.dumps(component), encoding="utf-8")
+    before = component_path.read_bytes()
+    result = store.context(root)
+    assert result["data"]["components"]["sample"]["needs_review"]
+    assert store.page_dependencies(root)["components"]["sample"]["needs_review"]
+    with pytest.raises(ValueError, match="规格待核对.*" + detail):
+        plan_component(root, "sample", store=store)
+    with pytest.raises(ProjectError, match="规格待核对.*" + detail):
+        store.define_component(root, result["revision"], "sample", "样片", component["spec"])
+    assert component_path.read_bytes() == before
+
+
+def test_record_run_checks_actual_png_before_accepting_replacement(project, tmp_path):
+    store, context = project
+    root = context["project_root"]
+    png = tmp_path / "double-size.png"
+    Image.new("RGBA", (16, 12)).save(png)
+    current = context["data"]["components"]["sample"]["latest_run"]
+    with pytest.raises(ProjectError, match=r"1×.*\(8, 6\).*\(16, 12\)"):
+        store.record_run(root, context["revision"], "sample", {**current, "preview": str(png), "run_id": "invalid"})
+    assert store.context(root) == context
 
 
 def test_export_updates_current_asset_and_survives_project_move(project, tmp_path):

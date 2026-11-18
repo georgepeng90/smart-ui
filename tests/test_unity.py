@@ -459,8 +459,10 @@ def test_handoff_checks_actual_component_artifacts(project, registered_button, f
     root, projects, store = project
     source = projects.context(str(root))
     source = projects.save_program(str(root), source["revision"], "drawing", "程序", "", "result = []\n")
-    spec = {"program_id": "drawing"}
+    source = projects.update_ui_settings(str(root), source["revision"], {"reference_size": {"width": 64, "height": 48}})
+    spec = {"program_id": "drawing", "design": {"basis": "控件使用的方形图素", "width": 16, "height": 16}}
     source = projects.define_component(str(root), source["revision"], "artwork", "视觉组件", spec)
+    spec = source["data"]["components"]["artwork"]["spec"]
     directory = root / "smart-ui/sources/artwork"
     directory.mkdir(parents=True)
     run = {}
@@ -470,6 +472,7 @@ def test_handoff_checks_actual_component_artifacts(project, registered_button, f
         path.write_bytes(f"Synthetic artifact: {filename}".encode())
         run[field] = str(path)
     plan = Path(run["plan_path"])
+    Image.new("RGBA", (16, 16)).save(run["preview"])
     snapshot = Path(run["style_snapshot_path"])
     style = source["data"]["style"]
     plan.write_text(json.dumps({"nodes": []}), encoding="utf-8")

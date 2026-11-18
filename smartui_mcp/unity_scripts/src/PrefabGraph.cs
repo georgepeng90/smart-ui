@@ -204,7 +204,7 @@ namespace SmartUI.UGUI.Editor
             return identities;
         }
 
-        internal ManagedProperties Properties(bool desired)
+        internal ManagedProperties Properties(bool desired, JObject baseline = null)
         {
             var properties = new ManagedProperties();
             if (target.Kind == "variant")
@@ -244,6 +244,8 @@ namespace SmartUI.UGUI.Editor
                         var imageAsset = resources.Image(node.AssetId);
                         Own(properties, node.Id, image, "m_Sprite", desired ? BuildResources.LoadSprite(imageAsset) : null);
                         Own(properties, node.Id, image, "m_Type", (int)(BuildResources.Sliced(imageAsset) ? Image.Type.Sliced : Image.Type.Simple));
+                        if (BuildResources.Sliced(imageAsset) || baseline?[node.Id + "/m_PixelsPerUnitMultiplier"] != null)
+                            Own(properties, node.Id, image, "m_PixelsPerUnitMultiplier", 1f);
                         Own(properties, node.Id, image, "m_RaycastTarget", node.Id == buttonNode);
                         break;
                     case "text":
@@ -259,6 +261,39 @@ namespace SmartUI.UGUI.Editor
             if (target.Button != null)
                 AddButton(properties, desired);
             return properties;
+        }
+
+        internal void RequireDesignRectangles()
+        {
+            var rootRect = (RectTransform)root.transform;
+            rootRect.ForceUpdateRectTransforms();
+            RequireRect("root", new Rect(0, 0, target.Width, target.Height), new Rect(Vector2.zero, rootRect.rect.size));
+            foreach (var node in target.Nodes)
+            {
+                var expected = new Rect(node.X, node.Y, node.Width, node.Height);
+                if (node.Kind == "image")
+                    expected = BuildResources.ImageRect(resources.Image(node.AssetId), expected);
+                RequireRect(node.Id, expected, RelativeRect((RectTransform)nodes[node.Id].transform));
+                if (node.Kind == "control")
+                    RequireRect(node.Id + "/instance", new Rect(0, 0, node.Width, node.Height),
+                        RelativeRect((RectTransform)instances[node.Id].transform));
+            }
+
+            void RequireRect(string key, Rect expected, Rect actual)
+            {
+                const float tolerance = 0.002f; // Single-precision anchor arithmetic at design resolution.
+                if (Mathf.Abs(expected.x - actual.x) > tolerance || Mathf.Abs(expected.y - actual.y) > tolerance ||
+                    Mathf.Abs(expected.width - actual.width) > tolerance || Mathf.Abs(expected.height - actual.height) > tolerance)
+                    throw new InvalidOperationException($"'{target.Path}' node '{key}' RectTransform expected {expected.ToString("G9")} from '{target.Kind}/{target.Id}' design rectangle and image geometry, actual {actual.ToString("G9")} (parent-relative, top-left).");
+            }
+        }
+
+        static Rect RelativeRect(RectTransform rect)
+        {
+            var parent = (RectTransform)rect.parent;
+            // The anchored layout rectangle is measured before visual rotation or animation scale.
+            Vector2 topLeft = (Vector2)rect.localPosition + new Vector2(rect.rect.xMin, rect.rect.yMax);
+            return new Rect(topLeft.x - parent.rect.xMin, parent.rect.yMax - topLeft.y, rect.rect.width, rect.rect.height);
         }
 
         static void Own(ManagedProperties fields, string key, Object value, string path, object desired, bool localRef = false) =>

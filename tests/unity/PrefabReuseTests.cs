@@ -29,8 +29,15 @@ namespace SmartUI.UGUI.Editor.Tests
                 tests.RejectsReceiptWithoutSchemaVersion,
                 tests.ImportsExistingOutputFoldersWithoutRenaming,
                 tests.ReusesSavedPrefabObjectsAndRestoresOnlyTheLocalOverride,
+                tests.PreflightsVariantResizeAgainstItsCurrentBase,
                 tests.ReportsManagedPrefabChangesBeforeApplyingAnyTarget,
                 tests.RejectsReadOnlySpriteMetaBeforeAnImporterSettingsUpdate,
+                tests.ChecksSlicedScaleAndAdoptsOnlyMatchingLegacyValues,
+                tests.TracksMultiplierOnlyWhileDesignUsesSlicing,
+                tests.ReportsEditedSpriteSettingsWithTheirExportSource,
+                tests.ReadsHostCanvasWithoutChangingResolutionAdaptation,
+                tests.ChecksLoadedSlicedImagesAgainstTheirEffectivePrefab,
+                tests.ChecksSavedNestedArtworkAgainstItsDeclaration,
             };
             foreach (var test in cases)
             {
@@ -75,15 +82,22 @@ namespace SmartUI.UGUI.Editor.Tests
                     Directory.Delete(BuildFiles.RelativePath(directory), true);
             operationDirectories.Clear();
             foreach (var kind in new[] { "base", "variant", "page" })
-                File.Delete(BuildFiles.StatePath(dataRoot, kind, id + "." + kind));
+                DeleteState(kind, id + "." + kind);
             foreach (var key in new[] { "normal", "alternate", "changed" })
-                File.Delete(BuildFiles.StatePath(dataRoot, "sprites", id + "." + key));
+                DeleteState("sprites", id + "." + key);
             string projectFile = BuildFiles.RelativePath(dataRoot + "/project.json");
             if (projectBefore == null)
                 File.Delete(projectFile);
             else
                 File.WriteAllBytes(projectFile, projectBefore);
             dataRoot = null;
+
+            void DeleteState(string kind, string key)
+            {
+                var path = BuildFiles.StatePath(dataRoot, kind, key);
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
         }
 
         void OwnedNodesAndNestedInstanceRootsUseDifferentNames()
@@ -201,6 +215,57 @@ namespace SmartUI.UGUI.Editor.Tests
             Assert.That(replaced.Targets.Select(item => item.Sha256), Is.EqualTo(repeated.Targets.Select(item => item.Sha256)));
         }
 
+        void PreflightsVariantResizeAgainstItsCurrentBase()
+        {
+            var original = Run("apply", false, true);
+            var planned = Run("plan", false, true, resized: true);
+            Assert.That(planned.Targets[1].Status, Is.EqualTo("verify"));
+            var updated = Run("apply", false, true, resized: true);
+            Assert.That(updated.Targets.Select(item => item.Status), Is.EqualTo(new[] { "updated", "verified" }));
+            Assert.That(updated.Targets[1].Sha256, Is.EqualTo(original.Targets[1].Sha256));
+            var variant = AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath("variant"));
+            Assert.That(((RectTransform)variant.transform).rect.size, Is.EqualTo(new Vector2(32, 28)));
+            Run("verify", false, true, resized: true);
+
+            // A prior tool's default root override and an explicit equal-value edit serialize identically.
+            // Both remain valid at the original size and must survive a proposed resize unchanged.
+            var edited = PrefabUtility.LoadPrefabContents(TargetPath("variant"));
+            try
+            {
+                var existing = PrefabUtility.GetPropertyModifications(edited);
+                var equalWidth = new PropertyModification
+                {
+                    target = PrefabUtility.GetCorrespondingObjectFromSource(edited.transform),
+                    propertyPath = "m_SizeDelta.x", value = "32"
+                };
+                PrefabUtility.SetPropertyModifications(edited, existing.Append(equalWidth).ToArray());
+                PrefabUtility.SaveAsPrefabAsset(edited, TargetPath("variant"), out bool saved);
+                Assert.That(saved, Is.True);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(edited); }
+            Run("verify", false, true, resized: true);
+            var equalOverride = BuildFiles.Snapshot(TargetPath("variant"));
+            var held = Run("apply", false, true, success: false);
+            Assert.That(held.Targets[1].Error, Does.Contain("m_SizeDelta.x").And.Contain(TargetPath("base")));
+            Assert.That(BuildFiles.Snapshot(TargetPath("variant")).Sha256, Is.EqualTo(equalOverride.Sha256));
+            Assert.That(BuildFiles.Snapshot(TargetPath("base")).Sha256, Is.EqualTo(updated.Targets[0].Sha256));
+
+            edited = PrefabUtility.LoadPrefabContents(TargetPath("variant"));
+            try
+            {
+                ((RectTransform)edited.transform).sizeDelta = new Vector2(31, 27);
+                PrefabUtility.RecordPrefabInstancePropertyModifications(edited.transform);
+                PrefabUtility.SaveAsPrefabAsset(edited, TargetPath("variant"), out bool saved);
+                Assert.That(saved, Is.True);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(edited); }
+            var manual = BuildFiles.Snapshot(TargetPath("variant"));
+            var failed = Run("apply", false, true, success: false);
+            Assert.That(failed.Targets[1].Error, Does.Contain(TargetPath("base")).And.Contain("actual"));
+            Assert.That(BuildFiles.Snapshot(TargetPath("base")).Sha256, Is.EqualTo(updated.Targets[0].Sha256));
+            Assert.That(BuildFiles.Snapshot(TargetPath("variant")).Sha256, Is.EqualTo(manual.Sha256));
+        }
+
         void ReportsManagedPrefabChangesBeforeApplyingAnyTarget()
         {
             var initial = Run("apply", false, true);
@@ -245,8 +310,253 @@ namespace SmartUI.UGUI.Editor.Tests
             }
         }
 
+        void ChecksSlicedScaleAndAdoptsOnlyMatchingLegacyValues()
+        {
+            BuildResult Check(string operation, bool success = true, bool adopt = false) =>
+                Run(operation, false, true, success, sliced: true, adoptMatching: adopt);
+            Check("apply");
+            const string field = "art/m_PixelsPerUnitMultiplier";
+            var baselinePath = BuildFiles.StatePath(dataRoot, "base", id + ".base");
+            var legacy = BuildFiles.Read<JObject>(baselinePath);
+            Assert.That(((JObject)legacy["managed"]).Remove(field), Is.True);
+            BuildFiles.Write(baselinePath, legacy, replace: true);
+            var legacyHash = PrefabAssets.FileHash(baselinePath);
+            var prefabPath = TargetPath("base");
+            var original = BuildFiles.Snapshot(prefabPath);
+            foreach (string operation in new[] { "plan", "verify", "apply" })
+            {
+                Assert.That(Check(operation).Targets[0].ManagedDifferences, Is.Null);
+                Assert.That(PrefabAssets.FileHash(baselinePath), Is.EqualTo(legacyHash));
+            }
+            void SetMultiplier(float value)
+            {
+                var prefab = PrefabUtility.LoadPrefabContents(prefabPath);
+                try
+                {
+                    var image = prefab.GetComponentInChildren<Image>();
+                    image.pixelsPerUnitMultiplier = value;
+                    image.color = Color.yellow;
+                    PrefabUtility.SaveAsPrefabAsset(prefab, prefabPath, out bool saved);
+                    Assert.That(saved, Is.True);
+                }
+                finally { PrefabUtility.UnloadPrefabContents(prefab); }
+            }
+            SetMultiplier(2);
+            var edited = BuildFiles.Snapshot(prefabPath);
+            foreach (var (operation, adopt) in new[] { ("plan", false), ("verify", false), ("apply", false), ("apply", true) })
+            {
+                var failure = Check(operation, false, adopt).Targets[0];
+                Assert.That(failure.Error, Does.Contain("expected 1").And.Contain("actual 2").And.Contain("SmartUI_Node:art"));
+                Assert.That((float)failure.ManagedDifferences[field]["unity"], Is.EqualTo(2));
+                Assert.That((float)failure.ManagedDifferences[field]["design"], Is.EqualTo(1));
+                Assert.That(PrefabAssets.FileHash(baselinePath), Is.EqualTo(legacyHash));
+                Assert.That(BuildFiles.Snapshot(prefabPath).Sha256, Is.EqualTo(edited.Sha256));
+            }
+            SetMultiplier(1);
+            var restored = BuildFiles.Snapshot(prefabPath);
+            Check("apply", adopt: true);
+            Assert.That((float)BuildFiles.Read<JObject>(baselinePath)["managed"][field], Is.EqualTo(1));
+            Assert.That(BuildFiles.Snapshot(prefabPath).Sha256, Is.EqualTo(restored.Sha256));
+            Assert.That(BuildFiles.Snapshot(prefabPath).MetaSha256, Is.EqualTo(original.MetaSha256));
+            Assert.That(AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath).GetComponentInChildren<Image>().color, Is.EqualTo(Color.yellow));
+        }
+
+        void ReportsEditedSpriteSettingsWithTheirExportSource()
+        {
+            Run("apply", false, true, sliced: true);
+            string path = SpritePath("normal");
+            void Conflict(string property)
+            {
+                var edited = BuildFiles.Snapshot(path);
+                var failed = Run("apply", false, true, false, sliced: true);
+                Assert.That(failed.Error, Does.Contain(path).And.Contain(property).And.Contain("expected").And.Contain("actual")
+                    .And.Contain(fixtureDirectory + "/normal.png"));
+                Assert.That(BuildFiles.Snapshot(path).MetaSha256, Is.EqualTo(edited.MetaSha256));
+            }
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+            importer.spritePixelsPerUnit = 200;
+            importer.SaveAndReimport();
+            Conflict("spritePixelsPerUnit");
+            importer = (TextureImporter)AssetImporter.GetAtPath(path);
+            importer.spritePixelsPerUnit = 100;
+            importer.spriteBorder = new Vector4(1, 2, 3, 4);
+            importer.SaveAndReimport();
+            Conflict("Sprite.border");
+        }
+
+        void TracksMultiplierOnlyWhileDesignUsesSlicing()
+        {
+            Run("apply", false, true);
+            var baselinePath = BuildFiles.StatePath(dataRoot, "base", id + ".base");
+            const string field = "art/m_PixelsPerUnitMultiplier";
+            JObject Baseline() => (JObject)BuildFiles.Read<JObject>(baselinePath)["managed"];
+            Assert.That(Baseline().Property(field), Is.Null);
+            Run("apply", false, true, sliced: true);
+            Assert.That((float)Baseline()[field], Is.EqualTo(1));
+            Run("apply", false, true);
+            Assert.That(Baseline().Property(field), Is.Null);
+            var prefabPath = TargetPath("base");
+            var root = PrefabUtility.LoadPrefabContents(prefabPath);
+            try
+            {
+                root.GetComponentInChildren<Image>().pixelsPerUnitMultiplier = 2;
+                PrefabUtility.SaveAsPrefabAsset(root, prefabPath, out bool saved);
+                Assert.That(saved, Is.True);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+            Run("verify", false, true);
+            var before = BuildFiles.Snapshot(prefabPath);
+            var conflict = Run("apply", false, true, false, sliced: true);
+            Assert.That((float)conflict.Targets[0].ManagedDifferences[field]["unity"], Is.EqualTo(2));
+            Assert.That(BuildFiles.Snapshot(prefabPath).Sha256, Is.EqualTo(before.Sha256));
+        }
+
+        void ReadsHostCanvasWithoutChangingResolutionAdaptation()
+        {
+            var initial = Run("apply", false, true, sliced: true);
+            Assert.That(initial.Targets[0].CanvasReferencePixelsPerUnit, Is.Empty);
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            try
+            {
+                var host = PrefabAssets.NewRect("ScaleTestCanvas", scene);
+                var canvas = host.AddComponent<Canvas>();
+                var scaler = host.AddComponent<CanvasScaler>();
+                scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                scaler.referenceResolution = new Vector2(800, 600);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath("base"));
+                var instance = PrefabAssets.Instantiate(prefab, scene, host.transform);
+                instance.transform.localScale = new Vector3(0.8f, 0.8f, 1f);
+                var verified = Run("verify", false, true, sliced: true);
+                Assert.That(verified.Targets[0].CanvasReferencePixelsPerUnit.Values, Does.Contain(100f));
+                scaler.referencePixelsPerUnit = 75;
+                var conflict = Run("plan", false, true, false, sliced: true);
+                Assert.That(conflict.Error, Does.Contain("ScaleTestCanvas").And.Contain("expected 100").And.Contain("actual 75"));
+                Assert.That(scaler.referencePixelsPerUnit, Is.EqualTo(75f));
+                Assert.That(scaler.uiScaleMode, Is.EqualTo(CanvasScaler.ScaleMode.ScaleWithScreenSize));
+                Assert.That(instance.transform.localScale.x, Is.EqualTo(0.8f));
+            }
+            finally { EditorSceneManager.CloseScene(scene, true); }
+        }
+
+        void ChecksLoadedSlicedImagesAgainstTheirEffectivePrefab()
+        {
+            BuildResult Verify(bool success = true) => Run("verify", false, false, success, sliced: true);
+            Run("apply", false, false, sliced: true);
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            var foreign = Sprite.Create(Texture2D.whiteTexture, new Rect(0, 0, 2, 2), Vector2.zero, 200);
+            try
+            {
+                var outer = PrefabAssets.NewRect("OuterCanvas", scene).AddComponent<Canvas>();
+                var disabled = PrefabAssets.NewRect("DisabledCanvas", scene, outer.transform).AddComponent<Canvas>();
+                disabled.enabled = false;
+                disabled.referencePixelsPerUnit = 75;
+                var instance = PrefabAssets.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath("page")), scene, disabled.transform);
+                var image = Art(instance, "third");
+                Assert.That(image.sprite, Is.SameAs(AssetDatabase.LoadAssetAtPath<Sprite>(SpritePath("alternate"))));
+                var freeImage = PrefabAssets.NewRect("SmartUI_Node:custom", scene, instance.transform).AddComponent<Image>();
+                freeImage.type = Image.Type.Sliced;
+                freeImage.pixelsPerUnitMultiplier = 2;
+                image.color = Color.gray;
+                Verify();
+                outer.referencePixelsPerUnit = 75;
+                Assert.That(Verify(false).Error, Does.Contain("OuterCanvas").And.Contain("actual 75"));
+                outer.referencePixelsPerUnit = 100;
+                image.type = Image.Type.Simple;
+                Assert.That(Verify(false).Error, Does.Contain("expected Sliced").And.Contain("actual Simple").And.Contain(TargetPath("page")));
+                image.type = Image.Type.Sliced;
+                image.overrideSprite = foreign;
+                Assert.That(Verify(false).Error, Does.Contain("active Sprite").And.Contain("PPU 200").And.Contain("alternate.png"));
+                image.overrideSprite = null;
+                image.sprite = AssetDatabase.LoadAssetAtPath<Sprite>(SpritePath("changed"));
+                Assert.That(Verify(false).Error, Does.Contain("changed.png").And.Contain("alternate.png"));
+                image.sprite = null;
+                Assert.That(Verify(false).Error, Does.Contain("actual null"));
+                image.sprite = AssetDatabase.LoadAssetAtPath<Sprite>(SpritePath("alternate"));
+                var first = Art(instance, "first");
+                first.overrideSprite = image.sprite; // The declared pressed Sprite is valid while the button is in that state.
+                Verify();
+                Object.DestroyImmediate(image);
+                Assert.That(Verify(false).Error, Does.Contain("expected Sliced Image").And.Contain("Image missing").And.Contain(TargetPath("page")));
+            }
+            finally
+            {
+                Object.DestroyImmediate(foreign);
+                EditorSceneManager.CloseScene(scene, true);
+            }
+        }
+
+        void ChecksSavedNestedArtworkAgainstItsDeclaration()
+        {
+            BuildResult RunSliced(string operation, bool success = true) =>
+                Run(operation, false, false, success, sliced: true, privateArtwork: true);
+            RunSliced("apply");
+            AssertPage("normal", "normal", "alternate");
+            string page = TargetPath("page");
+            string baseline = BuildFiles.StatePath(dataRoot, "page", id + ".page");
+            string baselineHash = PrefabAssets.FileHash(baseline);
+            void Edit(Action<Image> change, string imageNode = "art")
+            {
+                var root = PrefabUtility.LoadPrefabContents(page);
+                try
+                {
+                    var image = Art(root, "third", imageNode);
+                    change(image);
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(image);
+                    PrefabUtility.RecordPrefabInstancePropertyModifications(image.rectTransform);
+                    PrefabUtility.SaveAsPrefabAsset(root, page, out bool saved);
+                    Assert.That(saved, Is.True);
+                }
+                finally { PrefabUtility.UnloadPrefabContents(root); }
+            }
+            void Conflict(string field, string expected, string actual, string imageNode = "art")
+            {
+                var snapshot = BuildFiles.Snapshot(page);
+                var result = RunSliced("verify", false);
+                Assert.That(result.Targets[2].Error, Does.Contain(page).And.Contain(PrefabGraph.NodeName(imageNode))
+                    .And.Contain(field).And.Contain(expected).And.Contain(actual));
+                Assert.That(BuildFiles.Snapshot(page).Sha256, Is.EqualTo(snapshot.Sha256));
+                Assert.That(BuildFiles.Snapshot(page).MetaSha256, Is.EqualTo(snapshot.MetaSha256));
+                Assert.That(PrefabAssets.FileHash(baseline), Is.EqualTo(baselineHash));
+            }
+            Edit(image => image.type = Image.Type.Simple);
+            Conflict("Image.type", "expected Sliced", "actual Simple");
+            Edit(image => { image.type = Image.Type.Sliced; image.sprite = AssetDatabase.LoadAssetAtPath<Sprite>(SpritePath("changed")); });
+            Conflict("Image.sprite", "alternate.png", "changed.png");
+            Edit(image =>
+            {
+                PrefabUtility.RevertPropertyOverride(new SerializedObject(image).FindProperty("m_Sprite"), InteractionMode.AutomatedAction);
+                image.rectTransform.anchoredPosition += Vector2.right * 3;
+            });
+            Conflict("RectTransform", "anchoredPosition", "actual");
+            Edit(image =>
+            {
+                image.rectTransform.anchoredPosition -= Vector2.right * 3;
+                image.rectTransform.localScale = new Vector3(0.8f, 0.8f, 1f);
+            });
+            RunSliced("verify");
+            // The decoration has neither a public Sprite parameter nor a variant override.
+            Edit(image => image.sprite = AssetDatabase.LoadAssetAtPath<Sprite>(SpritePath("changed")), "decoration");
+            Conflict("Image.sprite", "normal.png", "changed.png", "decoration");
+
+            string variant = TargetPath("variant");
+            var variantRoot = PrefabUtility.LoadPrefabContents(variant);
+            try
+            {
+                var image = variantRoot.transform.Find(PrefabGraph.NodeName("decoration")).GetComponent<Image>();
+                image.type = Image.Type.Simple;
+                PrefabUtility.RecordPrefabInstancePropertyModifications(image);
+                PrefabUtility.SaveAsPrefabAsset(variantRoot, variant, out bool saved);
+                Assert.That(saved, Is.True);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(variantRoot); }
+            var variantBefore = BuildFiles.Snapshot(variant);
+            var failed = RunSliced("verify", false);
+            Assert.That(failed.Targets[1].Error, Does.Contain(variant).And.Contain("expected Sliced").And.Contain("actual Simple"));
+            Assert.That(BuildFiles.Snapshot(variant).Sha256, Is.EqualTo(variantBefore.Sha256));
+        }
+
         BuildResult Run(string operation, bool updateBase, bool pageOverride, bool success = true, bool changedSource = false,
-            bool changedBorder = false)
+            bool changedBorder = false, bool sliced = false, bool adoptMatching = false, bool resized = false, bool privateArtwork = false)
         {
             var requestId = Guid.NewGuid().ToString("N");
             string directory = OperationDirectory(requestId);
@@ -280,7 +590,11 @@ namespace SmartUI.UGUI.Editor.Tests
                 Expected = TargetExpectation(kind)
             };
             var main = MakeTarget("base", updateBase ? 'b' : 'a', 'a');
+            if (sliced)
+                main.DirectSha256 = new string('d', 64);
             main.Nodes = new[] { new Node { Id = "art", Kind = "image", AssetId = normal, Width = 24, Height = 24 } };
+            if (privateArtwork)
+                main.Nodes = main.Nodes.Append(new Node { Id = "decoration", Kind = "image", AssetId = normal, Width = 16, Height = 16 }).ToArray();
             main.Button = new ButtonSpec { TargetGraphic = "art", States = new Dictionary<string, string> { ["normal"] = normal, ["pressed"] = id + ".alternate" } };
             var variant = MakeTarget("variant", 'a', updateBase ? 'b' : 'a');
             variant.BaseControlId = id + ".base";
@@ -291,11 +605,28 @@ namespace SmartUI.UGUI.Editor.Tests
             var request = new BuildRequest
             {
                 SchemaVersion = PrefabBuild.SchemaVersion, ProjectId = id, RequestId = requestId, Operation = operation,
-                DataRoot = dataRoot, ProjectFile = dataRoot + "/project.json", ResultPath = resultPath,
+                DataRoot = dataRoot, ProjectFile = dataRoot + "/project.json", ResultPath = resultPath, AdoptMatching = adoptMatching,
                 Targets = new[] { main, variant, page }, Fonts = new(),
                 Controls = new Dictionary<string, Control> { [id + ".base"] = ControlMapping("base"), [id + ".variant"] = ControlMapping("variant") },
                 Assets = new[] { "normal", "alternate", "changed" }.ToDictionary(key => id + "." + key, key => ImageMapping(key))
             };
+            if (resized)
+            {
+                request.Targets = new[] { main, variant };
+                foreach (var control in request.Controls.Values)
+                {
+                    control.Width = 32;
+                    control.Height = 28;
+                }
+                main.Width = variant.Width = 32;
+                main.Height = variant.Height = 28;
+                variant.DependencySha256 = new string('e', 64);
+                main.DirectSha256 = new string('e', 64);
+            }
+            if (sliced)
+                foreach (var asset in request.Assets.Values)
+                    asset.Geometry = new JObject { ["mode"] = "nine_slice",
+                        ["borders"] = new JObject { ["left"] = 2, ["bottom"] = 3, ["right"] = 4, ["top"] = 5 } };
             if (changedBorder)
             {
                 request.Assets[id + ".changed"].Geometry = new JObject
@@ -362,8 +693,8 @@ namespace SmartUI.UGUI.Editor.Tests
             };
         }
 
-        static Image Art(GameObject page, string node) => page.transform.Find(PrefabGraph.NodeName(node) + "/" +
-            PrefabGraph.InstanceName(node) + "/" + PrefabGraph.NodeName("art")).GetComponent<Image>();
+        static Image Art(GameObject page, string node, string imageNode = "art") => page.transform.Find(PrefabGraph.NodeName(node) + "/" +
+            PrefabGraph.InstanceName(node) + "/" + PrefabGraph.NodeName(imageNode)).GetComponent<Image>();
 
         void AssertPage(string first, string second, string third)
         {

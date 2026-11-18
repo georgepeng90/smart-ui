@@ -8,14 +8,14 @@ from tempfile import TemporaryDirectory
 from .unity_script import SCRIPT_DIRECTORY, SCRIPT_ENTRY, SCRIPT_NAME, write_script
 
 
-COMMAND_ID = "run_script"
+COMMAND_ID = "script run"
 COMMAND_PACKAGE = "Unity.Pipeline.Editor"
 COMMAND_PARAMETERS = {
     "file": ("String", True),
     "entry": ("String", False),
     "args": ("JArray", False),
     "mode": ("String", False),
-    "timeout_ms": ("Int32", False),
+    "timeout": ("Double", False),
 }
 
 
@@ -46,7 +46,7 @@ class UnityCliClient:
             raise UnityCliError(f"Unity CLI 命令目录缺少有效的 data.commands：{project}")
         matches = [
             row for row in commands
-            if row.get("name") == COMMAND_ID and not row.get("group") and row.get("package") == COMMAND_PACKAGE
+            if row.get("name") == "run" and row.get("group") == "script" and row.get("package") == COMMAND_PACKAGE
         ]
         if len(matches) > 1:
             raise UnityCliError(f"Unity CLI 命令目录重复登记了 {COMMAND_ID}：{project}")
@@ -92,10 +92,11 @@ class UnityCliClient:
         data = self._run(
             project, COMMAND_ID, "--file", str(script), "--entry", SCRIPT_ENTRY,
             "--args", json.dumps([str(request)]), "--mode", "ephemeral",
-            "--timeout_ms", str(self.timeout_seconds * 1000), executing=True,
+            "--timeout", str(self.timeout_seconds), executing=True,
         )
         execution = data.get("result") if isinstance(data, dict) else None
-        if isinstance(execution, dict) and execution.get("success") is False:
+        command_success = data.get("success") if isinstance(data, dict) else None
+        if command_success is False or (isinstance(execution, dict) and execution.get("success") is False):
             raise UnityCliError(
                 f"Unity CLI {COMMAND_ID} 执行失败（{project}）：{execution}",
                 indeterminate=True, response=data,
@@ -103,7 +104,7 @@ class UnityCliClient:
         receipt = execution.get("result") if isinstance(execution, dict) else None
         if (
             not isinstance(receipt, dict)
-            or execution.get("success") is not True
+            or execution.get("success", command_success) is not True
             or receipt.keys() != {"request_id", "result_path", "status"}
             or any(not isinstance(value, str) or not value for value in receipt.values())
         ):

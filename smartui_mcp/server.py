@@ -264,7 +264,10 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
                                        name: str, spec: dict[str, Any]) -> Any:
         """创建或更新组件规格并生成组件文档，不伪造制作结果。
 
-        spec 必须包含已登记的 program_id，其他字段由项目程序自行定义，不限制组件类型和画法。
+        spec.program_id 引用项目程序。绘制前须登记 spec.design 的 1× 主体 width、height 和 basis。
+        basis 可用 {layout_id,node_id} 引用基准页面的固定尺寸节点，或用文字说明控件规格或明确设计目标。
+        需要外扩时用 outsets 描述四边。图集在 design.sprites 中按资产 ID 登记这些字段及裁区起点 x、y。
+        工具把当前 ui_settings.reference_size 存入规格。其他绘制参数由项目程序自行定义。
         """
         return _project_summary(await asyncio.to_thread(projects.define_component, project_root, expected_revision,
                                                         component_id, name, spec))
@@ -340,7 +343,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool()
     async def project_export_assets(project_root: str, expected_revision: str, component_id: StrictStr,
                                     exports: list[dict[str, Any]]) -> Any:
-        """导出正式 PNG。切片资产可用 slice_sample_size 指定缩短均匀中段后的 PNG 宽高。Unity 图元写入 Assets，普通项目写入 smart-ui/exports。"""
+        """先按已登记的 1× 设计规格核对制作区域与主体，再导出正式 PNG。切片可用 slice_sample_size 收短均匀中段。Unity 图元写入 Assets，普通项目写入 smart-ui/exports。"""
         return await asyncio.to_thread(projects.export_assets, project_root, expected_revision, component_id, exports)
 
     @server.tool()
@@ -358,7 +361,7 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     async def project_create_composition(project_root: str, expected_revision: str, composition_id: StrictStr, width: StrictInt,
                                           height: StrictInt, background: StrictStr,
                                           nodes: list[CompositionNode]) -> list[Any]:
-        """按稳定 composition_id 更新当前静态组合；组件引用 component_id，图像引用 asset_id，文字指定真实字体。"""
+        """等比组合裁图与文字，用于局部观察。正式切片效果和 Unity 尺寸使用 project_build_layout 核对。"""
         result = await asyncio.to_thread(projects.create_composition, project_root, expected_revision, composition_id,
                                          width, height, background, [node.model_dump() for node in nodes])
         return await asyncio.to_thread(_composition_content, result)
@@ -507,12 +510,12 @@ def create_server(client: PhotoCraftClient | None = None) -> FastMCP:
     @server.tool(structured_output=False)
     async def project_compare_unity_screenshot(project_root: str, build_id: StrictStr,
                                                 screenshot_path: StrictStr) -> list[Any]:
-        """将已核验的设计稿与同尺寸 Unity 截图并排显示，返回两侧内容摘要。"""
+        """核对当前正式页面、交付图像及项目基础分辨率，将同尺寸 Unity 截图并排显示并返回摘要。"""
         def compare():
             from io import BytesIO
             from PIL import Image as PillowImage
 
-            result = projects.get_page_build(project_root, build_id)
+            result = projects.get_page_build(project_root, build_id, for_unity_comparison=True)
             build = result["page_build"]
             overview = build["files"]["overview"]
             design = Path(overview["path"]).read_bytes()

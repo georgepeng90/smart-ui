@@ -74,6 +74,7 @@ def project(tmp_path):
     store = ProjectStore()
     root = str(tmp_path / "对照项目")
     context = store.create(root, "demo", "通用对照项目")
+    context = store.update_ui_settings(root, context["revision"], {"reference_size": {"width": 64, "height": 48}})
     source = tmp_path / "reference.png"
     with Image.new("RGBA", (12, 10), (30, 90, 120, 255)) as image:
         image.save(source)
@@ -82,9 +83,13 @@ def project(tmp_path):
     context = store.update_style(root, context["revision"], "均匀描边", [RULE], {"outline": 2}, ["guide"])
     context = store.save_program(root, context["revision"], "drawing", "描边程序", "绘制组件描边", PROGRAM)
     context = store.define_component(root, context["revision"], "sample", "样片", {
-        "program_id": "drawing", "width": 8, "height": 6,
+        "program_id": "drawing", "width": 8, "height": 6, "design": SAMPLE_DESIGN,
     })
     return store, record_sample_run(store, context, "first", (150, 20, 20, 255))
+
+
+SAMPLE_DESIGN = {"basis": "按钮主体采用 6×4 的基准样片，四边各留一个像素", "width": 6, "height": 4,
+                 "outsets": {"top": 1, "right": 1, "bottom": 1, "left": 1}}
 
 
 def compare(store, context, **overrides):
@@ -314,6 +319,7 @@ def test_full_comparison_is_stable_when_artifact_size_changes(project):
 
     resized = store.define_component(root, added["revision"], "sample", "样片", {
         "program_id": "drawing", "width": 10, "height": 9,
+        "design": {"basis": "放大后的对照样片", "width": 10, "height": 9},
     })
     later = record_sample_run(store, resized, "second", (30, 90, 120, 255))
     second = store.compare_component(root, later["revision"], "sample", "guide")

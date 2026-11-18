@@ -32,6 +32,66 @@ def files(record):
     return {key: Path(value["path"]).read_bytes() for key, value in record["files"].items()}
 
 
+def test_formal_preview_renders_current_compact_png_at_the_layout_size(project):
+    store, context = project
+    root = context["project_root"]
+    run = context["data"]["components"]["sample"]["latest_run"]
+    preview = Path(run["preview"])
+    with Image.new("RGBA", (8, 6), "green") as source:
+        source.paste("red", (0, 0, 2, 2))
+        source.paste("blue", (6, 4, 8, 6))
+        source.save(preview)
+    current = store.record_run(root, context["revision"], "sample", {**run, "run_id": "marked-corners"})
+    export = store.export_assets(root, current["revision"], "sample", [
+        export_item() | {"slice_sample_size": {"width": 5, "height": 5}}
+    ])
+    asset = export["export"]["items"][0]["record"]
+    preview.unlink()  # 正式页面仅从交付 PNG 读取像素。
+    saved = save(store, export, [image_node(x=6, y=5, width=18, height=12)])
+    result = build(store, saved)
+    record = result["page_build"]
+    node, = record["nodes"]
+    assert node["geometry"] == asset["geometry"]
+    assert Path(node["source"]).read_bytes() == Path(asset["path"]).read_bytes()
+    assert node["patch_plan"]["image_size"] == [20, 14]
+    with Image.open(record["files"]["overview"]["path"]) as overview:
+        rgb = overview.convert("RGB")
+        assert rgb.crop((5, 4, 7, 6)).getcolors() == [(4, (255, 0, 0))]
+        assert rgb.crop((23, 16, 25, 18)).getcolors() == [(4, (0, 0, 255))]
+        assert rgb.getpixel((7, 4)) == rgb.getpixel((22, 17)) == (0, 128, 0)
+    assert store.get_page_build(root, "screen", for_unity_comparison=True)["is_current"]
+    Path(asset["path"]).write_bytes(b"modified delivery")
+    with pytest.raises(ValueError, match="图像资产校验失败"):
+        store.get_page_build(root, "screen", for_unity_comparison=True)
+
+
+def test_unity_comparison_requires_current_base_resolution_page(exported_project):
+    store, context = exported_project
+    root = context["project_root"]
+    saved = save(store, context, [image_node()])
+    built = build(store, saved)
+    save(store, built, [image_node(x=4)])
+    assert not store.get_page_build(root, "screen")["matches_layout"]
+    with pytest.raises(ProjectError, match="screen.*快照已过期.*matches_layout"):
+        store.get_page_build(root, "screen", for_unity_comparison=True)
+    store.update_ui_settings(root, store.context(root)["revision"], {"reference_size": {"width": 128, "height": 96}})
+    with pytest.raises(ProjectError, match="reference_size.*128×96.*64×48"):
+        store.get_page_build(root, "screen", for_unity_comparison=True)
+
+
+def test_unity_comparison_checks_current_font_file_without_blocking_snapshot(typography_project, label, project_font):
+    store, context = typography_project
+    root = context["project_root"]
+    built = build(store, save(store, context, [label]))
+    assert store.get_page_build(root, "screen", for_unity_comparison=True)["is_current"]
+
+    project_font.write_bytes(b"modified source font")
+
+    assert store.get_page_build(root, "screen")["page_build"] == built["page_build"]
+    with pytest.raises(ValueError, match="button-label.*字体 SHA-256 不符"):
+        store.get_page_build(root, "screen", for_unity_comparison=True)
+
+
 def test_build_uses_real_browser_and_replaces_the_current_preview(typography_project, label):
     store, context = typography_project
     other_label = {**label, "id": "second-label", "y": 18}
@@ -362,5 +422,11 @@ def test_build_and_get_over_real_stdio_return_the_current_png_bytes(exported_pro
             assert json.loads(fetched.content[0].text) == result
             assert base64.b64decode(fetched.content[1].data) == expected
             assert base64.b64decode(fetched.content[2].data) == annotation
+
+            save(store, result, [image_node(x=4)])
+            comparison = await session.call_tool("project_compare_unity_screenshot", {
+                "project_root": context["project_root"], "build_id": "screen", "screenshot_path": str(overview),
+            })
+            assert comparison.isError and "快照已过期" in comparison.content[0].text
 
     asyncio.run(scenario())

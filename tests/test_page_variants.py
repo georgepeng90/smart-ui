@@ -106,6 +106,12 @@ def test_invalid_scene_preflights_before_rendering_and_render_failure_keeps_publ
 def test_variants_compare_current_exported_states_and_select_locale_styles(typography_project, typography_spec, label):
     store, context = typography_project
     root = context["project_root"]
+    component = context["data"]["components"]["sample"]
+    sprite = {"x": 0, "y": 0, "width": 4, "height": 6, "basis": "状态列表每个图素占 4×6"}
+    design = {"sprites": {"button": sprite, "button-pressed": {**sprite, "x": 4}}}
+    context = store.define_component(root, context["revision"], "sample", component["name"],
+                                     component["spec"] | {"design": design})
+    context = record_sample_run(store, context, "state-sheet", (170, 20, 20, 255))
     run = context["data"]["components"]["sample"]["latest_run"]
     # 合成同一当前绘制产物中的两个状态，再通过正式导出登记。
     with Image.new("RGBA", (8, 6), (170, 20, 20, 255)) as source:

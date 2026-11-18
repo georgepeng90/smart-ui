@@ -9,9 +9,11 @@ import shutil
 from PIL import Image, ImageCms
 import pytest
 
-from smartui_mcp.exports import prepare_exports, publish_exports
+from smartui_mcp.exports import _signature, prepare_exports, publish_exports
 from smartui_mcp.image_assets import register_image_file, verify_image_record
 from smartui_mcp.layout import ProjectLayout
+from smartui_mcp.projects import spec_sha256
+from smartui_mcp.production_design import asset_design_issue
 from smartui_mcp.slicing import image_patches
 
 
@@ -25,7 +27,14 @@ def fixture(tmp_path):
            "spec_sha256": "1" * 64, "program_id": "buttons",
            "program_sha256": "2" * 64, "preview": str(source),
            "artifact_hashes": {"preview": hashlib.sha256(source.read_bytes()).hexdigest()}}
-    state = {"components": {"button": {"latest_run": run}}, "images": {}, "exports": {}}
+    reference = {"width": 64, "height": 48}
+    sprite = {"x": 2, "y": 1, "width": 6, "height": 4, "basis": "按钮规范要求主体 6×4，四边各外扩一像素",
+              "outsets": {"left": 1, "right": 1, "top": 1, "bottom": 1}}
+    spec = {"design": {"sprites": {key: deepcopy(sprite) for key in ("button-normal", "short", "second")},
+                       "reference_size": reference}}
+    run["spec_sha256"] = spec_sha256(spec)
+    state = {"components": {"button": {"latest_run": run, "spec": spec}}, "images": {}, "exports": {},
+             "ui_settings": {"reference_size": reference}}
     item = {"asset_id": "button-normal", "name": "普通按钮", "output_path": "smart-ui/exports/ui/button.png",
             "region": {"x": 2, "y": 1, "width": 8, "height": 6}, "state": "normal", "purpose": "按钮背景",
             "geometry": {"mode": "stretch", "content_rect": {"x": 1, "y": 1, "width": 6, "height": 4}}}
@@ -83,6 +92,7 @@ def test_slice_sample_reconstructs_original_region_pixels_and_offsets(tmp_path, 
     assert exported["provenance"]["slice_sample_size"] == item["slice_sample_size"]
     assert exported["provenance"]["region"] == item["region"]
     assert exported["geometry"]["borders"] == item["geometry"]["borders"]
+    assert (exported["provenance"]["design"]["width"], exported["provenance"]["design"]["height"]) == (6, 4)
     assert exported["geometry"]["content_rect"] == {"x": 1, "y": 1, "width": sample_size[0] - 2, "height": sample_size[1] - 2}
 
     patches = image_patches(exported["geometry"], sample_size, (6, 4))
@@ -160,8 +170,45 @@ def test_sample_record_validates_source_geometry_size_and_signature(tmp_path):
         verify_image_record(missing_geometry)
     changed_origin = deepcopy(record)
     changed_origin["provenance"]["region"]["x"] += 1
-    with pytest.raises(ValueError, match="导出摘要"):
+    with pytest.raises(ValueError, match="制作结果与 1× 设计规格不一致"):
         verify_image_record(changed_origin)
+
+
+def test_atlas_region_and_content_must_match_the_design_before_sampling(tmp_path):
+    state, item, _ = sample_fixture(tmp_path, "nine_slice", (5, 4))
+    for patch in ({"region": {**item["region"], "x": 1}},
+                  {"geometry": {**item["geometry"], "content_rect": {"x": 1, "y": 1, "width": 5, "height": 4}}}):
+        with pytest.raises(ValueError, match="1× 设计规格不一致"):
+            prepare(tmp_path, state, item | patch)
+    assert not (tmp_path / "smart-ui/exports").exists()
+
+
+def test_existing_export_without_design_is_readable_and_requires_new_evidence(tmp_path):
+    state, item, _ = fixture(tmp_path)
+    exported = publish_exports(prepare(tmp_path, state, item))
+    legacy = exported["items"][0]["record"]
+    del legacy["provenance"]["design"]
+    legacy["export_signature"] = _signature(legacy)
+    verify_image_record(legacy)
+    assert "缺少已核验" in asset_design_issue(state, legacy)
+    save_state(state, exported)
+    replacement = prepare(tmp_path, state, item)
+    assert not replacement["items"][0]["write_output"]
+    current = publish_exports(replacement)["items"][0]["record"]
+    assert asset_design_issue(state, current) is None
+    assert current["sha256"] == legacy["sha256"] and current["export_signature"] != legacy["export_signature"]
+
+
+def test_exported_atlas_sprite_requires_its_complete_size_evidence(tmp_path):
+    state, item, _ = fixture(tmp_path)
+    record = publish_exports(prepare(tmp_path, state, item))["items"][0]["record"]
+    design = record["provenance"]["design"]
+    assert (design["x"], design["y"]) == (2, 1)
+    assert asset_design_issue(state, record) is None
+    del design["basis"]
+    assert "规格待核对" in asset_design_issue(state, record)
+    with pytest.raises(ValueError, match="provenance.design.*basis"):
+        verify_image_record(record)
 
 
 def test_prepare_is_read_only_and_publish_keeps_exact_region_and_evidence(tmp_path):
