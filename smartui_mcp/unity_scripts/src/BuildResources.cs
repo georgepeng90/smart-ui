@@ -350,9 +350,10 @@ namespace SmartUI.UGUI.Editor
                     LoadSprite(asset);
                     continue;
                 }
+                bool usesExport = path == asset.Path;
                 if (!path.EndsWith(".png", StringComparison.Ordinal) ||
-                    string.Equals(path, asset.Path, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException($"'{path}' is not a separate generated Sprite output path.");
+                    (!usesExport && string.Equals(path, asset.Path, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException($"'{path}' is not a valid Sprite output path for '{asset.Path}'.");
                 BuildFiles.RequireOutputPath("Sprites", path);
 
                 var files = BuildFiles.Snapshot(path);
@@ -360,7 +361,7 @@ namespace SmartUI.UGUI.Editor
                 var statePath = BuildFiles.StatePath(request.DataRoot, "sprites", item.Key);
                 BuildFiles.RequireNoPending(statePath);
                 var state = BuildFiles.Read<SpriteState>(statePath);
-                if (state == null ? files.Sha256 != null || files.MetaSha256 != null
+                if (state == null ? !usesExport && (files.Sha256 != null || files.MetaSha256 != null)
                     : state.ProjectId != request.ProjectId || state.Path != path || state.Guid != AssetDatabase.AssetPathToGUID(path))
                     throw new InvalidOperationException($"'{path}' has no matching SmartUI Sprite ownership record.");
                 if (state != null)
@@ -371,14 +372,20 @@ namespace SmartUI.UGUI.Editor
                     // Report which import setting drifted before reporting the .meta digest conflict.
                     if (files.MetaSha256 != state.Files.MetaSha256)
                         LoadSprite(asset);
-                    BuildFiles.RequireSnapshot(path, files, state.Files);
-                    PrefabAssets.RequireClean(path, AssetImporter.GetAtPath(path));
+                    // A shared PNG has already been verified against its registered export. Unity owns its .meta.
+                    BuildFiles.RequireSnapshot(path, files, usesExport
+                        ? new FileSnapshot { Sha256 = asset.Sha256, MetaSha256 = state.Files.MetaSha256 }
+                        : state.Files);
                 }
+                if (state != null || usesExport)
+                    PrefabAssets.RequireClean(path, AssetImporter.GetAtPath(path));
                 if (!verifying && (files.Sha256 != asset.Sha256 ||
                     SpriteSettingsDiffer(asset, AssetImporter.GetAtPath(path) as TextureImporter)))
                     BuildFiles.RequireWritable(path);
                 if (verifying)
                 {
+                    if (usesExport && state?.Files.Sha256 != asset.Sha256)
+                        throw new InvalidOperationException($"The current export '{path}' has no matching Sprite import. Run apply with adopt_matching disabled to import it.");
                     if (files.Sha256 != asset.Sha256)
                         throw new InvalidOperationException($"Generated Sprite '{path}' does not match its PNG source.");
                     LoadSprite(asset);
@@ -397,23 +404,34 @@ namespace SmartUI.UGUI.Editor
                 var state = BuildFiles.Read<SpriteState>(statePath);
                 var importer = AssetImporter.GetAtPath(path) as TextureImporter;
                 bool needsSettings = SpriteSettingsDiffer(asset, importer);
-                bool needsCopy = PrefabAssets.FileHash(output) != asset.Sha256;
-                if (!needsSettings && !needsCopy)
+                bool usesExport = asset.Path == path;
+                bool needsCopy = !usesExport && PrefabAssets.FileHash(output) != asset.Sha256;
+                bool refreshExport = usesExport && (state == null || state.Files.Sha256 != asset.Sha256);
+                if (usesExport)
+                    BuildFiles.RequireSnapshot(path, BuildFiles.Snapshot(path), asset.Expected);
+                if (!needsSettings && !needsCopy && !refreshExport)
                 {
                     LoadSprite(asset);
                     continue;
                 }
 
-                BuildFiles.RequireWritable(path);
+                if (needsCopy || needsSettings)
+                    BuildFiles.RequireWritable(path);
                 BuildFiles.MarkPending(statePath, path);
                 PrefabAssets.EnsureOutputDirectory(path);
                 if (needsCopy)
                 {
-                    File.Copy(BuildFiles.RelativePath(asset.Path), output, state != null);
-                    AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
+                    using var source = File.OpenRead(BuildFiles.RelativePath(asset.Path));
+                    using var destination = File.Open(output, state == null ? FileMode.CreateNew : FileMode.Create, FileAccess.Write, FileShare.None);
+                    source.CopyTo(destination);
                 }
+                if (needsCopy || refreshExport)
+                    AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
+                if (refreshExport)
+                    needsSettings = SpriteSettingsDiffer(asset, AssetImporter.GetAtPath(path) as TextureImporter);
                 if (needsSettings)
                 {
+                    BuildFiles.RequireWritable(path);
                     importer = AssetImporter.GetAtPath(path) as TextureImporter
                         ?? throw new InvalidOperationException($"Unity did not create a texture importer for '{path}'.");
                     importer.textureType = TextureImporterType.Sprite;
@@ -432,12 +450,15 @@ namespace SmartUI.UGUI.Editor
                     importer.SaveAndReimport();
                 }
                 LoadSprite(asset);
+                var files = BuildFiles.Snapshot(path);
+                if (files.Sha256 != asset.Sha256)
+                    throw new InvalidOperationException($"Sprite '{path}' no longer matches its PNG source.");
                 var guid = AssetDatabase.AssetPathToGUID(path);
                 if (state != null && state.Guid != guid)
                     throw new InvalidOperationException($"Generated Sprite '{path}' lost its GUID '{state.Guid}'.");
                 BuildFiles.Complete(statePath, new SpriteState
                 {
-                    ProjectId = request.ProjectId, Path = path, Guid = guid, Files = BuildFiles.Snapshot(path)
+                    ProjectId = request.ProjectId, Path = path, Guid = guid, Files = files
                 });
             }
         }

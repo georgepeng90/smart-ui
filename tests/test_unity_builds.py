@@ -161,6 +161,37 @@ def test_build_keeps_authoring_records_outside_assets_and_reopens_without_local_
     assert not (root / "Packages").exists()
 
 
+def test_build_reuses_registered_export_at_its_sprite_path(project):
+    store, context = project
+    root = context["project_root"]
+    path = "Assets/SmartUI/Sprites/button.png"
+    with pytest.raises(ValueError, match="输出路径必须为"):
+        store.export_assets(root, context["revision"], "sample", [export_item() | {"output_path": path.replace("button", "other")}])
+    export = store.export_assets(root, context["revision"], "sample", [export_item() | {"output_path": path}])
+    builder = UnityBuildStore(UnityStore(store), FakeCli())
+    builder.configure(root, None, {"fonts": {}})
+    define_image(builder, root, "button")
+    asset = prepare(builder, root, ["button"], operation="plan")["request"]["assets"]["button"]
+    assert asset["path"] == asset["output_path"] == path
+    assert asset["expected"] == {"sha256": export["export"]["items"][0]["record"]["sha256"], "meta_sha256": None}
+    (Path(root) / path).write_bytes(b"external modification")
+    with pytest.raises(ValueError, match="SHA-256"):
+        prepare(builder, root, ["button"], operation="plan")
+
+
+def test_build_copies_source_from_a_nested_sprite_directory(project):
+    store, context = project
+    root = context["project_root"]
+    path = "Assets/SmartUI/Sprites/Backgrounds/key.png"
+    store.export_assets(root, context["revision"], "sample", [export_item() | {"output_path": path}])
+    builder = UnityBuildStore(UnityStore(store), FakeCli())
+    builder.configure(root, None, {"fonts": {}})
+    define_image(builder, root, "button")
+    asset = prepare(builder, root, ["button"], operation="plan")["request"]["assets"]["button"]
+    assert asset["path"] == path
+    assert asset["output_path"] == "Assets/SmartUI/Sprites/button.png"
+
+
 @pytest.mark.parametrize("payload", [[], {"schema_version": 2.0}, {"schema_version": 1}])
 def test_operation_rejects_invalid_request_shape_and_schema(builder_project, payload):
     root, _, builder, _ = builder_project

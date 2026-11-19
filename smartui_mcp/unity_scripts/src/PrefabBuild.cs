@@ -169,6 +169,17 @@ namespace SmartUI.UGUI.Editor
                 BuildFiles.RequireId(pair.Key, "image");
                 if (pair.Value.OutputPath != null && !paths.Add(pair.Value.OutputPath))
                     throw new InvalidOperationException($"Duplicate output '{pair.Value.OutputPath}'.");
+                var asset = pair.Value;
+                if (asset.OutputPath != null && asset.Path == asset.OutputPath)
+                {
+                    string recordPath = $"{request.DataRoot}/sources/images/{pair.Key}.json";
+                    if (asset.Path != $"Assets/SmartUI/Sprites/{pair.Key}.png" || (string)project["images"]?[pair.Key] != recordPath)
+                        throw new InvalidOperationException($"'{asset.Path}' is not the registered Sprite path for '{pair.Key}'.");
+                    var record = BuildFiles.Read<JObject>(BuildFiles.RelativePath(recordPath));
+                    if ((string)record?["path"] != asset.Path || (string)record?["output_path"] != asset.Path ||
+                        (string)record?["sha256"] != asset.Sha256 || (string)record?["provenance"]?["kind"] != "component_export")
+                        throw new InvalidOperationException($"'{asset.Path}' does not match the registered component export.");
+                }
             }
 
             var targetControls = request.Targets.Where(target => target.Kind != "page").Select(target => target.Id).ToHashSet();

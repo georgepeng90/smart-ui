@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from PIL import Image
 
-from .layout import SCHEMA_MIGRATION_BACKUPS, ProjectLayout, map_state_paths
+from .layout import SCHEMA_MIGRATION_BACKUPS, UNITY_SPRITES, ProjectLayout, map_state_paths
 
 
 class ProjectError(RuntimeError):
@@ -505,6 +505,11 @@ class ProjectStore:
             self._revision(root, expected_revision, revision)
             self._review_run(state, component_id)
             plan = prepare_exports(str(root), state["paths"], state, component_id, exports)
+            direct_sprites = {item["asset_id"] for item in plan["items"] if item["write_output"]
+                              and item["output_path"] == f"{UNITY_SPRITES}/{item['asset_id']}.png"}
+            if direct_sprites:
+                from .unity_builds import UnityBuildStore
+                UnityBuildStore()._ensure_idle(root, asset_ids=direct_sprites)
             asset_ids = set(state["images"])
             for item in plan["items"]:
                 asset_id = item["asset_id"]

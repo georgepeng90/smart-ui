@@ -1,6 +1,6 @@
 # SmartUI 项目工具与持久化资料
 
-SmartUI PhotoCraft v0.18.1 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
+SmartUI PhotoCraft v0.18.2 管理参考、风格规则、文字规范、Python 绘制程序、组件规格、图像资产、正式 PNG 导出及页面布局。PhotoCraft 执行组件制作，宿主图像工具生成或编辑独立图像。项目工具登记实际素材、来源和当前产物。
 
 ## 工具参数与调用顺序
 
@@ -60,7 +60,7 @@ Unity 工程仍以工程绝对路径作为 `project_root`。所有项目类型�
 | `smart-ui/unity/` | Unity 目录、制作定义、请求、结果和 `import-state/` 基线 |
 | `.smartui/` | 本机缓存、临时文件、诊断、锁和 schema 升级迁移备份 |
 
-Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固定输出到 `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/` 和 `Assets/SmartUI/Sprites/`；已有资源继续留在其登记原路径。交付给 Unity 使用的图元 PNG 写入调用者指定的 `Assets` 子目录。业务项目人工维护的说明文档可按项目既有约定放在 `Docs/` 等目录，不需要放入 `Assets/`。
+Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固定输出到 `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/` 和 `Assets/SmartUI/Sprites/`。交付给 Unity 的图元 PNG 写入调用者指定的 `Assets` 子目录。正式导出使用 `Assets/SmartUI/Sprites/<asset_id>.png` 时，该文件同时用作 Unity Sprite。业务项目人工维护的说明文档可按项目既有约定放在 `Docs/` 等目录。
 
 将 `smart-ui/` 及项目实际使用的交付文件纳入业务工程 Git。项目内路径以相对业务工程根目录的形式保存，使用 `/` 分隔；调用工具时可以用返回的绝对路径打开文件。项目引用的字体等必要资源也应能从业务工程取得。程序、组件、布局和资产按 ID 保存当前状态，历史变更通过 Git 查阅。受管 Markdown 展示项目摘要，通过工具更新结构化资料。
 
@@ -190,7 +190,7 @@ Unity 构建生成的控件预制体、页面预制体和构建 Sprite 分别固
 
 已有导出缺少设计依据时，仍可读取原文件和清单。正式页面构建及 Unity 接入会指出需要补核的资产。先根据原布局确定 1× 规格，列出设计尺寸、原画布、裁区和固定边的差异。尺寸正确时可按原规格重新制作、导出。需要更换已有源稿画布时，使用新组件及资产 ID 按 1× 重做边角、描边和外扩，显式更新引用并复验。缩放整图、只改切片边距或调高 Unity Multiplier 都会绕过原始像素问题。
 
-`output_path` 是工程相对 PNG 路径。上述示例用于普通项目，PNG 保存到 `smart-ui/exports/`，其中 `manifests/` 保留给清单。Unity 项目须使用 `Assets` 下的路径，例如 `Assets/UI/Sprites/action-background.png`。已登记的正式资产需沿用对应输出路径。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
+`output_path` 是工程相对 PNG 路径。上述示例用于普通项目，PNG 保存到 `smart-ui/exports/`，其中 `manifests/` 保留给清单。Unity 项目须使用 `Assets` 下的路径。要让 Unity 构建直接复用导出 PNG，使用精确路径 `Assets/SmartUI/Sprites/<asset_id>.png`，文件名和大小写需与资产 ID 一致。已登记的正式资产需沿用对应输出路径。每个组件的当前导出清单在 `smart-ui/exports/manifests/<component_id>.json`。用 `project_get_export` 按导出返回的 ID 查看和校验清单。布局直接引用导出登记的资产 ID。
 
 ## 页面制作的项目约定
 

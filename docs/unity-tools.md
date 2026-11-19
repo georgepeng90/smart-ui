@@ -146,7 +146,7 @@ SmartUI 通过同一个绝对工程路径发现并调用 Unity Pipeline 注册�
 }
 ```
 
-生成的控件预制体、页面预制体和构建 Sprite 分别固定输出到 `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/` 和 `Assets/SmartUI/Sprites/`；已有资源继续使用登记的原路径。交付给 Unity 使用的图元 PNG 保存在调用者指定的 `Assets` 子目录。待生成的控件先保存公开目录和制作定义，再准备控件构建。引用已有 Prefab 时，先保存 `external` 预览定义并登记真实资源。页面依赖的生成型控件须已登记且与当前制作输入一致。修改控件后，先应用控件构建，再准备依赖它的页面。
+生成的控件预制体、页面预制体和构建 Sprite 分别固定输出到 `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/` 和 `Assets/SmartUI/Sprites/`。正式导出使用 `Assets/SmartUI/Sprites/<asset_id>.png` 时，构建复用同一 PNG 并维护其 Sprite 导入设置。重新导出会核对已登记的 PNG 并保留 `.meta`，构建继续核对已绑定的 GUID 和导入设置。其他来源路径的 PNG 在应用时生成构建副本。待生成的控件先保存公开目录和制作定义，再准备控件构建。引用已有 Prefab 时，先保存 `external` 预览定义并登记真实资源。页面依赖的生成型控件须已登记且与当前制作输入一致。修改控件后，先应用控件构建，再准备依赖它的页面。
 
 在 `project_set_unity_bindings` 中按实例 ID 和公开槽位 ID 提供业务键。例如，为 `start` 实例的 `click` 槽位保存 `{"start":{"click":"menu.start"}}`。准备页面构建时核对必需绑定。业务键用于项目接入记录，事件处理和运行时绑定由项目代码实现。
 
@@ -156,7 +156,7 @@ SmartUI 通过同一个绝对工程路径发现并调用 Unity Pipeline 注册�
 | --- | --- |
 | `plan` | 预检并报告新建、更新、复验、保持或冲突 |
 | `apply` | 构建和保存需要写入的对象，重新加载并核对真实资源 |
-| `verify` | 复验当前资源和引用关系 |
+| `verify` | 复验当前资源和引用关系。共用 PNG 首次导出或内容变化后，先运行普通 `apply` 导入当前内容，再执行 `verify` 或使用 `adopt_matching` |
 
 构建请求和结果使用 schema 2。请求中的相对路径字段 `data_root` 固定为 `smart-ui`，`project_file` 为 `smart-ui/project.json`，用于识别资料目录和项目索引。请求、状态与结果保存在 `smart-ui/unity/operations/<request_id>/` 的 `request.json`、`operation.json` 和 `result.json`。Editor 为各目标保存成功基线及未完成写入记录，位置为 `smart-ui/unity/import-state/`。页面的直接摘要覆盖背景颜色、本页排列、显式参数和直接资源属性；继承的控件声明及资源内容变化进入依赖摘要，可触发复验。业务绑定保存在项目资料中。
 

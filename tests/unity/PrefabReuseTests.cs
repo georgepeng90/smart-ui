@@ -32,6 +32,8 @@ namespace SmartUI.UGUI.Editor.Tests
                 tests.PreflightsVariantResizeAgainstItsCurrentBase,
                 tests.ReportsManagedPrefabChangesBeforeApplyingAnyTarget,
                 tests.RejectsReadOnlySpriteMetaBeforeAnImporterSettingsUpdate,
+                tests.ImportsReadOnlyExportAndUpdatesItsManagedSprite,
+                tests.ReusesRegisteredExportAndPreservesItsSpriteIdentity,
                 tests.ChecksSlicedScaleAndAdoptsOnlyMatchingLegacyValues,
                 tests.TracksMultiplierOnlyWhileDesignUsesSlicing,
                 tests.ReportsEditedSpriteSettingsWithTheirExportSource,
@@ -85,6 +87,12 @@ namespace SmartUI.UGUI.Editor.Tests
                 DeleteState(kind, id + "." + kind);
             foreach (var key in new[] { "normal", "alternate", "changed" })
                 DeleteState("sprites", id + "." + key);
+            string directSprite = output + "/Sprites/" + id + ".normal.png";
+            if (File.Exists(BuildFiles.RelativePath(directSprite)))
+                Assert.That(AssetDatabase.DeleteAsset(directSprite), Is.True);
+            string directRecord = BuildFiles.RelativePath(dataRoot + "/sources/images/" + id + ".normal.json");
+            if (File.Exists(directRecord))
+                File.Delete(directRecord);
             string projectFile = BuildFiles.RelativePath(dataRoot + "/project.json");
             if (projectBefore == null)
                 File.Delete(projectFile);
@@ -307,6 +315,49 @@ namespace SmartUI.UGUI.Editor.Tests
             finally
             {
                 File.SetAttributes(metaPath, attributes);
+            }
+        }
+
+        void ImportsReadOnlyExportAndUpdatesItsManagedSprite()
+        {
+            string source = BuildFiles.RelativePath(fixtureDirectory + "/normal.png");
+            string path = SpritePath("normal");
+            string copy = BuildFiles.RelativePath(path);
+            string statePath = BuildFiles.StatePath(dataRoot, "sprites", id + ".normal");
+            string pendingPath = statePath + ".pending";
+            var sourceAttributes = File.GetAttributes(source);
+            File.SetAttributes(source, sourceAttributes | FileAttributes.ReadOnly);
+            try
+            {
+                Run("apply", false, false);
+                Assert.That(AssetDatabase.LoadAssetAtPath<Sprite>(path), Is.Not.Null);
+                Assert.That(File.GetAttributes(copy).HasFlag(FileAttributes.ReadOnly), Is.False);
+                Assert.That(File.GetAttributes(source).HasFlag(FileAttributes.ReadOnly), Is.True);
+                Assert.That(File.Exists(pendingPath), Is.False);
+                var initial = BuildFiles.Read<SpriteState>(statePath);
+                Assert.That(initial.Files.Sha256, Is.EqualTo(PrefabAssets.FileHash(source)));
+
+                File.SetAttributes(source, sourceAttributes);
+                WritePng("normal", Color.red);
+                File.SetAttributes(source, sourceAttributes | FileAttributes.ReadOnly);
+                Run("apply", false, false, changedSource: true);
+                string updatedHash = PrefabAssets.FileHash(source);
+                Assert.That(updatedHash, Is.Not.EqualTo(initial.Files.Sha256));
+                Assert.That(PrefabAssets.FileHash(copy), Is.EqualTo(updatedHash));
+                Assert.That(File.GetAttributes(copy).HasFlag(FileAttributes.ReadOnly), Is.False);
+                Assert.That(File.GetAttributes(source).HasFlag(FileAttributes.ReadOnly), Is.True);
+                Assert.That(File.Exists(pendingPath), Is.False);
+                var updated = BuildFiles.Read<SpriteState>(statePath);
+                Assert.That(updated.Files.Sha256, Is.EqualTo(updatedHash));
+                Assert.That(updated.Guid, Is.EqualTo(initial.Guid));
+                Assert.That(AssetDatabase.LoadAssetAtPath<Sprite>(path), Is.Not.Null);
+            }
+            finally
+            {
+                File.SetAttributes(source, sourceAttributes);
+                if (File.Exists(copy))
+                    File.SetAttributes(copy, File.GetAttributes(copy) & ~FileAttributes.ReadOnly);
+                File.Delete(pendingPath);
             }
         }
 
@@ -555,8 +606,105 @@ namespace SmartUI.UGUI.Editor.Tests
             Assert.That(BuildFiles.Snapshot(variant).Sha256, Is.EqualTo(variantBefore.Sha256));
         }
 
+        void ReusesRegisteredExportAndPreservesItsSpriteIdentity()
+        {
+            string assetId = id + ".normal";
+            string path = output + "/Sprites/" + assetId + ".png";
+            string recordPath = dataRoot + "/sources/images/" + assetId + ".json";
+            string statePath = BuildFiles.StatePath(dataRoot, "sprites", assetId);
+            PrefabAssets.EnsureOutputDirectory(path);
+            BuildFiles.Write(BuildFiles.RelativePath(dataRoot + "/project.json"), new
+            {
+                project_id = id, images = new Dictionary<string, string> { [assetId] = recordPath },
+            }, replace: true);
+
+            ImageAsset WriteExport(string source, bool register = true)
+            {
+                File.Copy(BuildFiles.RelativePath(fixtureDirectory + "/" + source + ".png"), BuildFiles.RelativePath(path), true);
+                var snapshot = BuildFiles.Snapshot(path);
+                if (register)
+                    BuildFiles.Write(BuildFiles.RelativePath(recordPath), new
+                    {
+                        path, output_path = path, sha256 = snapshot.Sha256,
+                        provenance = new { kind = "component_export" },
+                    }, replace: true);
+                return new ImageAsset { Path = path, OutputPath = path, Width = 16, Height = 16,
+                    Sha256 = snapshot.Sha256, Expected = snapshot };
+            }
+
+            var initial = WriteExport("normal");
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceSynchronousImport);
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+            importer.isReadable = true;
+            importer.SaveAndReimport();
+            initial.Expected = BuildFiles.Snapshot(path);
+            string guid = AssetDatabase.AssetPathToGUID(path);
+            Assert.That(guid, Is.Not.Empty);
+            EditorUtility.SetDirty(importer);
+            Assert.That(EditorUtility.IsDirty(importer), Is.True);
+            try
+            {
+                var dirty = Run("apply", false, false, success: false, directExport: initial);
+                Assert.That(dirty.Error, Does.Contain("unsaved changes").And.Contain(path));
+                Assert.That(File.Exists(statePath), Is.False);
+                Assert.That(File.Exists(statePath + ".pending"), Is.False);
+                Assert.That(BuildFiles.Snapshot(TargetPath("base")).Sha256, Is.Null);
+                Assert.That(BuildFiles.Snapshot(path).MetaSha256, Is.EqualTo(initial.Expected.MetaSha256));
+            }
+            finally
+            {
+                EditorUtility.ClearDirty(importer);
+            }
+            Run("apply", false, false, directExport: initial);
+            Assert.That(AssetDatabase.AssetPathToGUID(path), Is.EqualTo(guid));
+            string meta = BuildFiles.Snapshot(path).MetaSha256;
+            var before = AssetDatabase.LoadAssetAtPath<Sprite>(path);
+            Assert.That(AssetDatabase.TryGetGUIDAndLocalFileIdentifier(before, out _, out long fileId), Is.True);
+
+            Color32 PagePixel() => Art(AssetDatabase.LoadAssetAtPath<GameObject>(TargetPath("page")), "first")
+                .sprite.texture.GetPixel(4, 4);
+            var updated = WriteExport("changed");
+            Assert.That(PagePixel(), Is.EqualTo((Color32)Color.white));
+            string previousState = PrefabAssets.FileHash(statePath);
+            var stale = Run("verify", false, false, success: false, changedSource: true, directExport: updated);
+            Assert.That(stale.Error, Does.Contain(path).And.Contain("apply"));
+            var adopt = Run("apply", false, false, success: false, changedSource: true, adoptMatching: true, directExport: updated);
+            Assert.That(adopt.Error, Does.Contain(path).And.Contain("apply"));
+            Assert.That(PagePixel(), Is.EqualTo((Color32)Color.white));
+            Assert.That(PrefabAssets.FileHash(statePath), Is.EqualTo(previousState));
+            Run("plan", false, false, changedSource: true, directExport: updated);
+            Run("apply", false, false, changedSource: true, directExport: updated);
+            Run("verify", false, false, changedSource: true, directExport: updated);
+            Assert.That(PagePixel(), Is.EqualTo((Color32)Color.green));
+            var state = BuildFiles.Read<SpriteState>(statePath);
+            Assert.That(state.Files.Sha256, Is.EqualTo(updated.Sha256));
+            Assert.That(state.Files.MetaSha256, Is.EqualTo(meta));
+            Assert.That(state.Guid, Is.EqualTo(guid));
+            var after = AssetDatabase.LoadAssetAtPath<Sprite>(path);
+            Assert.That(AssetDatabase.TryGetGUIDAndLocalFileIdentifier(after, out string stillGuid, out long stillFileId), Is.True);
+            Assert.That(stillGuid, Is.EqualTo(guid));
+            Assert.That(stillFileId, Is.EqualTo(fileId));
+
+            string metaPath = BuildFiles.RelativePath(path + ".meta");
+            byte[] originalMeta = File.ReadAllBytes(metaPath);
+            File.AppendAllText(metaPath, "\n");
+            try
+            {
+                var changedMeta = Run("plan", false, false, success: false, directExport: WriteExport("changed"));
+                Assert.That(changedMeta.Error, Does.Contain("recorded snapshot"));
+            }
+            finally
+            {
+                File.WriteAllBytes(metaPath, originalMeta);
+            }
+            var external = WriteExport("alternate", register: false);
+            var failed = Run("plan", false, false, success: false, directExport: external);
+            Assert.That(failed.Error, Does.Contain("registered component export"));
+        }
+
         BuildResult Run(string operation, bool updateBase, bool pageOverride, bool success = true, bool changedSource = false,
-            bool changedBorder = false, bool sliced = false, bool adoptMatching = false, bool resized = false, bool privateArtwork = false)
+            bool changedBorder = false, bool sliced = false, bool adoptMatching = false, bool resized = false,
+            bool privateArtwork = false, ImageAsset directExport = null)
         {
             var requestId = Guid.NewGuid().ToString("N");
             string directory = OperationDirectory(requestId);
@@ -610,6 +758,8 @@ namespace SmartUI.UGUI.Editor.Tests
                 Controls = new Dictionary<string, Control> { [id + ".base"] = ControlMapping("base"), [id + ".variant"] = ControlMapping("variant") },
                 Assets = new[] { "normal", "alternate", "changed" }.ToDictionary(key => id + "." + key, key => ImageMapping(key))
             };
+            if (directExport != null)
+                request.Assets[id + ".normal"] = directExport;
             if (resized)
             {
                 request.Targets = new[] { main, variant };

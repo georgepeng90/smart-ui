@@ -14,7 +14,7 @@ from PIL import Image, __version__ as PILLOW_VERSION
 
 from .comparisons import RUN_FIELDS, _check_output_size, _open_verified_image
 from .image_assets import _file_path, verify_image_record
-from .layout import ProjectLayout
+from .layout import ProjectLayout, UNITY_SPRITES
 from .production_design import check_artwork_size, check_export_region, current_design, export_design
 from .projects import spec_sha256
 from .references import _sha256, _temporary_directory
@@ -277,6 +277,9 @@ def prepare_exports(project_root, paths, state, component_id, exports):
             for key in ("name", "state", "purpose"):
                 _text(item[key], f"exports[{index}].{key}")
             target, relative = _production_path(layout, item["output_path"])
+            if layout.is_unity and relative.rpartition("/")[0].casefold() == UNITY_SPRITES.casefold():
+                if relative != f"{UNITY_SPRITES}/{asset_id}.png":
+                    raise ValueError(f"Unity 共用 Sprite 的输出路径必须为 {UNITY_SPRITES}/{asset_id}.png")
             if asset_id in identifiers or target in outputs:
                 raise ValueError(f"同一批次不能重复 asset_id 或 output_path：{asset_id}/{relative}")
             identifiers.add(asset_id)

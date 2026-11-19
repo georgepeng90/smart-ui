@@ -21,7 +21,7 @@ description: 维护 Unity 控件目录与制作定义，通过 Unity CLI 构建�
 
 ## 切片图素的导入和检查
 
-从正式布局和导出 PNG 构建。核对受管 Sprite PPU 为 100、Border 对应导出的 `geometry.borders`，宿主 Canvas Reference PPU 为 100，受管切片 Image 的 Pixels Per Unit Multiplier 为 1。对照基础分辨率下的正式页面，检查完整外框、固定角和子节点间距。若目标未挂入已加载的宿主，记录 Canvas 待验证。正常 CanvasScaler 适配和动画缩放按使用情景检查。发现两倍源稿时回到设计规格和源图修正，不通过 Multiplier、Sprite PPU 或父级 Scale 补偿。旧基线缺字段及实际值冲突的处理见[Unity 接入工具](../../docs/unity-tools.md)。
+从正式布局和导出 PNG 构建。新增正式导出可使用 `Assets/SmartUI/Sprites/<asset_id>.png`，让 Unity 构建复用同一 PNG，并维护其 `.meta` 中的 Sprite 导入设置。核对受管 Sprite PPU 为 100、Border 对应导出的 `geometry.borders`，宿主 Canvas Reference PPU 为 100，受管切片 Image 的 Pixels Per Unit Multiplier 为 1。对照基础分辨率下的正式页面，检查完整外框、固定角和子节点间距。若目标未挂入已加载的宿主，记录 Canvas 待验证。正常 CanvasScaler 适配和动画缩放按使用情景检查。发现两倍源稿时回到设计规格和源图修正，不通过 Multiplier、Sprite PPU 或父级 Scale 补偿。旧基线缺字段及实际值冲突的处理见[Unity 接入工具](../../docs/unity-tools.md)。
 
 ## 锚点、枢轴与代表条目标注
 

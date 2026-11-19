@@ -6,7 +6,7 @@ import json
 import re
 from uuid import uuid4
 
-from .layout import ProjectLayout
+from .layout import ProjectLayout, UNITY_SPRITES
 from .projects import ProjectError, _identifier, _json, _sha, spec_sha256
 from .unity import UnityStore, _asset_ids, _contract, _fields
 from .unity_cli import UnityCliClient, UnityCliError
@@ -460,9 +460,12 @@ class UnityBuildStore:
         assets, fonts, font_inputs = resources["assets"], {}, {}
         for key, asset in assets.items():
             asset.setdefault("geometry", None)
-            asset["output_path"] = f"Assets/SmartUI/Sprites/{key}.png"
-            if asset["path"] == asset["output_path"]:
-                raise ProjectError(f"Unity 生成图像不能同时作为制作源文件：{asset['path']}")
+            asset["output_path"] = f"{UNITY_SPRITES}/{key}.png"
+            if asset["path"].rpartition("/")[0].casefold() == UNITY_SPRITES.casefold():
+                record = source["images"][key]
+                if (asset["path"] != asset["output_path"] or record.get("output_path") != asset["path"]
+                        or record["provenance"]["kind"] != "component_export"):
+                    raise ProjectError(f"Unity 构建目录只复用同一资产正式导出的 PNG：{asset['path']}")
             asset["expected"] = {"sha256": _file_hash(layout, asset["output_path"]),
                                  "meta_sha256": _file_hash(layout, asset["output_path"] + ".meta")}
         for key, style in resources["text_styles"].items():
@@ -568,12 +571,14 @@ class UnityBuildStore:
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise ProjectError(f"无法读取 Unity 请求 {request_id}：{error}") from error
 
-    def _ensure_idle(self, root, except_id=None):
+    def _ensure_idle(self, root, except_id=None, *, asset_ids=None):
         directory = ProjectLayout(root).persistent(OPERATIONS)
         if directory.exists():
             for path in directory.glob("*/operation.json"):
-                _, record, _ = self._operation(root, path.parent.name)
-                if record["request_id"] != except_id and record["status"] in ("running", "indeterminate", "reconcile_required"):
+                _, record, request = self._operation(root, path.parent.name)
+                if (record["request_id"] != except_id
+                        and record["status"] in ("running", "indeterminate", "reconcile_required")
+                        and (asset_ids is None or asset_ids.intersection(request["assets"]))):
                     raise ProjectError(f"Unity 请求 {record['request_id']} 尚未核对，必须先 reconcile，不能重放构建")
 
     @staticmethod
