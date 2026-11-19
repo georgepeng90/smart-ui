@@ -2,7 +2,7 @@
 
 第二阶段以“一个基础控件、一个变体、两个页面”验证预制体复用：共用外观在基础预制体上修改，页面保留独立文案和引用，两个页面预制体文件不因继承变化而重写。
 
-当前实现基线为 SmartUI PhotoCraft v0.18.1，接口见 [Unity 接入工具](unity-tools.md)。已提供控件制作定义、浏览器控件节点、Unity CLI 调度和通用 Editor 构建脚本。本文说明实现边界及尚待实际工程执行的验收。通用切片控件已在 Unity Editor 核对 Sprite 导入、Prefab 保存和基础分辨率下的显示。业务工程的对象引用、继承和运行效果需在相应场景验收。
+当前实现基线为 SmartUI PhotoCraft v0.18.2，接口见 [Unity 接入工具](unity-tools.md)。已提供控件制作定义、浏览器控件节点、Unity CLI 调度和通用 Editor 构建脚本。本文说明实现边界及尚待实际工程执行的验收。通用切片控件已在 Unity Editor 核对 Sprite 导入、Prefab 保存和基础分辨率下的显示。业务工程的对象引用、继承和运行效果需在相应场景验收。
 
 ## 1 本阶段的范围
 
@@ -148,7 +148,7 @@ Unity 覆写 Prefab 时会尝试按名称维持引用，同名对象及同一对
 | `smart-ui/unity/import-state/` | Editor 写入每个目标的当前成功基线、对象映射和必要的未完成写入状态 |
 | `smart-ui/docs/unity-controls.md` | 项目工具生成当前使用说明和产物状态 |
 | `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/`、`Assets/SmartUI/Sprites/` | 默认生成的基础 Prefab、Variant、页面 Prefab 和构建 Sprite；已有资源保持登记的原路径 |
-| 调用者指定的 `Assets` 子目录 | 交付给 Unity 使用的图元 PNG |
+| 调用者指定的 `Assets` 子目录 | 交付给 Unity 使用的图元 PNG。正式导出与固定的 `Assets/SmartUI/Sprites/<asset_id>.png` 路径一致时，二者共用一个文件 |
 | `.smartui/` | 可再生成的缓存、详细诊断和锁；清理后不得丢失判断已落盘资源所需的状态 |
 
 请求和结果使用 schema 2。请求记录实际资料目录、项目索引和预期输入，结果记录目标状态、请求摘要和可核对的资产身份。资源保存后重新加载并通过核对，才推进该资源的成功基线。资源写入或验证中断时保留 `.pending`，登记未完成时保留请求状态。同一次执行留下完整结果后，可用 `project_reconcile_unity_build` 继续核对。始终没有完整结果或仍有未完成写入记录时，人工检查目标 Prefab、`.meta` 和基线。当前工具阻止新构建或冲突目标再次写入，尚无自动补回执、回滚或解锁操作。相同输入准备新请求并复验时，登记和成功基线也不因时间戳产生变化。

@@ -4,7 +4,7 @@
 锚点、枢轴及滚动视口和内容内缩。通用构建将锚点和枢轴写入受管 RectTransform，以父节点参考尺寸换算
 位置和尺寸差值，并在复验时读回。滚动视口和内容内缩由项目根据其 ScrollRect 结构配置并验收。
 
-SmartUI PhotoCraft v0.18.1 已提供控件目录、制作定义、正式页面控件预览、Unity CLI 调度和通用 uGUI 构建脚本。基础预制体、变体及页面嵌套的工具链实现已具备，固定边角和基础尺寸已有通用 Editor 样片验证。运行时布局、完整字体效果和业务适配仍属后续范围。当前接口见 [Unity 接入工具](unity-tools.md)，具体边界见[预制体复用方案](unity-prefab-reuse-plan.md)。本文承接[总体规划](toolchain-roadmap.md)中的资源交付、Unity uGUI 和工程端持续维护。
+SmartUI PhotoCraft v0.18.2 已提供控件目录、制作定义、正式页面控件预览、Unity CLI 调度和通用 uGUI 构建脚本。基础预制体、变体及页面嵌套的工具链实现已具备，固定边角和基础尺寸已有通用 Editor 样片验证。运行时布局、完整字体效果和业务适配仍属后续范围。当前接口见 [Unity 接入工具](unity-tools.md)，具体边界见[预制体复用方案](unity-prefab-reuse-plan.md)。本文承接[总体规划](toolchain-roadmap.md)中的资源交付、Unity uGUI 和工程端持续维护。
 
 接入目标是把 SmartUI 的页面设计变成可以接入项目框架、响应运行时内容变化、保留业务引用并持续更新的 uGUI 预制体。建议采用“设计数据导出、Unity 导入器、项目适配器”三部分：设计数据表达布局和资源语义，导入器管理资源与对象更新，项目适配器接入具体控件、字体、本地化、加载和业务绑定。
 
@@ -59,7 +59,7 @@ flowchart TD
 | 项目适配器 | 对接宿主层、控件工厂、字体材质、本地化、资源加载、业务字段与动画 | 业务工程中的 C# 适配代码及配置 |
 | Skill | 指导读取控件目录与工程约定、选择已有控件、维护新增控件、嵌套组版及定位反馈 | 工具仓库的通用接入 Skill |
 
-固定 C# 构建脚本随工具分发，由目标 Editor 在内存中编译。项目持久资料保存在根目录 `smart-ui/`。Unity 交付图元 PNG 使用调用者指定的 `Assets` 子目录；生成的控件预制体、页面预制体和构建 Sprite 分别固定输出到 `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/` 和 `Assets/SmartUI/Sprites/`，已有资源保持原路径。项目适配器和具体页面数据由业务工程维护。
+固定 C# 构建脚本随工具分发，由目标 Editor 在内存中编译。项目持久资料保存在根目录 `smart-ui/`。Unity 交付图元 PNG 使用调用者指定的 `Assets` 子目录。生成的控件预制体、页面预制体和构建 Sprite 分别固定输出到 `Assets/SmartUI/Controls/`、`Assets/SmartUI/Pages/` 和 `Assets/SmartUI/Sprites/`。正式导出位于 `Assets/SmartUI/Sprites/<asset_id>.png` 时，构建直接使用该 PNG。项目适配器和具体页面数据由业务工程维护。
 
 普通页面预制体接入项目已经存在的 Canvas、层管理、EventSystem 和加载入口。只有项目配置明确要求时才创建这些宿主设施。首期目标是 uGUI；UI Toolkit、世界空间 UI、任意既有预制体反向还原设计及双向自动合并另行确定范围。
 
